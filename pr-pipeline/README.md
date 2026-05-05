@@ -4,17 +4,26 @@ Author-side and review-side PR discipline distributed as a Gas City pack.
 
 Encodes the planning, blast-radius, scorecard-review, and pre-push gating
 workflows that careful contributors run by hand, so any city that imports
-this pack gets the same discipline as platform-native formulas and commands.
+this pack gets the same discipline as platform-native formulas and
+commands.
 
 ## Status
 
-**v0.1.0** — first slice, planner only. Subsequent versions add:
+**v0.1.0** — initial release. Ships four formulas and matching wrapper
+commands:
 
-- `mol-pr-blast-radius` — caller-graph and concurrency-surface mapping
-  (currently inlined in the planner; later promoted to its own formula
-  for use independent of the full planning workflow)
-- `mol-pr-review` — 11-category structured review for outgoing PRs
-- `mol-pr-ship` — pre-push gate (simplify → review → conventions check)
+| Formula | Command | Purpose |
+|---------|---------|---------|
+| `mol-pr-start`        | `gc <binding> pr plan <issue>`         | Issue → structured plan with BLOCKING gates |
+| `mol-pr-blast-radius` | `gc <binding> pr blast-radius "<scope>"` | Map impact surface (callers, configs, concurrency) |
+| `mol-pr-review`       | `gc <binding> pr review <pr-number>`   | Outgoing-PR self-review against an 11-category scorecard |
+| `mol-pr-ship`         | `gc <binding> pr ship`                 | Pre-push gate (simplify → review-iterate → contributor check); STOPS at report |
+
+All four are read-only by default for filesystem changes outside their
+own output paths. `mol-pr-ship` may modify the diff during simplify and
+review-iteration stages; everything else writes only to
+`.gc/pr-pipeline/<sub>/`. None of them push or open PRs — those decisions
+stay with the caller.
 
 ## Sibling pack
 
@@ -27,7 +36,9 @@ finalize → merge). The two packs are complementary:
 - `pr-pipeline` → planning, building, and shipping PRs your city sends out
 
 A city that does both ("we contribute to repos and we accept contributions
-from others") imports both.
+from others") imports both. Both packs use the same 11-category scorecard
+in their review steps, so feedback shape stays consistent regardless of
+direction.
 
 ## Usage
 
@@ -35,30 +46,67 @@ In your city's `pack.toml`:
 
 ```toml
 [imports.pr-pipeline]
-source = "../packs/pr-pipeline"  # or git URL when published
+source = "../packs/pr-pipeline"   # path; or git URL when published
 ```
 
-Plan a PR for an issue (the rig's repo contains the issue's code):
+### Plan a PR for an issue
 
 ```sh
 gc pr-pipeline pr plan 1234 --rig api-server
 ```
 
-Or directly via sling:
+The formula reads the issue, runs BLOCKING gates (competing-PR and
+architectural-refactor checks), maps blast radius, checks repo
+conventions, writes a structured plan to
+`.gc/pr-pipeline/plans/issue-1234.md`, and audits the plan against 19
+recurring review findings. **No code is written.**
+
+### Map blast radius for a freeform scope
+
+```sh
+gc pr-pipeline pr blast-radius "FuncXYZ in pkg/foo" --rig api-server
+```
+
+For changes that don't start from an issue — refactors, hotfixes,
+exploratory deltas — `mol-pr-blast-radius` is a standalone entry point
+with the same analysis shape the planner runs inline.
+
+### Self-review an outgoing PR
+
+```sh
+gc pr-pipeline pr review 1234 --rig api-server
+```
+
+Scorecard against 11 categories (behavioral correctness, contract
+fidelity, blast radius, concurrency, error handling, security, resource
+lifecycle, release safety, test evidence, architectural consistency,
+debuggability). Pre-flags 7 recurring fixup themes. Verdict: `block`,
+`request_changes`, or `approve`.
+
+### Run the pre-push gate
+
+```sh
+gc pr-pipeline pr ship --rig api-server
+```
+
+Four-stage pipeline: simplify → iterate self-review until clean →
+mechanical gates (build/vet/test/docs) → readiness report. **STOPS at
+the report.** Push and PR-open are explicit caller actions this formula
+never performs.
+
+### Override the worker agent
+
+Default agent for all wrappers is `polecat`. Override with `--agent`:
+
+```sh
+gc pr-pipeline pr plan 1234 --rig api-server --agent claude
+```
+
+Or sling directly without the wrapper:
 
 ```sh
 gc sling api-server/polecat mol-pr-start --formula --var issue=1234
 ```
-
-Default agent for the wrapper command is `polecat`; override with
-`--agent <name>` if your city uses a different worker pool name.
-
-The formula reads the issue, runs BLOCKING gates (competing-PR and
-architectural-refactor checks), maps blast radius, checks the repo's
-conventions, writes a structured plan to
-`.gc/pr-pipeline/plans/issue-1234.md`, and audits the plan against
-19 recurring review findings. **No code is written.** A separate sling
-or human picks up the plan to implement it.
 
 ## Pack contents
 
@@ -66,24 +114,29 @@ or human picks up the plan to implement it.
 pr-pipeline/
 ├── pack.toml
 ├── formulas/
-│   └── mol-pr-start.formula.toml    6-step planner workflow
+│   ├── mol-pr-start.formula.toml          6-step planner
+│   ├── mol-pr-blast-radius.formula.toml   5-step impact mapper
+│   ├── mol-pr-review.formula.toml         4-step outgoing-PR scorecard
+│   └── mol-pr-ship.formula.toml           5-step pre-push gate
 └── commands/
-    └── pr/plan/                     gc <binding> pr plan
-        ├── run.sh
-        └── help.md
+    └── pr/
+        ├── plan/         (run.sh + help.md)
+        ├── blast-radius/
+        ├── review/
+        └── ship/
 ```
 
-The full workflow (BLOCKING gates, blast-radius mapping, convention
-alignment, plan production, themes audit) lives in the formula's step
-descriptions. A coding agent (polecat or equivalent) follows them in
-sequence; gates can short-circuit with an early exit.
+The full workflow for each formula lives in step descriptions. A coding
+agent (polecat or equivalent) follows them in sequence; gates can
+short-circuit with an early exit.
 
 ## Why formula-shaped, not agent-as-directory
 
-This pack ships **formulas**, not standing agents. The planner is a
-bounded workflow ("plan one PR, exit"), not a long-lived role like
-mayor or polecat. The consumer city's existing coding worker (whatever
-it's named) runs the formula — no extra agent deployment required.
+This pack ships **formulas**, not standing agents. Each formula is a
+bounded workflow ("plan one PR, exit" / "score one PR, exit") rather
+than a long-lived role like mayor or polecat. The consumer city's
+existing coding worker (whatever it's named) runs the formula — no
+extra agent deployment required.
 
 Standing roles (mayor, polecat, witness, refinery) belong in their own
 packs as `agents/<name>/` directories. Bounded workflows belong as
