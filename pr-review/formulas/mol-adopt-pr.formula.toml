@@ -198,10 +198,14 @@ Update notes with:
 
 [[steps]]
 id = "review"
-title = "Run multi-model review"
+title = "Run multi-model review and produce 11-category scorecard"
 needs = ["rebase-check"]
 description = """
-Fetch the canonical upstream base and invoke the multi-model review engine.
+Fetch the canonical upstream base, invoke the review engine, then structure
+findings against an 11-category scorecard. The structured output gives
+contributors consistent feedback shape regardless of which maintainer reviews,
+and is the same scorecard the `pr-pipeline` pack's `mol-pr-review` produces
+for outgoing-PR self-review — reviewer-side and author-side aligned.
 
 **1. Read root bead notes:**
 ```bash
@@ -237,23 +241,146 @@ bd update $ROOT_ID --notes "<existing notes>
 review_run_dir: <run_dir_path>"
 ```
 
-The synthesis artifact is at `<run_dir>/outputs/synthesis.md`.
+The raw synthesis artifact is at `<run_dir>/outputs/synthesis.md`.
 
-**5. Present findings summary:**
+**5. Categorize findings against the 11-category scorecard:**
 
-Read the synthesis and present a brief summary to orient the human reviewer:
-- Decision (approve/request_changes)
-- Top findings by severity
-- Key files affected
+Walk every finding from the synthesis and place it under one of these
+categories. Each finding has a severity: blocker, major, minor, or nit.
+
+| # | Category | Concerns |
+|---|----------|----------|
+| 1 | Behavioral Correctness | Does the code do what it claims? Off-by-one, wrong predicate, swapped args, missed branches. |
+| 2 | Contract & Interface Fidelity | Public API contracts, error envelopes, response shapes, type compatibility. Backwards compat. |
+| 3 | Change Impact / Blast Radius | Does the diff touch more than the title implies? Are sibling call sites updated? Cross-package effects. |
+| 4 | Concurrency, Ordering & State Safety | Goroutine lifecycle, mutex/atomic correctness, race windows, ordering invariants, init-vs-reload paths. |
+| 5 | Error Handling & Resilience | Silent error swallow, fail-open predicates, missing retry on transient failures, error wrapping with context. |
+| 6 | Security Surface | Input validation, secret handling, auth/authz checks, file-path traversal, SSRF/SQL-injection patterns. |
+| 7 | Resource Lifecycle & Cleanup | File/socket/process leaks, defer ordering, subprocess termination, temp-file cleanup. |
+| 8 | Release Safety | Migration safety, backwards-incompat changes, feature flags, hard-fail conversions of previously-silent paths. |
+| 9 | Test Evidence Quality | Coverage of new branches, regression tests for the bug, fakes-vs-mocks discipline, env hermeticity. |
+| 10 | Architectural Consistency | Matches local conventions (do/cmd split, layered deps, naming, package shape). |
+| 11 | Debuggability & Operability | Log lines, error context, doc comments on new exports, observability hooks. |
+
+**Decision policy** (apply mechanically):
+
+- Unresolved **blocker** in categories 1-4 → verdict `block`
+- Unresolved **blocker** in categories 5-8 → verdict `request_changes`
+- **Major** issues in 1-8 without mitigation → verdict `request_changes`
+- Purely **minor** or **nit** → verdict `approve`
+- No new findings → verdict `approve`
+
+**6. Pre-flag the seven recurring fixup themes:**
+
+Walk the diff once and flag any hits as a major finding under the
+appropriate category. These patterns recur across many merged PRs in
+mature codebases — cheap to detect, noisy to fix after merge.
+
+1. **Test isolation / hermeticity** — `os.Setenv` instead of `t.Setenv`
+   (Go); integration helpers that inherit ambient env; package-level
+   state without capture-and-restore in `t.Cleanup`. → Cat 9, major
+
+2. **Test retry / readiness probes** — hard-coded `time.Sleep`
+   replacing polling-with-deadline; readiness checks that connect once
+   and bail; cleanups that don't retry on transient EBUSY. → Cat 9, major
+
+3. **Stale-state guards** — cache writers that don't compare incoming
+   version/timestamp; reload paths that overwrite live state when new
+   config is structurally equivalent; reconciler transitions without
+   clock/epoch fencing; API mutation paths refreshing via a different
+   loader than the reload path. → Cat 4 or Cat 1, blocker
+
+4. **Fail-closed on errors** — `bool` safety predicate returning `false`
+   (= "safe") on internal error; `_ = store.Write()`; catch-and-ignore;
+   shared helpers whose error message hardcodes one caller's context.
+   → Cat 5, blocker
+
+5. **Bootstrap / init hardening** — `PATH`/env-list construction not
+   stripping empty entries; init paths without `MkdirAll`; bootstrap
+   races between binary placement and first invocation; one-time
+   setup wired into reload paths. → Cat 4 or Cat 7, major
+
+6. **API contract preservation across reloads / mutations** — API
+   mutation handlers refreshing state via a different code path than
+   the reload handler; stream watchers armed AFTER taking the initial
+   snapshot; unbounded confirmation/visibility checks; builtin/embedded
+   resource lists missing from the API projection. → Cat 2, major
+
+7. **Transient-error retry** — DB / network operations where transient
+   conflicts are surfaced as fatal; single-attempt operations against
+   eventually-consistent stores. → Cat 5, minor (often acceptable;
+   flag if context suggests retry is needed)
+
+**7. Write the structured scorecard report:**
+
+Save to `<run_dir>/outputs/scorecard.md` (alongside synthesis.md):
+
+```markdown
+# Adopt-PR review — PR #<N>: <title>
+
+**Author**: <login>
+**Base** ← **Head**: `<baseRefName>` ← `<headRefName>`
+
+## Verdict
+
+**<block | request_changes | approve>** — <one-sentence reason>
+
+## Decision rationale
+
+- Blockers in categories 1-4: <count>
+- Blockers in categories 5-8: <count>
+- Majors in any category 1-8: <count>
+- Minors / nits: <count>
+
+## Findings by category
+
+### 1. Behavioral Correctness
+
+<finding>: file:line — description (severity)
+
+### 2. Contract & Interface Fidelity
+
+<...>
+
+(Continue through 11 categories. If a category has no findings, write
+"No findings." Do NOT omit the heading.)
+
+## Recurring themes audit
+
+| Theme | Hits | Detail |
+|-------|------|--------|
+| 1. Test isolation     | <count> | <one-line> |
+| 2. Test retry         | <count> | <one-line> |
+| 3. Stale-state guards | <count> | <one-line> |
+| 4. Fail-closed        | <count> | <one-line> |
+| 5. Bootstrap init     | <count> | <one-line> |
+| 6. API contract       | <count> | <one-line> |
+| 7. Transient retry    | <count> | <one-line> |
+```
+
+**8. Record verdict in root bead notes:**
+
+```bash
+bd update $ROOT_ID --notes "<existing notes>
+verdict: <block | request_changes | approve>
+scorecard_path: <run_dir>/outputs/scorecard.md
+blockers: <count>
+majors: <count>
+minors: <count>"
+```
+
+**9. Present findings summary to orient the human reviewer:**
 
 ```
 [adopt-pr] Review complete
-[adopt-pr]   Decision: <approve|request_changes>
-[adopt-pr]   Findings: <N> total (<blockers>, <majors>, <minors>)
-[adopt-pr]   Run dir: <path>
+[adopt-pr]   Verdict:    <approve | request_changes | block>
+[adopt-pr]   Findings:   <N> total (<blockers> blockers, <majors> majors, <minors> minors)
+[adopt-pr]   Run dir:    <path>
+[adopt-pr]   Scorecard:  <run_dir>/outputs/scorecard.md
 ```
 
-**Exit criteria:** Review complete, findings presented, run_dir saved in notes."""
+**Exit criteria:** Review complete, findings categorized, scorecard
+written, verdict recorded in notes."""
 
 [[steps]]
 id = "human-gate"
