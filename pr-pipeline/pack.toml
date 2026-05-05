@@ -1,0 +1,31 @@
+# PR Pipeline — author-side and review-side PR discipline as a pack.
+#
+# Distributes the planning, blast-radius, scorecard-review, and pre-push
+# gating workflows that careful contributors run by hand, so any city
+# that imports this pack gets the same discipline as platform-native
+# formulas and commands.
+#
+# v0.1.0 ships the planner slice only:
+#   - formulas/mol-pr-start         author-side issue → plan workflow
+#   - commands/pr/plan              gc <binding> pr plan <issue>
+#
+# Subsequent versions add mol-pr-blast-radius, mol-pr-review (scorecard),
+# and mol-pr-ship (pre-push gate) formulas + matching commands.
+#
+# Sibling pack `pr-review` covers the maintainer-side incoming-PR
+# review/merge workflow (`mol-adopt-pr`); this pack focuses on the
+# contributor authoring side and shared review categories.
+#
+# Usage in your city's pack.toml:
+#   [imports.pr-pipeline]
+#   source = "../packs/pr-pipeline"
+#
+# Plan a PR for an issue (rig must contain the repo with that issue):
+#   gc pr-pipeline pr plan 1234 --rig <rig-name>
+# Or directly via sling:
+#   gc sling <rig>/polecat mol-pr-start --formula --var issue=1234
+
+[pack]
+name = "pr-pipeline"
+version = "0.1.0"
+schema = 2
