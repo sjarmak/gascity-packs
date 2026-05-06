@@ -3606,3 +3606,162 @@ func TestLoadConfigAppsRegistryPathOverride(t *testing.T) {
 		t.Errorf("appsRegistryPath = %q, want /custom/apps.json", cfg.appsRegistryPath)
 	}
 }
+
+// TestConfineFileUploadPath exercises the helper directly, locking in
+// the rejection contract without going through TestHandlePublishFile.
+// Written for gc-px8.2 (was gc-cby.11).
+//
+// The temp dir is run through filepath.EvalSymlinks once so the test's
+// notion of "canonical" matches what the helper's internal EvalSymlinks
+// will produce on platforms where the temp root is reached through a
+// symlink (macOS /var -> /private/var). Without this, "succeeds" cases
+// would spuriously fail because rootAbs would be canonical but pathAbs
+// would not, tripping filepath.Rel into a "../"-prefixed result.
+func TestConfineFileUploadPath(t *testing.T) {
+	t.Parallel()
+
+	tmp := t.TempDir()
+	if resolved, err := filepath.EvalSymlinks(tmp); err == nil {
+		tmp = resolved
+	}
+	rootDir := filepath.Join(tmp, "upload")
+	if err := os.MkdirAll(rootDir, 0o755); err != nil {
+		t.Fatalf("mkdir root: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(tmp, "sibling"), 0o755); err != nil {
+		t.Fatalf("mkdir sibling: %v", err)
+	}
+	symlinkRoot := filepath.Join(tmp, "linked-root")
+	if err := os.Symlink(rootDir, symlinkRoot); err != nil {
+		t.Fatalf("symlink: %v", err)
+	}
+
+	tests := []struct {
+		name    string
+		root    string
+		path    string
+		wantErr string // substring; empty means expect success
+		wantOK  string // expected returned path on success
+	}{
+		{
+			name:    "empty root",
+			root:    "",
+			path:    filepath.Join(rootDir, "f.txt"),
+			wantErr: "FILE_UPLOAD_ROOT is empty",
+		},
+		{
+			name:    "empty path",
+			root:    rootDir,
+			path:    "",
+			wantErr: "path is empty",
+		},
+		{
+			name:    "whitespace-only path",
+			root:    rootDir,
+			path:    "   ",
+			wantErr: "path is empty",
+		},
+		{
+			name:    "path equal to root",
+			root:    rootDir,
+			path:    rootDir,
+			wantErr: "outside root",
+		},
+		{
+			name:    "path equal to root with trailing slash",
+			root:    rootDir,
+			path:    rootDir + string(filepath.Separator),
+			wantErr: "outside root",
+		},
+		{
+			name:   "trailing slash on root cleaned away",
+			root:   rootDir + string(filepath.Separator),
+			path:   filepath.Join(rootDir, "f.txt"),
+			wantOK: filepath.Join(rootDir, "f.txt"),
+		},
+		{
+			name:    "sibling via ..",
+			root:    rootDir,
+			path:    filepath.Join(rootDir, "..", "sibling", "f.txt"),
+			wantErr: "outside root",
+		},
+		{
+			// No disk check: the helper validates the path is formally
+			// inside root without touching the filesystem. The downstream
+			// os.Stat / os.OpenFile call is what surfaces ENOENT.
+			name:   "root that does not exist on disk still validates path-shape",
+			root:   filepath.Join(tmp, "nonexistent-root"),
+			path:   filepath.Join(tmp, "nonexistent-root", "f.txt"),
+			wantOK: filepath.Join(tmp, "nonexistent-root", "f.txt"),
+		},
+		{
+			// Symlinked root + caller-resolved path: the contract.
+			name:   "root is symlink to dir; path passed in resolved form",
+			root:   symlinkRoot,
+			path:   filepath.Join(rootDir, "f.txt"),
+			wantOK: filepath.Join(rootDir, "f.txt"),
+		},
+		{
+			// Symlinked root + symlinked-form path: rejected. Documents
+			// the asymmetric resolution called out in the helper's doc
+			// comment (EvalSymlinks runs on root but not on path; caller
+			// must resolve path first via os.Stat + EvalSymlinks).
+			name:    "root is symlink to dir; symlinked-form path is rejected (asymmetric resolution)",
+			root:    symlinkRoot,
+			path:    filepath.Join(symlinkRoot, "f.txt"),
+			wantErr: "outside root",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+			got, err := confineFileUploadPath(tc.root, tc.path)
+			if tc.wantErr != "" {
+				if err == nil {
+					t.Fatalf("expected error containing %q, got nil (returned path %q)", tc.wantErr, got)
+				}
+				if !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("error %v does not contain %q", err, tc.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("unexpected error: %v", err)
+			}
+			if got != tc.wantOK {
+				t.Errorf("got %q, want %q", got, tc.wantOK)
+			}
+		})
+	}
+}
+
+// TestConfineFileUploadPathRelativeRoot pins the current behavior on
+// relative roots: filepath.Abs(root) silently resolves them against the
+// process cwd rather than rejecting. The helper's contract documentation
+// is silent on this; the gc-px8.2 bead listed "relative root (must
+// reject — only absolute roots accepted)" as expected behavior, but the
+// implementation does not enforce that. A follow-up bead tracks whether
+// this should be tightened (a tightening would be a behavior change and
+// thus out of scope for the test-only commit gc-px8.2 carries).
+//
+// Cannot be t.Parallel because it uses t.Chdir.
+func TestConfineFileUploadPathRelativeRoot(t *testing.T) {
+	tmp := t.TempDir()
+	if resolved, err := filepath.EvalSymlinks(tmp); err == nil {
+		tmp = resolved
+	}
+	rootDir := filepath.Join(tmp, "upload")
+	if err := os.MkdirAll(rootDir, 0o755); err != nil {
+		t.Fatalf("mkdir root: %v", err)
+	}
+	t.Chdir(tmp)
+
+	got, err := confineFileUploadPath("upload", filepath.Join(rootDir, "f.txt"))
+	if err != nil {
+		t.Fatalf("relative root resolves against cwd; expected success, got %v", err)
+	}
+	if want := filepath.Join(rootDir, "f.txt"); got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+}
