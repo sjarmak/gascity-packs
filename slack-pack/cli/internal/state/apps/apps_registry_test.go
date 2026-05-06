@@ -447,3 +447,29 @@ func TestRecordSafeLogFieldsSanitizesDisplayName(t *testing.T) {
 		t.Errorf("SlashCommandCount = %d, want 0", view.SlashCommandCount)
 	}
 }
+
+// TestRegistryLoadRejectsOversizedFile pins the size cap on the
+// writer-side registry. Without LimitReader, an attacker (or a corrupt
+// file) could force a multi-gigabyte allocation before any size check
+// fires. Defense-in-depth against operator-controlled or hostile
+// filesystem state (gc-cby.32). The error message must mention the
+// size violation and the path so operators can identify the problem
+// from the log.
+func TestRegistryLoadRejectsOversizedFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "apps.json")
+	payload := strings.Repeat("x", MaxBytes+1)
+	if err := os.WriteFile(path, []byte(payload), 0o600); err != nil {
+		t.Fatalf("seed oversized file: %v", err)
+	}
+	_, err := NewRegistry(path)
+	if err == nil {
+		t.Fatal("NewRegistry on oversized file: want error, got nil")
+	}
+	if !strings.Contains(err.Error(), "exceeds") {
+		t.Errorf("error %q does not mention size cap", err)
+	}
+	if !strings.Contains(err.Error(), path) {
+		t.Errorf("error %q does not mention path", err)
+	}
+}

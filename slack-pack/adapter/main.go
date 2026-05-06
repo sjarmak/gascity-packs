@@ -2703,12 +2703,25 @@ func (r *identityRegistry) load() error {
 	if r.diskPath == "" {
 		return nil
 	}
-	data, err := os.ReadFile(r.diskPath)
+	f, err := openRegistryFile(r.diskPath)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
 	if err != nil {
-		return err
+		return fmt.Errorf("open identity store %s: %w", r.diskPath, err)
+	}
+	defer func() { _ = f.Close() }()
+	// LimitReader caps the read at maxRegistryBytes+1 so a hostile or
+	// corrupt file can't force a multi-gigabyte allocation before the
+	// size check fires (gc-cby.32). The +1 lets us detect overflow
+	// precisely: reading exactly maxRegistryBytes+1 means the
+	// underlying file is at least maxRegistryBytes+1 bytes.
+	data, err := io.ReadAll(io.LimitReader(f, maxRegistryBytes+1))
+	if err != nil {
+		return fmt.Errorf("read identity store %s: %w", r.diskPath, err)
+	}
+	if int64(len(data)) > maxRegistryBytes {
+		return fmt.Errorf("identity store %s exceeds %d bytes", r.diskPath, maxRegistryBytes)
 	}
 	var stored map[string]identityRecord
 	if err := json.Unmarshal(data, &stored); err != nil {
@@ -2833,12 +2846,25 @@ func (r *handleAliasRegistry) load() error {
 	if r.diskPath == "" {
 		return nil
 	}
-	data, err := os.ReadFile(r.diskPath)
+	f, err := openRegistryFile(r.diskPath)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
 	if err != nil {
-		return err
+		return fmt.Errorf("open handle alias store %s: %w", r.diskPath, err)
+	}
+	defer func() { _ = f.Close() }()
+	// LimitReader caps the read at maxRegistryBytes+1 so a hostile or
+	// corrupt file can't force a multi-gigabyte allocation before the
+	// size check fires (gc-cby.32). The +1 lets us detect overflow
+	// precisely: reading exactly maxRegistryBytes+1 means the
+	// underlying file is at least maxRegistryBytes+1 bytes.
+	data, err := io.ReadAll(io.LimitReader(f, maxRegistryBytes+1))
+	if err != nil {
+		return fmt.Errorf("read handle alias store %s: %w", r.diskPath, err)
+	}
+	if int64(len(data)) > maxRegistryBytes {
+		return fmt.Errorf("handle alias store %s exceeds %d bytes", r.diskPath, maxRegistryBytes)
 	}
 	var stored map[string]string
 	if err := json.Unmarshal(data, &stored); err != nil {

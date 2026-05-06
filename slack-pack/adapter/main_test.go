@@ -401,6 +401,30 @@ func TestIdentityRegistryEmptyDiskPath(t *testing.T) {
 	}
 }
 
+// TestIdentityRegistryLoadRejectsOversizedFile pins the size cap on the
+// identity registry loader. Without LimitReader, an attacker (or a corrupt
+// file) could force a multi-gigabyte allocation before any size check
+// fires. Defense-in-depth against operator-controlled or hostile
+// filesystem state (gc-cby.32). The error message must mention the
+// size violation so operators can identify the problem from the log.
+func TestIdentityRegistryLoadRejectsOversizedFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "identities.json")
+	payload := strings.Repeat("x", maxRegistryBytes+1)
+	if err := os.WriteFile(path, []byte(payload), 0o600); err != nil {
+		t.Fatalf("seed oversized file: %v", err)
+	}
+	_, err := newIdentityRegistry(path)
+	if err == nil {
+		t.Fatal("newIdentityRegistry on oversized file: want error, got nil")
+	}
+	if !strings.Contains(err.Error(), "exceeds") {
+		t.Errorf("error %q does not mention size cap", err)
+	}
+	if !strings.Contains(err.Error(), path) {
+		t.Errorf("error %q does not mention path", err)
+	}
+}
+
 func TestHandleIdentity(t *testing.T) {
 	cases := []struct {
 		name        string
@@ -733,6 +757,31 @@ func TestHandleAliasRegistryRoundTrip(t *testing.T) {
 	}
 	if _, ok := reg3.Get("mayor"); ok {
 		t.Errorf("Get(mayor) after delete + reload: ok=true, want false")
+	}
+}
+
+// TestHandleAliasRegistryLoadRejectsOversizedFile pins the size cap on
+// the handle-alias registry loader. Without LimitReader, an attacker
+// (or a corrupt file) could force a multi-gigabyte allocation before
+// any size check fires. Defense-in-depth against operator-controlled
+// or hostile filesystem state (gc-cby.32). The error message must
+// mention the size violation so operators can identify the problem
+// from the log.
+func TestHandleAliasRegistryLoadRejectsOversizedFile(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "handle-aliases.json")
+	payload := strings.Repeat("x", maxRegistryBytes+1)
+	if err := os.WriteFile(path, []byte(payload), 0o600); err != nil {
+		t.Fatalf("seed oversized file: %v", err)
+	}
+	_, err := newHandleAliasRegistry(path)
+	if err == nil {
+		t.Fatal("newHandleAliasRegistry on oversized file: want error, got nil")
+	}
+	if !strings.Contains(err.Error(), "exceeds") {
+		t.Errorf("error %q does not mention size cap", err)
+	}
+	if !strings.Contains(err.Error(), path) {
+		t.Errorf("error %q does not mention path", err)
 	}
 }
 

@@ -13,6 +13,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -21,6 +22,13 @@ import (
 	"time"
 	"unicode/utf8"
 )
+
+// MaxBytes caps the size of the JSON registry file the loader will
+// read off disk. Matches channels.MaxBytes / rooms.MaxBytes — bumped
+// here as part of gc-cby.32 to bring this loader in line with the
+// LimitReader + size-cap pattern used by the other registry loaders
+// (was os.ReadFile with no cap).
+const MaxBytes = 10 << 20 // 10 MiB
 
 // Record is the persisted representation of a Slack app imported
 // into a gc city. The schema is the only contract between the CLI
@@ -246,12 +254,25 @@ func (r *Registry) load() error {
 	if r.diskPath == "" {
 		return nil
 	}
-	data, err := os.ReadFile(r.diskPath)
+	f, err := os.Open(r.diskPath)
 	if errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
 	if err != nil {
-		return err
+		return fmt.Errorf("open slack app store %s: %w", r.diskPath, err)
+	}
+	defer func() { _ = f.Close() }()
+	// LimitReader caps the read at MaxBytes+1 so a hostile or corrupt
+	// file can't force a multi-gigabyte allocation before the size
+	// check fires. The +1 lets us detect overflow precisely:
+	// reading exactly MaxBytes+1 means the underlying file is at
+	// least MaxBytes+1 bytes (gc-cby.32).
+	data, err := io.ReadAll(io.LimitReader(f, MaxBytes+1))
+	if err != nil {
+		return fmt.Errorf("read slack app store %s: %w", r.diskPath, err)
+	}
+	if int64(len(data)) > MaxBytes {
+		return fmt.Errorf("slack app store %s exceeds %d bytes", r.diskPath, MaxBytes)
 	}
 	var stored map[string]Record
 	if err := json.Unmarshal(data, &stored); err != nil {
