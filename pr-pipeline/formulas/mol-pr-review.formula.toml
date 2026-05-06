@@ -10,6 +10,15 @@ merge it). `mol-pr-review` is the **outgoing**-PR self-review (review
 your own PR before submitting it). Same scorecard categories, different
 direction.
 
+Reviewer-side comment template: this pack ships
+`templates/adoption-review-comment.md` — the canonical structure a
+maintainer uses when posting the synthesis comment after adoption. Two
+forms (no maintainer changes vs. maintainer fixups present) cover all
+four merge paths. The template documents inputs, rendering rules,
+validation gates, and a fail-stop fallback. Reviewer-side and
+author-side stay aligned by sharing the 11-category scorecard with this
+formula.
+
 A coding agent (polecat or equivalent) follows the steps in order and
 writes a structured scorecard to `.gc/pr-pipeline/reviews/pr-<N>.md`.
 

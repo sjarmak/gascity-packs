@@ -118,13 +118,44 @@ pr-pipeline/
 │   ├── mol-pr-blast-radius.formula.toml   5-step impact mapper
 │   ├── mol-pr-review.formula.toml         4-step outgoing-PR scorecard
 │   └── mol-pr-ship.formula.toml           5-step pre-push gate
-└── commands/
-    └── pr/
-        ├── plan/         (run.sh + help.md)
-        ├── blast-radius/
-        ├── review/
-        └── ship/
+├── commands/
+│   └── pr/
+│       ├── plan/         (run.sh + help.md)
+│       ├── blast-radius/
+│       ├── review/
+│       └── ship/
+└── templates/
+    └── adoption-review-comment.md         canonical reviewer-side
+                                           comment template (Form 1: no
+                                           maintainer changes; Form 2:
+                                           maintainer fixups present)
 ```
+
+### Shared templates
+
+`templates/adoption-review-comment.md` is the canonical structure for the
+synthesis comment a maintainer posts when adopting a contributor PR. Two
+forms cover all four merge paths the `pr-review` pack's `mol-adopt-pr`
+distinguishes (no maintainer changes vs. maintainer fixups present).
+
+The template documents:
+
+- The two literal comment shapes (Form 1 / Form 2)
+- All inputs the renderer needs (PR metadata, synthesis + scorecard from
+  the review run, maintainer-fixup log/diff, final tip SHA, model list,
+  iteration count)
+- Rendering rules per `{model-rendered}` field (the orchestration is
+  mechanical; the prose is the model's job)
+- Validation gates enforced before posting (verbatim opener, footer
+  literal, section order, SHA prefix match, iteration-count match)
+- A fail-stop fallback for malformed renders (write rejected text and
+  STOP — never post a partial comment)
+- Path-specific adjustments for the four merge paths (A / B / C / D)
+
+The reviewer-side counterpart to this pack's `mol-pr-review`
+author-side scorecard. Both produce structured findings against the same
+11-category scorecard so contributors get consistent feedback shape
+regardless of direction.
 
 The full workflow for each formula lives in step descriptions. A coding
 agent (polecat or equivalent) follows them in sequence; gates can
