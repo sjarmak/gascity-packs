@@ -27,9 +27,22 @@ fi
 PR="$1"
 shift
 
-# Accept bare integer or full URL.
+# Accept bare integer or full URL of the form https://github.com/<owner>/<repo>/pull/<integer>.
 case "$PR" in
-    https://github.com/*/pull/*) ;;
+    https://github.com/*/pull/*)
+        # Verify the segment after /pull/ is a positive integer (strip any
+        # trailing /files, ?query, or #fragment).
+        PR_NUM="${PR##*/pull/}"
+        PR_NUM="${PR_NUM%%/*}"
+        PR_NUM="${PR_NUM%%\?*}"
+        PR_NUM="${PR_NUM%%#*}"
+        case "$PR_NUM" in
+            ''|*[!0-9]*)
+                echo "gc pr-pipeline pr review: PR URL must end in /pull/<integer> (got: $PR)" >&2
+                exit 2
+                ;;
+        esac
+        ;;
     *[!0-9]*)
         echo "gc pr-pipeline pr review: <pr> must be a positive integer or a GitHub PR URL (got: $PR)" >&2
         exit 2

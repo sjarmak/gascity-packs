@@ -135,9 +135,14 @@ rejected file, edits, and posts manually.
 1. Starts with `## Adoption Review` followed by a blank line and the verbatim
    opener `Thanks for the contribution, @` (the friendly tone is enforced
    structurally).
-2. Ends with the literal footer line: an underscore, then
-   `Adopted via /adopt-pr workflow. Contributor commits preserved.`,
-   then a closing underscore (the markdown-italic adoption marker).
+2. Ends with the literal footer line below (markdown-italic, with the
+   slash-command name rendered as inline code — backticks are part of the
+   literal):
+
+   ```
+   _Adopted via `/adopt-pr` workflow. Contributor commits preserved._
+   ```
+
 3. The `{fix-summary}` is 1-3 sentences (counted by terminal `.` `!` `?`
    outside of code/links).
 
@@ -149,9 +154,15 @@ rejected file, edits, and posts manually.
 
 ### Form 2 (Path B/C/D) additional gates
 
-4. Contains the literal sentence
-   `This PR was adopted with maintainer fixes pushed directly to the contributor's branch.`
-   exactly once.
+4. Contains exactly one adoption-notice sentence — which one depends on the
+   merge path. Validate the path-specific literal, not a single fixed string:
+
+   - **Path B:** `This PR was adopted with maintainer fixes pushed directly to the contributor's branch.`
+   - **Path C:** `This adopts the contribution from #<original-pr-number> on a maintainer-owned branch (the original PR did not have maintainer-edits enabled).`
+     (with `<original-pr-number>` substituted to a real integer)
+   - **Path D:** `This is a follow-up to #<original-pr-number> (already merged), bundling the maintainer fixups into a separate PR.`
+     (with `<original-pr-number>` substituted to a real integer)
+
 5. Contains four section headers in order: `### Initial Review`,
    `### Maintainer Changes`, `### Final Review Status`,
    `### Review Iterations`.
