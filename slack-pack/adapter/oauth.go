@@ -215,13 +215,13 @@ func validateSlackOAuthBase(base string) error {
 }
 
 // oauthBotScopes is the bot scope set requested at authorize-time.
-// Mirrors examples/slack-pack/manifest/app.json — the manifest is the
+// Mirrors manifest/app.json (pack-relative) — the manifest is the
 // canonical declaration; this list MUST stay in sync. Slack rejects
 // authorize requests asking for scopes the app's manifest does not
 // declare, so drift here turns into an install failure not a silent
 // over-grant.
 //
-// Source of truth: examples/slack-pack/manifest/app.json
+// Source of truth: manifest/app.json (pack-relative)
 //
 //	oauth_config.scopes.bot
 func oauthBotScopes() []string {

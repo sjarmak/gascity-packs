@@ -25,8 +25,8 @@ import (
 // channel_id) → pool_template binding written by `gc slack
 // enable-room-launch` and read by the slack-pack adapter when
 // dispatching `@@<handle>` posts. The schema is the only contract
-// between the CLI (writer) and examples/slack-pack/adapter (reader);
-// both sides MUST match it byte-for-byte.
+// between the CLI (writer) and the adapter (reader, at adapter/,
+// pack-relative); both sides MUST match it byte-for-byte.
 //
 // PoolTemplate is opaque (operator-supplied) and intentionally does NOT
 // reference any specific role name — Gas City's ZERO-hardcoded-roles

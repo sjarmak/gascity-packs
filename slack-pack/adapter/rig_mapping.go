@@ -15,9 +15,9 @@ import (
 	"time"
 )
 
-// rigMappingDiskRecord is the byte-for-byte mirror of
-// cmd/gc.slackRigMappingRecord (cmd/gc/slack_rig_mapping.go). The
-// schema lives at examples/slack-pack/schema/rig_mappings.schema.json.
+// rigMappingDiskRecord is the byte-for-byte mirror of the slack-cli's
+// rigs.Record (cli/internal/state/rigs/rig_mapping.go, pack-relative).
+// The schema lives at schema/rig_mappings.schema.json (pack-relative).
 //
 // SlingTarget and FixFormula are dispatch-routing fields (cby.18.a):
 // the adapter passes SlingTarget to `gc sling --target` and uses

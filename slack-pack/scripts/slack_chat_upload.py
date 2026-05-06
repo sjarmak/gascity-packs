@@ -16,7 +16,7 @@ Two routing paths are supported, mirroring ``slack_chat_reply_current``:
   diagnostics — when the gc API is down or you're testing the adapter
   in isolation.
 
-Either path delegates to the adapter (``examples/slack-pack/adapter``),
+Either path delegates to the adapter (``adapter/``, pack-relative),
 which handles Slack's three-step files-upload-v2 protocol
 (``files.getUploadURLExternal`` → ``PUT`` bytes →
 ``files.completeUploadExternal``).

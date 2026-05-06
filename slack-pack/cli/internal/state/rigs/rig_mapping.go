@@ -30,10 +30,10 @@ import (
 // Record is the persisted representation of a (workspace_id,
 // rig_name) → set-of-channel-ids binding written by `gc slack map-rig`
 // and read by the slack-pack adapter's /slack/interactions handler.
-// The schema is the only contract between the CLI (writer) and
-// examples/slack-pack/adapter (reader); both sides MUST match it
-// byte-for-byte. The authoritative description lives at
-// examples/slack-pack/schema/rig_mappings.schema.json.
+// The schema is the only contract between the CLI (writer) and the
+// adapter (reader, at adapter/, pack-relative); both sides MUST
+// match it byte-for-byte. The authoritative description lives at
+// schema/rig_mappings.schema.json (pack-relative).
 //
 // CreatedAt is set on first Set and preserved on every idempotent
 // re-Set for the same composite key. UpdatedAt advances on every Set.

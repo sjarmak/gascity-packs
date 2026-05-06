@@ -24,9 +24,9 @@ import (
 
 // Record is the persisted representation of a Slack app imported
 // into a gc city. The schema is the only contract between the CLI
-// (writer) and examples/slack-pack/adapter (reader); both sides MUST
-// match it byte-for-byte. The authoritative description lives at
-// examples/slack-pack/schema/apps.schema.json.
+// (writer) and the adapter (reader, at adapter/, pack-relative);
+// both sides MUST match it byte-for-byte. The authoritative
+// description lives at schema/apps.schema.json (pack-relative).
 //
 // BotUserID and SigningSecret are populated post-OAuth (gc-cby.9), not
 // at import time; both are optional. ManifestRaw preserves the raw
@@ -178,11 +178,11 @@ func Path(cityPath string) string {
 }
 
 // Registry mirrors the adapter's identityRegistry in
-// examples/slack-pack/adapter/main.go (sync.RWMutex + atomic
-// temp+rename writes, 0o700/0o600 perms, tolerant load on missing
-// file). The duplication is intentional: the writer side and the
-// reader side cannot share a package without coupling cmd/gc to the
-// adapter.
+// adapter/main.go (pack-relative; sync.RWMutex + atomic temp+rename
+// writes, 0o700/0o600 perms, tolerant load on missing file). The
+// duplication is intentional: the writer side and the reader side
+// cannot share a package without coupling the two binaries' Go
+// modules.
 type Registry struct {
 	mu       sync.RWMutex
 	byKey    map[string]Record

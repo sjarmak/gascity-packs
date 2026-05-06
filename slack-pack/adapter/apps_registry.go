@@ -11,12 +11,13 @@ import (
 	"time"
 )
 
-// appRecord is the byte-for-byte mirror of cmd/gc.slackAppRecord
-// (cmd/gc/slack_app_registry.go). The on-disk JSON file at
-// <cityPath>/.gc/slack/apps.json — written by `gc slack import-app` and
-// populated post-OAuth by gc-cby.9 — is the only contract between gc
-// and this adapter. Field tags MUST match the writer's tags exactly;
-// the canonical schema lives at examples/slack-pack/schema/apps.schema.json.
+// appRecord is the byte-for-byte mirror of the slack-cli's apps.Record
+// (cli/internal/state/apps/apps_registry.go, pack-relative). The on-disk
+// JSON file at <cityPath>/.gc/slack/apps.json — written by `gc slack
+// import-app` and populated post-OAuth by gc-cby.9 — is the only contract
+// between the writer (the CLI) and this adapter. Field tags MUST match
+// the writer's tags exactly; the canonical schema lives at
+// schema/apps.schema.json (pack-relative).
 //
 // SigningSecret is optional at import time and populated post-OAuth.
 // An empty SigningSecret is NOT an error during load — it just means

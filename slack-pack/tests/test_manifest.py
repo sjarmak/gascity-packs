@@ -1,9 +1,9 @@
-"""Structural validation for examples/slack-pack/manifest/app.json.
+"""Structural validation for manifest/app.json (pack-relative).
 
-This pack ships a canonical Slack app manifest at
-``examples/slack-pack/manifest/app.json``. The manifest is the source
-of truth for the slack-pack's OAuth scopes, bot events, and (once
-gc-cby.2 lands) slash commands.
+This pack ships a canonical Slack app manifest at ``manifest/app.json``
+(pack-relative — i.e. relative to this slack-pack/ directory). The
+manifest is the source of truth for the slack-pack's OAuth scopes,
+bot events, and slash commands.
 
 These tests guard against accidental breakage of that file:
 
