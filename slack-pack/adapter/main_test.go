@@ -3765,3 +3765,32 @@ func TestConfineFileUploadPathRelativeRoot(t *testing.T) {
 		t.Errorf("got %q, want %q", got, want)
 	}
 }
+
+// TestSlackHTTPClientSingletonReuse asserts that the production hot
+// path (slackDownloadToFile -> slackHTTPClientSingleton) reuses a
+// single *http.Client and *http.Transport across calls, so the
+// underlying idle-connection pool is shared. Written for gc-px8.3
+// (was gc-cby.12).
+//
+// The test cannot t.Parallel — it pins observable identity of a
+// process-wide singleton and other tests in this package may exercise
+// the same package state.
+func TestSlackHTTPClientSingletonReuse(t *testing.T) {
+	a := slackHTTPClientSingleton()
+	b := slackHTTPClientSingleton()
+	if a != b {
+		t.Errorf("singleton: expected same *http.Client across calls; got a=%p b=%p", a, b)
+	}
+	if a.Transport != b.Transport {
+		t.Errorf("singleton: expected same *http.Transport across calls; got different")
+	}
+	// buildSlackHTTPClient remains a constructor; calls to it must
+	// still produce fresh clients distinct from the singleton.
+	fresh := buildSlackHTTPClient()
+	if fresh == a {
+		t.Errorf("buildSlackHTTPClient: expected a fresh client distinct from the singleton")
+	}
+	if fresh.Transport == a.Transport {
+		t.Errorf("buildSlackHTTPClient: expected a fresh Transport distinct from the singleton's")
+	}
+}

@@ -2172,7 +2172,7 @@ func slackDownloadToFile(token, urlPrivate, dest string) error {
 		return err
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
-	resp, err := buildSlackHTTPClient().Do(req)
+	resp, err := slackHTTPClientSingleton().Do(req)
 	if err != nil {
 		return err
 	}
@@ -2271,14 +2271,12 @@ func isPrivateOrLoopbackIP(ip net.IP) bool {
 //     header. This policy aborts the redirect with a typed error
 //     before the second hop is dialed.
 //
-// The function returns a fresh client per call. Each call constructs a
-// new http.Transport with its own idle-connection pool, so connection
-// reuse across calls is intentionally sacrificed for test isolation
-// simplicity. The cost is one TCP+TLS handshake per Slack file
-// download, which is negligible against the file payload itself. If
-// burst download throughput becomes a concern, promote the client to
-// a process singleton — slackDialIPGuard already provides the test
-// indirection a singleton would need.
+// The function returns a fresh *http.Client (and underlying
+// *http.Transport) per call. Production code reaches the client via
+// slackHTTPClientSingleton, which wraps a single buildSlackHTTPClient
+// invocation in sync.Once so idle-connection pooling is shared across
+// batched slackDownloadToFile calls (gc-px8.3). Tests retain direct
+// access to construct fresh clients for property assertions.
 //
 // HTTP proxy environment variables (HTTP_PROXY / HTTPS_PROXY) are
 // intentionally NOT honored: a private-IP proxy would bypass the
@@ -2340,6 +2338,33 @@ func buildSlackHTTPClient() *http.Client {
 		},
 	}
 }
+
+// slackHTTPClientSingleton returns the process-wide *http.Client used
+// by slackDownloadToFile. The first call constructs the client via
+// buildSlackHTTPClient inside a sync.Once; subsequent calls return
+// the cached instance, so the underlying *http.Transport's idle
+// connection pool is reused across batched downloads (gc-px8.3).
+//
+// Reuse is safe with the existing test seams: slackDialIPGuard is
+// read on every dial (not captured at construction time), so tests
+// can swap it via the package var even after the singleton has been
+// initialized. validateSlackFileURL inside CheckRedirect is similarly
+// resolved per redirect.
+//
+// Tests that need a fresh client for structural property assertions
+// (Transport identity, CheckRedirect non-nil, etc.) should call
+// buildSlackHTTPClient directly rather than this accessor.
+func slackHTTPClientSingleton() *http.Client {
+	slackHTTPClientOnce.Do(func() {
+		slackHTTPClient = buildSlackHTTPClient()
+	})
+	return slackHTTPClient
+}
+
+var (
+	slackHTTPClient     *http.Client
+	slackHTTPClientOnce sync.Once
+)
 
 // sweepResult summarizes one pass of the inbound file janitor. All counts
 // are over a single sweep; aggregate behavior over time is not tracked
