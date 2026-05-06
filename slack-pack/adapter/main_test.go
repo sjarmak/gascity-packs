@@ -3736,33 +3736,33 @@ func TestConfineFileUploadPath(t *testing.T) {
 	}
 }
 
-// TestConfineFileUploadPathRelativeRoot pins the current behavior on
-// relative roots: filepath.Abs(root) silently resolves them against the
-// process cwd rather than rejecting. The helper's contract documentation
-// is silent on this; the gc-px8.2 bead listed "relative root (must
-// reject — only absolute roots accepted)" as expected behavior, but the
-// implementation does not enforce that. A follow-up bead tracks whether
-// this should be tightened (a tightening would be a behavior change and
-// thus out of scope for the test-only commit gc-px8.2 carries).
-//
-// Cannot be t.Parallel because it uses t.Chdir.
+// TestConfineFileUploadPathRelativeRoot asserts the helper rejects
+// relative roots so an operator who configures FILE_UPLOAD_ROOT
+// without an absolute prefix gets a fast, clear failure rather than
+// the prior silent resolve-against-cwd. The gc-px8.2 bead listed
+// "relative root (must reject — only absolute roots accepted)" as
+// expected behavior; tightened in gc-z18.
 func TestConfineFileUploadPathRelativeRoot(t *testing.T) {
-	tmp := t.TempDir()
-	if resolved, err := filepath.EvalSymlinks(tmp); err == nil {
-		tmp = resolved
-	}
-	rootDir := filepath.Join(tmp, "upload")
-	if err := os.MkdirAll(rootDir, 0o755); err != nil {
-		t.Fatalf("mkdir root: %v", err)
-	}
-	t.Chdir(tmp)
+	t.Parallel()
 
-	got, err := confineFileUploadPath("upload", filepath.Join(rootDir, "f.txt"))
-	if err != nil {
-		t.Fatalf("relative root resolves against cwd; expected success, got %v", err)
+	cases := []string{
+		"upload",
+		"./upload",
+		"../upload",
+		"upload/sub",
 	}
-	if want := filepath.Join(rootDir, "f.txt"); got != want {
-		t.Errorf("got %q, want %q", got, want)
+	for _, root := range cases {
+		root := root
+		t.Run(root, func(t *testing.T) {
+			t.Parallel()
+			got, err := confineFileUploadPath(root, "/tmp/upload/f.txt")
+			if err == nil {
+				t.Fatalf("expected rejection of relative root %q, got nil (returned %q)", root, got)
+			}
+			if !strings.Contains(err.Error(), "is not absolute") {
+				t.Fatalf("error %v does not contain 'is not absolute'", err)
+			}
+		})
 	}
 }
 

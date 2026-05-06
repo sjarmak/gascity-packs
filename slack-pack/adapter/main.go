@@ -1354,6 +1354,9 @@ func handlePublishFile(cfg config, reg *identityRegistry) http.HandlerFunc {
 //
 // Returns an error when:
 //   - root or path is empty
+//   - root is not absolute (a relative root would be silently
+//     resolved against the adapter's cwd, which is a footgun for
+//     operators who expect FILE_UPLOAD_ROOT to be a fixed prefix)
 //   - either path can't be made absolute
 //   - cleaned path is equal to root itself (the root is not an
 //     uploadable file even when downstream IsDir would later reject it)
@@ -1364,6 +1367,9 @@ func handlePublishFile(cfg config, reg *identityRegistry) http.HandlerFunc {
 func confineFileUploadPath(root, path string) (string, error) {
 	if root == "" {
 		return "", errors.New("FILE_UPLOAD_ROOT is empty")
+	}
+	if !filepath.IsAbs(root) {
+		return "", fmt.Errorf("FILE_UPLOAD_ROOT %q is not absolute", root)
 	}
 	if strings.TrimSpace(path) == "" {
 		return "", errors.New("path is empty")
