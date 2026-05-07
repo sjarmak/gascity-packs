@@ -399,6 +399,17 @@ type config struct {
 	// `gc sling` from the city root. Empty when GC_CITY_PATH is unset;
 	// the rig dispatch path surfaces a fix-it ephemeral in that case.
 	cityPath string
+	// threadContextCache is the process-singleton cache that
+	// short-circuits repeated thread-context fetches for a given
+	// (channel, thread_ts). Nil-safe: when nil, processSlackEvent
+	// skips the preamble path entirely. Initialized in main(); tests
+	// construct one directly. gc-px8.5.
+	threadContextCache *threadContextCache
+	// slackThreadContextLimit caps how many replies the adapter asks
+	// for when seeding thread context. Sourced from
+	// SLACK_THREAD_CONTEXT_LIMIT, defaulting to
+	// defaultThreadContextLimit. gc-px8.5.
+	slackThreadContextLimit int
 }
 
 func loadConfig() (config, error) {
@@ -495,6 +506,21 @@ func loadConfigFromEnv(getenv func(string) string) (config, error) {
 		return cfg, fmt.Errorf("SLACK_DISPATCH_CONCURRENCY must be > 0, got %d", n)
 	}
 	cfg.dispatchConcurrency = n
+
+	// slackThreadContextLimit: cap on conversations.replies fetch when
+	// seeding thread context (gc-px8.5). Reject 0/negative/non-numeric
+	// at startup; an operator who typed an invalid limit almost
+	// certainly didn't mean "disable thread context entirely" (silent
+	// disable is a footgun). Use defaultThreadContextLimit when unset.
+	rawLimit := envOrFn("SLACK_THREAD_CONTEXT_LIMIT", strconv.Itoa(defaultThreadContextLimit))
+	limit, err := strconv.Atoi(rawLimit)
+	if err != nil {
+		return cfg, fmt.Errorf("SLACK_THREAD_CONTEXT_LIMIT %q is not an integer: %w", rawLimit, err)
+	}
+	if limit <= 0 {
+		return cfg, fmt.Errorf("SLACK_THREAD_CONTEXT_LIMIT must be > 0, got %d", limit)
+	}
+	cfg.slackThreadContextLimit = limit
 
 	if cfg.serviceSocket != "" {
 		// proxy_process mode: gc reaches us via $GC_API_BASE_URL +
@@ -845,6 +871,9 @@ func main() {
 	// Initialize the shared dispatch semaphore from config. cap is a
 	// fixed positive int — loadConfig rejected 0/negative. sec-S-04.
 	dispatchSem = make(chan struct{}, cfg.dispatchConcurrency)
+	// Wire the process-wide thread-context cache. Nil-safe consumer
+	// path; only the production main() initializes it. gc-px8.5.
+	cfg.threadContextCache = newThreadContextCache()
 	internalDescr := cfg.internalListen
 	if cfg.serviceSocket != "" {
 		internalDescr = "uds:" + cfg.serviceSocket
@@ -1886,6 +1915,27 @@ func processSlackEvent(cfg config, aliasReg *handleAliasRegistry, threadReg *thr
 		if h, rest := parseHandlePrefix(msg.Text, cfg.handlePrefix); h != "" {
 			target = h
 			text = rest
+		}
+	}
+
+	// gc-px8.5: prepend a "Thread context" preamble on the first
+	// inbound observed for a given (channel, thread_ts) pair so an
+	// agent invited mid-thread sees prior decision-making rather
+	// than just the literal mention line. Only relevant when the
+	// inbound is a reply (thread_ts != ts) — a thread-parent post
+	// has no priors and is skipped. The cache marks the pair seen
+	// before issuing the fetch so a transient API failure doesn't
+	// retry on every subsequent inbound (see thread_context.go).
+	if msg.ThreadTS != "" && msg.ThreadTS != msg.TS && cfg.threadContextCache != nil {
+		if cfg.threadContextCache.firstSighting(msg.Channel, msg.ThreadTS) {
+			fetchCtx, cancel := context.WithTimeout(context.Background(), threadContextFetchTimeout)
+			replies, err := fetchThreadReplies(fetchCtx, cfg.slackBotToken, msg.Channel, msg.ThreadTS, cfg.slackThreadContextLimit)
+			cancel()
+			if err != nil {
+				log.Printf("thread context fetch failed chan=%s thread=%s: %v", msg.Channel, msg.ThreadTS, err)
+			} else if preamble := formatThreadContextPreamble(replies, msg.TS); preamble != "" {
+				text = preamble + text
+			}
 		}
 	}
 
