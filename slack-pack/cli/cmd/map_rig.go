@@ -126,6 +126,7 @@ func runSlackMapRig(stdout, stderr io.Writer, rigName, workspaceID string,
 		}
 		if existed {
 			fmt.Fprintf(stdout, "Removed rig mapping %s (workspace=%s)\n", rigName, workspaceID) //nolint:errcheck
+			warnOrphanChannelMappings(stdout, cityPath, workspaceID, rigName)
 		} else {
 			fmt.Fprintf(stdout, "No rig mapping %s (workspace=%s); nothing to remove\n", rigName, workspaceID) //nolint:errcheck
 		}
@@ -296,6 +297,7 @@ func runSlackMapRigRemoveChannels(stdout io.Writer, cityPath, rigName, workspace
 		if existed {
 			fmt.Fprintf(stdout, "Removed rig mapping %s (workspace=%s) — channel set became empty after removing %v\n", //nolint:errcheck
 				rigName, workspaceID, actuallyRemoved)
+			warnOrphanChannelMappings(stdout, cityPath, workspaceID, rigName)
 		}
 		fmt.Fprintln(stdout, MapRigRestartReminder) //nolint:errcheck
 		return nil
@@ -333,6 +335,46 @@ func runSlackMapRigRemoveChannels(stdout io.Writer, cityPath, rigName, workspace
 		rigName, workspaceID, actuallyRemoved, remaining)
 	fmt.Fprintln(stdout, MapRigRestartReminder) //nolint:errcheck
 	return nil
+}
+
+// warnOrphanChannelMappings scans the channel-mapping registry for
+// entries that still target the rig that was just removed, and prints
+// a stdout WARN listing the orphan channel ids so operators can see
+// the dangling bindings without waiting for the next adapter restart
+// to surface them in the cross-store overlap log.
+//
+// Best-effort: a registry-open failure becomes a softer WARN rather
+// than a hard error, because the rig removal already succeeded and
+// blocking on a side check would surprise operators who expect the
+// remove path to be idempotent.
+//
+// The --channel (add) path already runs a cross-store conflict check
+// before writing (see runSlackMapRig); this helper is the symmetric
+// notice for the removal direction. gc-px8.8 (was gc-cby.31).
+func warnOrphanChannelMappings(stdout io.Writer, cityPath, workspaceID, rigName string) {
+	chanReg, err := channels.NewRegistry(channels.Path(cityPath))
+	if err != nil {
+		fmt.Fprintf(stdout, "WARN: could not check channel-mapping registry for orphans pointing at rig %q: %v\n", rigName, err) //nolint:errcheck
+		return
+	}
+	var orphans []string
+	for _, rec := range chanReg.All() {
+		if rec.WorkspaceID != workspaceID {
+			continue
+		}
+		if rec.TargetKind != channels.TargetKindRig {
+			continue
+		}
+		if rec.TargetID != rigName {
+			continue
+		}
+		orphans = append(orphans, rec.ChannelID)
+	}
+	if len(orphans) == 0 {
+		return
+	}
+	sort.Strings(orphans)
+	fmt.Fprintf(stdout, "WARN: %d channel-mappings still target rig %q: %s\n", len(orphans), rigName, strings.Join(orphans, ", ")) //nolint:errcheck
 }
 
 // diffStrings returns the lexicographically-sorted set of elements

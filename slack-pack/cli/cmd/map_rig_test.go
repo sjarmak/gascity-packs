@@ -775,3 +775,155 @@ func TestMapRigRemoveChannelsDeletesRecordWhenAllEmpty(t *testing.T) {
 		t.Error("rig should be deleted when last literal removed and no patterns")
 	}
 }
+
+// seedChannelMapping is a test helper that writes a channels.Record
+// directly into the registry — used to seed the orphan-WARN tests
+// without going through `gc slack map-channel`.
+func seedChannelMapping(t *testing.T, cityRoot, workspaceID, channelID, targetKind, targetID string) {
+	t.Helper()
+	reg, err := channels.NewRegistry(channels.Path(cityRoot))
+	if err != nil {
+		t.Fatalf("open channel mapping registry: %v", err)
+	}
+	now := time.Now().UTC()
+	if err := reg.Set(channels.Record{
+		WorkspaceID: workspaceID, ChannelID: channelID,
+		TargetKind: targetKind, TargetID: targetID,
+		CreatedAt: now, UpdatedAt: now,
+	}); err != nil {
+		t.Fatalf("seed channel mapping: %v", err)
+	}
+}
+
+// TestMapRigRemoveWarnsOnOrphanChannelMappings exercises the
+// --remove path's symmetric notice for the channel-mapping registry:
+// when a rig is removed but channel-level overrides still target it,
+// stdout must surface the dangling bindings (gc-px8.8). The verify
+// step is multi-orphan + sorted-list to lock in determinism.
+func TestMapRigRemoveWarnsOnOrphanChannelMappings(t *testing.T) {
+	cityRoot := newTestCity(t)
+	if _, _, err := execMapRigCmd(t, cityRoot,
+		"alpha", "--workspace-id", "T1", "--channel", "C1",
+	); err != nil {
+		t.Fatal(err)
+	}
+	// Two channel-level overrides explicitly target rig alpha,
+	// inserted in non-sorted order so the WARN's stable ordering is
+	// observable.
+	seedChannelMapping(t, cityRoot, "T1", "C9", channels.TargetKindRig, "alpha")
+	seedChannelMapping(t, cityRoot, "T1", "C2", channels.TargetKindRig, "alpha")
+
+	stdout, _, err := execMapRigCmd(t, cityRoot,
+		"alpha", "--workspace-id", "T1", "--remove",
+	)
+	if err != nil {
+		t.Fatalf("--remove with orphans should succeed (warn-only): %v", err)
+	}
+	if !strings.Contains(stdout, "Removed rig mapping alpha") {
+		t.Errorf("missing remove-success line: %q", stdout)
+	}
+	if !strings.Contains(stdout, `WARN: 2 channel-mappings still target rig "alpha": C2, C9`) {
+		t.Errorf("missing/malformed orphan WARN; stdout=%q", stdout)
+	}
+	if !strings.Contains(stdout, mapRigRestartHint) {
+		t.Errorf("missing restart hint: %q", stdout)
+	}
+}
+
+// TestMapRigRemoveSilentWhenNoOrphans confirms the WARN path is gated
+// on actual orphans: a clean removal stays quiet on the
+// channel-mapping registry side.
+func TestMapRigRemoveSilentWhenNoOrphans(t *testing.T) {
+	cityRoot := newTestCity(t)
+	if _, _, err := execMapRigCmd(t, cityRoot,
+		"alpha", "--workspace-id", "T1", "--channel", "C1",
+	); err != nil {
+		t.Fatal(err)
+	}
+	stdout, _, err := execMapRigCmd(t, cityRoot,
+		"alpha", "--workspace-id", "T1", "--remove",
+	)
+	if err != nil {
+		t.Fatalf("--remove no orphans: %v", err)
+	}
+	if strings.Contains(stdout, "WARN") {
+		t.Errorf("unexpected WARN on clean --remove: %q", stdout)
+	}
+}
+
+// TestMapRigRemoveOrphanIsolatedByWorkspace checks that the WARN
+// scans only orphans in the same workspace as the removed rig — a
+// rig of the same name in workspace T2 must NOT pull T1 channels
+// into the WARN list.
+func TestMapRigRemoveOrphanIsolatedByWorkspace(t *testing.T) {
+	cityRoot := newTestCity(t)
+	if _, _, err := execMapRigCmd(t, cityRoot,
+		"alpha", "--workspace-id", "T1", "--channel", "C1",
+	); err != nil {
+		t.Fatal(err)
+	}
+	// Orphan-shaped record exists, but in workspace T2 — must be
+	// invisible to the T1 removal.
+	seedChannelMapping(t, cityRoot, "T2", "C9", channels.TargetKindRig, "alpha")
+
+	stdout, _, err := execMapRigCmd(t, cityRoot,
+		"alpha", "--workspace-id", "T1", "--remove",
+	)
+	if err != nil {
+		t.Fatalf("--remove: %v", err)
+	}
+	if strings.Contains(stdout, "WARN") {
+		t.Errorf("workspace-isolated WARN leaked: %q", stdout)
+	}
+}
+
+// TestMapRigRemoveOrphanIgnoresSessionTarget confirms the WARN scans
+// only TargetKind=="rig" entries; a session-tier override pointing at
+// the rig's name is a different binding and must not be flagged.
+func TestMapRigRemoveOrphanIgnoresSessionTarget(t *testing.T) {
+	cityRoot := newTestCity(t)
+	if _, _, err := execMapRigCmd(t, cityRoot,
+		"alpha", "--workspace-id", "T1", "--channel", "C1",
+	); err != nil {
+		t.Fatal(err)
+	}
+	// A session override uses target_kind="session"; even if its
+	// target_id collides with the rig name, it's a different tier.
+	seedChannelMapping(t, cityRoot, "T1", "C9", channels.TargetKindSession, "alpha")
+
+	stdout, _, err := execMapRigCmd(t, cityRoot,
+		"alpha", "--workspace-id", "T1", "--remove",
+	)
+	if err != nil {
+		t.Fatalf("--remove: %v", err)
+	}
+	if strings.Contains(stdout, "WARN") {
+		t.Errorf("session-target should not trigger rig orphan WARN: %q", stdout)
+	}
+}
+
+// TestMapRigRemoveChannelsEmptyAfterWarnsOnOrphans exercises the
+// --remove-channels path that empties the rig's channel set and
+// deletes the record. The orphan WARN must fire on this path too.
+func TestMapRigRemoveChannelsEmptyAfterWarnsOnOrphans(t *testing.T) {
+	cityRoot := newTestCity(t)
+	if _, _, err := execMapRigCmd(t, cityRoot,
+		"alpha", "--workspace-id", "T1", "--channel", "C1,C2",
+	); err != nil {
+		t.Fatal(err)
+	}
+	seedChannelMapping(t, cityRoot, "T1", "C7", channels.TargetKindRig, "alpha")
+
+	stdout, _, err := execMapRigCmd(t, cityRoot,
+		"alpha", "--workspace-id", "T1", "--remove-channels", "C1,C2",
+	)
+	if err != nil {
+		t.Fatalf("--remove-channels empty-after: %v", err)
+	}
+	if !strings.Contains(stdout, "Removed rig mapping alpha") {
+		t.Errorf("missing remove-success line: %q", stdout)
+	}
+	if !strings.Contains(stdout, `WARN: 1 channel-mappings still target rig "alpha": C7`) {
+		t.Errorf("missing/malformed orphan WARN on empty-after path; stdout=%q", stdout)
+	}
+}
