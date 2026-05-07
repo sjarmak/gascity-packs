@@ -1918,24 +1918,31 @@ func processSlackEvent(cfg config, aliasReg *handleAliasRegistry, threadReg *thr
 		}
 	}
 
-	// gc-px8.5: prepend a "Thread context" preamble on the first
-	// inbound observed for a given (channel, thread_ts) pair so an
-	// agent invited mid-thread sees prior decision-making rather
-	// than just the literal mention line. Only relevant when the
-	// inbound is a reply (thread_ts != ts) — a thread-parent post
-	// has no priors and is skipped. The cache marks the pair seen
-	// before issuing the fetch so a transient API failure doesn't
-	// retry on every subsequent inbound (see thread_context.go).
+	// gc-px8.5 + gc-px8.6: prepend thread-context preamble for inbounds
+	// that are replies in a thread. The cache stores per-(target,
+	// channel, thread) the ts of the most recent preamble already
+	// delivered to that target. Each inbound fetches the thread's
+	// reply chain (option B) and the formatter applies the cached ts
+	// as a lower bound, so:
+	//   - First mention of agent X: full priors window (matches gc-px8.5).
+	//   - Subsequent mention of X with peer activity since the last
+	//     visit: only the delta — what other bound agents (or human
+	//     posts) added between visits — gets prepended (gc-px8.6).
+	//   - Subsequent mention of X with no new activity: empty preamble.
+	// Errors leave the cached ts unchanged so a transient failure
+	// retries on the next inbound rather than silently losing context.
 	if msg.ThreadTS != "" && msg.ThreadTS != msg.TS && cfg.threadContextCache != nil {
-		if cfg.threadContextCache.firstSighting(msg.Channel, msg.ThreadTS) {
-			fetchCtx, cancel := context.WithTimeout(context.Background(), threadContextFetchTimeout)
-			replies, err := fetchThreadReplies(fetchCtx, cfg.slackBotToken, msg.Channel, msg.ThreadTS, cfg.slackThreadContextLimit)
-			cancel()
-			if err != nil {
-				log.Printf("thread context fetch failed chan=%s thread=%s: %v", msg.Channel, msg.ThreadTS, err)
-			} else if preamble := formatThreadContextPreamble(replies, msg.TS); preamble != "" {
+		sinceTS := cfg.threadContextCache.lastDeliveredFor(target, msg.Channel, msg.ThreadTS)
+		fetchCtx, cancel := context.WithTimeout(context.Background(), threadContextFetchTimeout)
+		replies, err := fetchThreadReplies(fetchCtx, cfg.slackBotToken, msg.Channel, msg.ThreadTS, cfg.slackThreadContextLimit)
+		cancel()
+		if err != nil {
+			log.Printf("thread context fetch failed chan=%s thread=%s target=%q: %v", msg.Channel, msg.ThreadTS, target, err)
+		} else {
+			if preamble := formatThreadContextPreamble(replies, msg.TS, sinceTS); preamble != "" {
 				text = preamble + text
 			}
+			cfg.threadContextCache.markDelivered(target, msg.Channel, msg.ThreadTS, msg.TS)
 		}
 	}
 

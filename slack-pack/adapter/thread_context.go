@@ -13,17 +13,31 @@ import (
 	"time"
 )
 
-// gc-px8.5 — first-mention thread-context forwarding.
+// Thread-context forwarding for cross-agent visibility on shared
+// threads. Two beads compose into one mechanism:
 //
-// When a Slack inbound carries thread_ts and the adapter has not
-// previously forwarded thread context for that (channel, thread_ts)
-// pair, we fetch the thread's earlier replies via Slack's
-// conversations.replies endpoint and prepend a compact "Thread
-// context (N earlier messages):" preamble onto the bridge-mail body.
-// On subsequent inbounds in the same thread the cache short-circuits
-// the fetch and emits no preamble — once the receiving agent has
-// been seeded, additional context-paste is redundant and would
-// pointlessly inflate every reply round-trip.
+//   gc-px8.5 — first-mention preamble: when an inbound carries
+//     thread_ts and the targeted agent has not been seen on this
+//     (target, channel, thread) before, prepend the prior-replies
+//     window so the agent sees decision-making it joined mid-stream.
+//
+//   gc-px8.6 — cross-agent delta visibility: when the same target
+//     is mentioned again on the same thread, prepend only the
+//     replies posted since the target's last delivered context, so
+//     mayor sees what PL replied between mayor's two mentions, and
+//     vice versa, without redundant re-paste of context already
+//     conveyed.
+//
+// The implementation is option B from the gc-px8.6 design: fetch
+// conversations.replies on every inbound that carries thread_ts and
+// is not the thread parent itself. The cache stores per-(target,
+// channel, thread) the ts up-to-which preamble has been delivered;
+// the formatter applies that as a lower bound so each agent's
+// preamble is the delta of peer activity since its last visit.
+// Trade-off: more API calls than gc-px8.5's single-shot policy; one
+// fetch per inbound in a thread. Slack's tier-3 limit on
+// conversations.replies (50/min) is comfortable for typical
+// per-thread cadence.
 
 // defaultThreadContextLimit caps how many thread replies the adapter
 // asks Slack for when seeding context. Slack itself silently caps
@@ -41,48 +55,81 @@ const defaultThreadContextLimit = 20
 // dispatchSem slot.
 const threadContextFetchTimeout = 5 * time.Second
 
-// threadContextCache tracks (channel, thread_ts) pairs the adapter
-// has already attempted to fetch context for, so a subsequent
-// inbound on the same thread doesn't re-fetch and doesn't re-prepend
-// the same preamble. Process-lifetime; no eviction. Workload is
-// bounded by the count of distinct active threads, which is small
-// relative to per-message memory budgets.
+// threadContextCache tracks, per (target, channel, thread_ts) tuple,
+// the ts of the most recent thread-context preamble the adapter has
+// delivered for that target. The next inbound to the same target in
+// the same thread uses that ts as a lower bound on which prior
+// replies to include — peer activity newer than the last visit, not
+// the entire history again.
 //
-// "Already attempted" — not "already succeeded." The cache marks the
-// pair seen BEFORE issuing the fetch, so a transient Slack 5xx or a
-// missing-scope 401 doesn't get retried on every subsequent inbound
-// in that thread. Operators see one error log per thread instead of
-// per inbound; the trade-off is that a transient-only failure
-// permanently loses context for that thread (the next inbound is the
-// signal to investigate).
+// Process-lifetime; no eviction. Workload is bounded by the count of
+// distinct (target, channel, thread) tuples observed, which is small
+// relative to per-message memory budgets. A target value of "" is a
+// valid key for channel-bound inbounds without an explicit @handle.
+//
+// Errors during fetchThreadReplies do NOT advance the cached ts. A
+// transient Slack 5xx or missing-scope 401 leaves the lower bound
+// unchanged so the next inbound retries the fetch and (if it
+// succeeds) still gets the priors that were missed during the error
+// window. The trade-off is per-inbound logging on persistently-
+// failing threads, which is the right operator signal — silent
+// suppression of context loss is worse than a noisy log.
 type threadContextCache struct {
-	mu   sync.Mutex
-	seen map[string]struct{}
+	mu            sync.Mutex
+	lastDelivered map[string]string
 }
 
 func newThreadContextCache() *threadContextCache {
-	return &threadContextCache{seen: make(map[string]struct{})}
+	return &threadContextCache{lastDelivered: make(map[string]string)}
 }
 
-// firstSighting returns true on the first observation of a
-// (channel, threadTS) pair and marks the pair seen atomically.
-// Subsequent calls for the same pair return false. Safe for
-// concurrent callers. A nil receiver returns false (no-op cache).
-func (c *threadContextCache) firstSighting(channel, threadTS string) bool {
+// lastDeliveredFor returns the ts up-to-which the adapter has already
+// delivered preamble context for the given (target, channel, thread)
+// tuple. An empty return means "no preamble delivered yet" — the
+// caller should treat all priors as new. Safe for concurrent
+// callers. A nil receiver returns "" (no-op cache).
+func (c *threadContextCache) lastDeliveredFor(target, channel, threadTS string) string {
 	if c == nil {
-		return false
+		return ""
 	}
 	if channel == "" || threadTS == "" {
-		return false
+		return ""
 	}
-	key := channel + "|" + threadTS
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if _, ok := c.seen[key]; ok {
-		return false
+	return c.lastDelivered[threadCacheKey(target, channel, threadTS)]
+}
+
+// markDelivered records ts as the high-water mark for which preamble
+// context has been delivered for (target, channel, thread). Idempotent
+// when called with a non-increasing ts: the stored value never
+// regresses. Safe for concurrent callers. A nil receiver is a no-op.
+func (c *threadContextCache) markDelivered(target, channel, threadTS, ts string) {
+	if c == nil {
+		return
 	}
-	c.seen[key] = struct{}{}
-	return true
+	if channel == "" || threadTS == "" || ts == "" {
+		return
+	}
+	key := threadCacheKey(target, channel, threadTS)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if prev, ok := c.lastDelivered[key]; ok && prev >= ts {
+		// Slack ts strings are lexically comparable in canonical
+		// 17-char "<seconds>.<microseconds>" form; a regression here
+		// would mean a stale handler raced ahead of a newer delivery,
+		// which is a no-op for cache semantics.
+		return
+	}
+	c.lastDelivered[key] = ts
+}
+
+// threadCacheKey is the cache-map key shape for (target, channel,
+// thread). Exposed for direct manipulation in tests; "|" is
+// disallowed in Slack ids (channel, ts) and absent from typical
+// handles, so the joined form is unambiguous in practice.
+func threadCacheKey(target, channel, threadTS string) string {
+	return target + "|" + channel + "|" + threadTS
 }
 
 // slackThreadMessage is the subset of the conversations.replies
@@ -161,19 +208,29 @@ func fetchThreadReplies(ctx context.Context, token, channel, threadTS string, li
 }
 
 // formatThreadContextPreamble builds the bridge-mail preamble from
-// prior messages in the thread. "Prior" means strictly earlier than
-// currentTS (Slack ts strings are lexically comparable when in the
-// same canonical "<seconds>.<microseconds>" format) and not bot-
-// authored. Returns "" when no priors survive filtering — the
-// caller MUST treat that case as no-op (gc-px8.5 contract: empty/
-// short threads carry no preamble overhead).
-func formatThreadContextPreamble(replies []slackThreadMessage, currentTS string) string {
+// messages in the half-open ts window (sinceTS, currentTS). Slack
+// ts strings are lexically comparable when in the same canonical
+// "<seconds>.<microseconds>" format.
+//
+// sinceTS == "" means "no lower bound" — include all priors;
+// gc-px8.5's first-mention semantics. A non-empty sinceTS limits
+// the preamble to peer activity newer than the target's last
+// delivered context — gc-px8.6's cross-agent delta visibility.
+//
+// Bot-authored and whitespace-only messages are filtered. Returns
+// "" when no messages survive filtering — caller MUST treat that as
+// no-op so empty/short threads, current-message-only callbacks, and
+// replays with no new peer activity carry no preamble overhead.
+func formatThreadContextPreamble(replies []slackThreadMessage, currentTS, sinceTS string) string {
 	var prior []slackThreadMessage
 	for _, m := range replies {
 		if m.TS == "" {
 			continue
 		}
 		if currentTS != "" && m.TS >= currentTS {
+			continue
+		}
+		if sinceTS != "" && m.TS <= sinceTS {
 			continue
 		}
 		if m.BotID != "" {

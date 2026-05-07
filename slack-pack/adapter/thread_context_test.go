@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -152,12 +153,32 @@ func TestThreadContext_FirstMentionPrependsPreamble(t *testing.T) {
 	}
 }
 
-func TestThreadContext_SecondMentionDoesNotRefetchOrPrepend(t *testing.T) {
-	prior := []slackThreadMessage{
+// TestThreadContext_SecondMentionWithoutNewActivityNoPreamble — the
+// gc-px8.6 cache stores per-target last-delivered ts. A second
+// mention of the same target with no peer activity in between
+// fetches Slack again (option B) but the formatter filter sees no
+// messages newer than the cached cutoff, so no preamble is emitted.
+// gc-px8.5's user-visible "no redundant context paste" guarantee
+// is preserved even though the API call count is now per-inbound.
+func TestThreadContext_SecondMentionWithoutNewActivityNoPreamble(t *testing.T) {
+	// Shared replies list mutated between calls so the second
+	// inbound sees only itself and the parent (no new peer activity).
+	var serverMu sync.Mutex
+	replies := []slackThreadMessage{
 		{User: "U_ALICE", Text: "context line", TS: "200.000001"},
 	}
-	slackStub, calls := fakeSlackRepliesServer(t, prior)
-	withSlackAPIStub(t, slackStub)
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		serverMu.Lock()
+		resp := slackConversationsRepliesResp{OK: true, Messages: append([]slackThreadMessage(nil), replies...)}
+		serverMu.Unlock()
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	t.Cleanup(srv.Close)
+	prev := slackAPIBase
+	slackAPIBase = srv.URL
+	t.Cleanup(func() { slackAPIBase = prev })
 
 	capture := &inboundCapture{}
 	gcStub := httptest.NewServer(capture.handler())
@@ -195,8 +216,9 @@ func TestThreadContext_SecondMentionDoesNotRefetchOrPrepend(t *testing.T) {
 	processSlackEvent(cfg, aliasReg, nil, nil, slackEventEnvelope{Type: "event_callback", Event: first}, func() {})
 	processSlackEvent(cfg, aliasReg, nil, nil, slackEventEnvelope{Type: "event_callback", Event: second}, func() {})
 
-	if got := atomic.LoadInt32(calls); got != 1 {
-		t.Errorf("conversations.replies calls = %d, want 1 (cache should suppress second fetch)", got)
+	// Option B: each inbound fetches. The cache filters preamble.
+	if got := atomic.LoadInt32(&calls); got != 2 {
+		t.Errorf("conversations.replies calls = %d, want 2 (option B: fetch per inbound)", got)
 	}
 	msgs := capture.snapshot()
 	if len(msgs) != 2 {
@@ -206,7 +228,7 @@ func TestThreadContext_SecondMentionDoesNotRefetchOrPrepend(t *testing.T) {
 		t.Errorf("first inbound missing preamble; got %q", msgs[0].Text)
 	}
 	if strings.Contains(msgs[1].Text, "Thread context") {
-		t.Errorf("second inbound carried preamble; got %q", msgs[1].Text)
+		t.Errorf("second inbound carried preamble despite no new peer activity; got %q", msgs[1].Text)
 	}
 	if !strings.HasPrefix(msgs[1].Text, "follow-up question") {
 		t.Errorf("second inbound text unexpected; got %q", msgs[1].Text)
@@ -349,11 +371,13 @@ func TestThreadContext_NoPriorsAfterFilteringEmitsNoPreamble(t *testing.T) {
 	}
 }
 
-func TestThreadContext_FetchFailureMarksSeenAndDoesNotRetry(t *testing.T) {
-	// Slack stub returns 500 on every call. The cache should still
-	// mark the (channel, thread_ts) seen so subsequent inbounds
-	// don't hammer the API. The bridge-mail body is still posted —
-	// just without a preamble.
+// TestThreadContext_FetchFailureRetriesNextInbound — gc-px8.6
+// trade-off: errors do NOT advance the cached ts, so a transient
+// Slack 5xx on inbound 1 is retried on inbound 2 (rather than
+// permanently losing context for the thread the way the gc-px8.5
+// "mark before fetch" policy did). Persistent failures pay one
+// log line per inbound; that's the right operator signal.
+func TestThreadContext_FetchFailureRetriesNextInbound(t *testing.T) {
 	var calls int32
 	failingSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt32(&calls, 1)
@@ -387,8 +411,8 @@ func TestThreadContext_FetchFailureMarksSeenAndDoesNotRetry(t *testing.T) {
 	processSlackEvent(cfg, aliasReg, nil, nil, slackEventEnvelope{Type: "event_callback", Event: mk("600.000002")}, func() {})
 	processSlackEvent(cfg, aliasReg, nil, nil, slackEventEnvelope{Type: "event_callback", Event: mk("600.000003")}, func() {})
 
-	if got := atomic.LoadInt32(&calls); got != 1 {
-		t.Errorf("conversations.replies calls = %d, want 1 (failure must not be retried per inbound)", got)
+	if got := atomic.LoadInt32(&calls); got != 2 {
+		t.Errorf("conversations.replies calls = %d, want 2 (errors must retry per inbound, not permanently suppress)", got)
 	}
 	msgs := capture.snapshot()
 	if len(msgs) != 2 {
@@ -401,57 +425,291 @@ func TestThreadContext_FetchFailureMarksSeenAndDoesNotRetry(t *testing.T) {
 	}
 }
 
+// TestThreadContext_CrossAgentDeltaVisibility — gc-px8.6's payoff.
+// Two agents (mayor, PL) bound to the same thread. mayor is
+// mentioned first, sees U_ALICE's prior. PL is mentioned next,
+// sees U_ALICE's prior PLUS the human reply that landed between
+// (which Slack's conversations.replies returns once posted). mayor
+// is then mentioned again — sees ONLY the messages posted since
+// its last visit (peer activity it hasn't seen yet), not redundant
+// re-paste of U_ALICE's prior already conveyed at step 1.
+//
+// Note on self-exclusion: the implementation does not currently
+// resolve target-handle (e.g. "mayor") to the agent's underlying
+// Slack User ID, so a later message authored by the same agent
+// will appear in that agent's own subsequent preamble (provided it
+// landed after the cached last-visit cutoff). Filtering self by
+// identity is a future enhancement; for now redundancy is bounded
+// by the per-target delta and is the smaller cost than missing
+// genuine peer activity. The bead's acceptance criteria don't
+// require self-exclusion.
+func TestThreadContext_CrossAgentDeltaVisibility(t *testing.T) {
+	thread := "700.000001"
+	var serverMu sync.Mutex
+	replies := []slackThreadMessage{
+		{User: "U_ALICE", Text: "should we ship?", TS: "700.000001"},
+	}
+	var calls int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&calls, 1)
+		serverMu.Lock()
+		resp := slackConversationsRepliesResp{OK: true, Messages: append([]slackThreadMessage(nil), replies...)}
+		serverMu.Unlock()
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	t.Cleanup(srv.Close)
+	prev := slackAPIBase
+	slackAPIBase = srv.URL
+	t.Cleanup(func() { slackAPIBase = prev })
+
+	capture := &inboundCapture{}
+	gcStub := httptest.NewServer(capture.handler())
+	t.Cleanup(gcStub.Close)
+
+	cfg := config{
+		gcAPIBase:               gcStub.URL,
+		cityName:                "test-city",
+		provider:                "slack",
+		accountID:               "T1",
+		handlePrefix:            "@",
+		slackBotToken:           "xoxb-fake",
+		slackThreadContextLimit: 20,
+		threadContextCache:      newThreadContextCache(),
+	}
+	aliasReg := newTestHandleAliasRegistry(t)
+
+	mk := func(ts, text string) []byte {
+		raw, _ := json.Marshal(slackMessageEvent{
+			Type: "message", Channel: "C1", User: "U_ALICE",
+			TS: ts, ThreadTS: thread, Text: text,
+		})
+		return raw
+	}
+
+	// Step 1: mayor mentioned. Should see U_ALICE's prior only.
+	processSlackEvent(cfg, aliasReg, nil, nil, slackEventEnvelope{Type: "event_callback", Event: mk("700.000002", "@mayor weigh in?")}, func() {})
+
+	// Step 2: a peer human posts a reply. Slack returns it on
+	// subsequent fetches.
+	serverMu.Lock()
+	replies = append(replies, slackThreadMessage{User: "U_PEER", Text: "I think yes, with caveats X and Y", TS: "700.000003"})
+	serverMu.Unlock()
+
+	// Step 3: PL mentioned. PL has no cache entry yet, so PL sees
+	// EVERYTHING posted before this inbound: U_ALICE's prior AND
+	// the U_PEER reply. This is the cross-agent visibility payoff.
+	processSlackEvent(cfg, aliasReg, nil, nil, slackEventEnvelope{Type: "event_callback", Event: mk("700.000004", "@PL your read?")}, func() {})
+
+	// Step 4: another peer reply lands.
+	serverMu.Lock()
+	replies = append(replies, slackThreadMessage{User: "U_PEER2", Text: "agree; suggest staging first", TS: "700.000005"})
+	serverMu.Unlock()
+
+	// Step 5: mayor mentioned AGAIN. Mayor's cached last-delivered
+	// ts is "700.000002" (set at step 1). The delta filter
+	// includes only messages with ts > 700.000002 AND ts < current
+	// (700.000006): U_PEER@700.000003 and U_PEER2@700.000005.
+	// U_ALICE@700.000001 is filtered out — already delivered to
+	// mayor at step 1.
+	processSlackEvent(cfg, aliasReg, nil, nil, slackEventEnvelope{Type: "event_callback", Event: mk("700.000006", "@mayor counter?")}, func() {})
+
+	if got := atomic.LoadInt32(&calls); got != 3 {
+		t.Errorf("conversations.replies calls = %d, want 3 (one per inbound in thread)", got)
+	}
+	msgs := capture.snapshot()
+	if len(msgs) != 3 {
+		t.Fatalf("captured %d inbound messages, want 3", len(msgs))
+	}
+
+	// Step 1: mayor sees U_ALICE only.
+	if !strings.Contains(msgs[0].Text, "Thread context (1 earlier message):") {
+		t.Errorf("step 1 (mayor first) missing single-prior preamble; got %q", msgs[0].Text)
+	}
+	if !strings.Contains(msgs[0].Text, "@U_ALICE: should we ship?") {
+		t.Errorf("step 1 missing U_ALICE prior; got %q", msgs[0].Text)
+	}
+
+	// Step 3: PL sees U_ALICE AND U_PEER (2 priors). This is the
+	// cross-agent visibility payoff: PL gets context that landed
+	// between mayor's mention and PL's mention.
+	if !strings.Contains(msgs[1].Text, "Thread context (2 earlier messages):") {
+		t.Errorf("step 3 (PL first) missing two-prior preamble; got %q", msgs[1].Text)
+	}
+	if !strings.Contains(msgs[1].Text, "@U_ALICE: should we ship?") {
+		t.Errorf("step 3 missing U_ALICE prior; got %q", msgs[1].Text)
+	}
+	if !strings.Contains(msgs[1].Text, "@U_PEER: I think yes") {
+		t.Errorf("step 3 missing peer's intervening reply; got %q", msgs[1].Text)
+	}
+
+	// Step 5: mayor sees the delta since step 1 — U_PEER and
+	// U_PEER2. NOT U_ALICE (already delivered to mayor).
+	if !strings.Contains(msgs[2].Text, "Thread context (2 earlier messages):") {
+		t.Errorf("step 5 (mayor second) expected delta of 2 messages; got %q", msgs[2].Text)
+	}
+	if strings.Contains(msgs[2].Text, "@U_ALICE: should we ship?") {
+		t.Errorf("step 5 carried U_ALICE prior again (cache should exclude already-delivered to mayor); got %q", msgs[2].Text)
+	}
+	if !strings.Contains(msgs[2].Text, "@U_PEER: I think yes") {
+		t.Errorf("step 5 missing U_PEER reply (delta since mayor's last visit); got %q", msgs[2].Text)
+	}
+	if !strings.Contains(msgs[2].Text, "@U_PEER2: agree; suggest staging first") {
+		t.Errorf("step 5 missing U_PEER2 reply (delta since mayor's last visit); got %q", msgs[2].Text)
+	}
+}
+
+// TestThreadContext_IsolationAcrossThreads — the cache must not leak
+// activity from thread A into thread B even when both are in the
+// same channel, and not leak from channel C1 into channel C2 even
+// when both have a thread_ts of the same value (rare in practice
+// but easy to assert).
+func TestThreadContext_IsolationAcrossThreads(t *testing.T) {
+	prior := []slackThreadMessage{
+		{User: "U_ALICE", Text: "thread-A-only", TS: "800.000001"},
+	}
+	slackStub, _ := fakeSlackRepliesServer(t, prior)
+	withSlackAPIStub(t, slackStub)
+
+	capture := &inboundCapture{}
+	gcStub := httptest.NewServer(capture.handler())
+	t.Cleanup(gcStub.Close)
+
+	cfg := config{
+		gcAPIBase:               gcStub.URL,
+		cityName:                "test-city",
+		provider:                "slack",
+		accountID:               "T1",
+		handlePrefix:            "@",
+		slackBotToken:           "xoxb-fake",
+		slackThreadContextLimit: 20,
+		threadContextCache:      newThreadContextCache(),
+	}
+
+	// Mayor is mentioned in thread A → cache pulls the prior.
+	threadA, _ := json.Marshal(slackMessageEvent{
+		Type: "message", Channel: "C1", User: "U_BOB",
+		TS: "800.000002", ThreadTS: "800.000001",
+		Text: "@mayor in A",
+	})
+	// Mayor mentioned in thread B (different ts root, same channel)
+	// — the cache key (target, channel, thread_ts) differs, so this
+	// is a fresh first-mention and gets the same priors view.
+	threadB, _ := json.Marshal(slackMessageEvent{
+		Type: "message", Channel: "C1", User: "U_BOB",
+		TS: "900.000002", ThreadTS: "900.000001",
+		Text: "@mayor in B",
+	})
+	aliasReg := newTestHandleAliasRegistry(t)
+	processSlackEvent(cfg, aliasReg, nil, nil, slackEventEnvelope{Type: "event_callback", Event: threadA}, func() {})
+	processSlackEvent(cfg, aliasReg, nil, nil, slackEventEnvelope{Type: "event_callback", Event: threadB}, func() {})
+
+	msgs := capture.snapshot()
+	if len(msgs) != 2 {
+		t.Fatalf("captured %d, want 2", len(msgs))
+	}
+	// Thread B's preamble should not reference thread A's ts.
+	// (The stub returns the same reply set for both, but since
+	// they're treated as independent threads the second still
+	// gets a fresh first-mention preamble. The isolation point is
+	// that thread B's CACHE entry didn't pre-exist from thread A.)
+	if !strings.Contains(msgs[1].Text, "Thread context") {
+		t.Errorf("thread B should get its own first-mention preamble; got %q", msgs[1].Text)
+	}
+}
+
 // Direct unit tests for the helpers without going through processSlackEvent.
 
-func TestThreadContextCache_FirstSightingAtomic(t *testing.T) {
+func TestThreadContextCache_LastDeliveredRoundTrip(t *testing.T) {
 	t.Parallel()
 	c := newThreadContextCache()
-	if !c.firstSighting("C1", "T1") {
-		t.Fatal("first call should return true")
+
+	// Empty key returns "" — never delivered.
+	if got := c.lastDeliveredFor("mayor", "C1", "T1"); got != "" {
+		t.Errorf("initial lastDeliveredFor = %q, want \"\"", got)
 	}
-	if c.firstSighting("C1", "T1") {
-		t.Fatal("second call on same pair should return false")
+	c.markDelivered("mayor", "C1", "T1", "100.000001")
+	if got := c.lastDeliveredFor("mayor", "C1", "T1"); got != "100.000001" {
+		t.Errorf("after first markDelivered = %q, want %q", got, "100.000001")
 	}
-	if !c.firstSighting("C1", "T2") {
-		t.Error("different thread on same channel should return true")
+	// Newer ts advances.
+	c.markDelivered("mayor", "C1", "T1", "100.000005")
+	if got := c.lastDeliveredFor("mayor", "C1", "T1"); got != "100.000005" {
+		t.Errorf("after newer markDelivered = %q, want %q", got, "100.000005")
 	}
-	if !c.firstSighting("C2", "T1") {
-		t.Error("same thread on different channel should return true")
+	// Older ts does not regress (race protection).
+	c.markDelivered("mayor", "C1", "T1", "100.000003")
+	if got := c.lastDeliveredFor("mayor", "C1", "T1"); got != "100.000005" {
+		t.Errorf("after older markDelivered = %q, want %q (no regression)", got, "100.000005")
+	}
+
+	// Per-target isolation: PL on the same thread is independent.
+	if got := c.lastDeliveredFor("PL", "C1", "T1"); got != "" {
+		t.Errorf("PL on same thread should start empty; got %q", got)
+	}
+	c.markDelivered("PL", "C1", "T1", "100.000004")
+	if got := c.lastDeliveredFor("PL", "C1", "T1"); got != "100.000004" {
+		t.Errorf("PL after mark = %q, want %q", got, "100.000004")
+	}
+	// Mayor's value unchanged by PL's mark.
+	if got := c.lastDeliveredFor("mayor", "C1", "T1"); got != "100.000005" {
+		t.Errorf("mayor after PL mark = %q, want %q (per-target isolation)", got, "100.000005")
+	}
+
+	// Per-thread isolation.
+	c.markDelivered("mayor", "C1", "T2", "200.0")
+	if got := c.lastDeliveredFor("mayor", "C1", "T1"); got != "100.000005" {
+		t.Errorf("mayor T1 after marking T2 = %q, want %q (per-thread isolation)", got, "100.000005")
+	}
+
+	// Empty target — channel-bound default routing.
+	c.markDelivered("", "C1", "T1", "100.000010")
+	if got := c.lastDeliveredFor("", "C1", "T1"); got != "100.000010" {
+		t.Errorf("empty-target mark/get = %q, want %q", got, "100.000010")
+	}
+	if got := c.lastDeliveredFor("mayor", "C1", "T1"); got != "100.000005" {
+		t.Errorf("mayor after empty-target mark = %q, want %q", got, "100.000005")
 	}
 
 	// Nil receiver is safe.
 	var nilCache *threadContextCache
-	if nilCache.firstSighting("C", "T") {
-		t.Error("nil cache should return false")
+	nilCache.markDelivered("mayor", "C1", "T1", "999.0")
+	if got := nilCache.lastDeliveredFor("mayor", "C1", "T1"); got != "" {
+		t.Errorf("nil cache lastDeliveredFor = %q, want \"\"", got)
 	}
 
 	// Empty channel/thread short-circuits.
-	if c.firstSighting("", "T1") {
-		t.Error("empty channel should return false")
+	if got := c.lastDeliveredFor("mayor", "", "T1"); got != "" {
+		t.Errorf("empty channel = %q, want \"\"", got)
 	}
-	if c.firstSighting("C1", "") {
-		t.Error("empty thread should return false")
+	if got := c.lastDeliveredFor("mayor", "C1", ""); got != "" {
+		t.Errorf("empty thread = %q, want \"\"", got)
+	}
+	c.markDelivered("mayor", "", "T1", "999.0")
+	c.markDelivered("mayor", "C1", "", "999.0")
+	c.markDelivered("mayor", "C1", "T1", "")
+	if got := c.lastDeliveredFor("mayor", "C1", "T1"); got != "100.000005" {
+		t.Errorf("invalid markDelivered calls leaked into store; got %q want %q", got, "100.000005")
 	}
 }
 
-func TestThreadContextCache_FirstSightingConcurrent(t *testing.T) {
+func TestThreadContextCache_MarkDeliveredConcurrent(t *testing.T) {
 	t.Parallel()
 	c := newThreadContextCache()
 	const workers = 16
-	var wins int32
 	var wg sync.WaitGroup
 	wg.Add(workers)
 	for i := 0; i < workers; i++ {
-		go func() {
+		ts := fmt.Sprintf("100.%06d", i)
+		go func(ts string) {
 			defer wg.Done()
-			if c.firstSighting("C1", "T1") {
-				atomic.AddInt32(&wins, 1)
-			}
-		}()
+			c.markDelivered("mayor", "C1", "T1", ts)
+		}(ts)
 	}
 	wg.Wait()
-	if got := atomic.LoadInt32(&wins); got != 1 {
-		t.Errorf("wins = %d, want exactly 1 (race-safe atomic check-and-set)", got)
+	got := c.lastDeliveredFor("mayor", "C1", "T1")
+	want := "100.000015" // largest of 0..15 in 6-digit form
+	if got != want {
+		t.Errorf("after concurrent marks lastDelivered = %q, want %q (highest must win)", got, want)
 	}
 }
 
@@ -461,6 +719,7 @@ func TestFormatThreadContextPreamble_FiltersAndFormats(t *testing.T) {
 		name     string
 		replies  []slackThreadMessage
 		current  string
+		since    string // gc-px8.6 lower bound; "" = first delivery
 		want     string
 		wantNoOp bool
 	}{
@@ -531,12 +790,43 @@ func TestFormatThreadContextPreamble_FiltersAndFormats(t *testing.T) {
 			current: "1700000100.000000",
 			want:    "Thread context (1 earlier message):\n@?: anon\n\n---\n\n",
 		},
+		{
+			// gc-px8.6: when sinceTS is set, messages at-or-before
+			// it are filtered out — they were already delivered to
+			// this target on a previous visit.
+			name: "since filters out already-delivered priors",
+			replies: []slackThreadMessage{
+				{User: "U1", Text: "old", TS: "1700000050.000000"},
+				{User: "U2", Text: "new", TS: "1700000080.000000"},
+			},
+			current: "1700000100.000000",
+			since:   "1700000050.000000",
+			want:    "Thread context (1 earlier message):\n@U2: new\n\n---\n\n",
+		},
+		{
+			name: "since equals ts is treated as already-delivered (boundary)",
+			replies: []slackThreadMessage{
+				{User: "U1", Text: "boundary", TS: "1700000050.000000"},
+			},
+			current:  "1700000100.000000",
+			since:    "1700000050.000000",
+			wantNoOp: true,
+		},
+		{
+			name: "since strictly greater than all priors yields nothing",
+			replies: []slackThreadMessage{
+				{User: "U1", Text: "early", TS: "1700000050.000000"},
+			},
+			current:  "1700000100.000000",
+			since:    "1700000080.000000",
+			wantNoOp: true,
+		},
 	}
 	for _, tc := range cases {
 		tc := tc
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			got := formatThreadContextPreamble(tc.replies, tc.current)
+			got := formatThreadContextPreamble(tc.replies, tc.current, tc.since)
 			if tc.wantNoOp {
 				if got != "" {
 					t.Errorf("expected empty preamble, got %q", got)
