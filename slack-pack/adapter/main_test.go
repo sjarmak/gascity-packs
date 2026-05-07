@@ -18,6 +18,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"syscall"
 	"testing"
@@ -3763,6 +3764,138 @@ func TestConfineFileUploadPathRelativeRoot(t *testing.T) {
 				t.Fatalf("error %v does not contain 'is not absolute'", err)
 			}
 		})
+	}
+}
+
+// TestIdentityRegistryConcurrentSavesAtomic exercises the post-gc-px8.4
+// behavior where saveLocked routes through writeFile0600 (which uses
+// os.CreateTemp). With the old fixed `<diskPath>.tmp` suffix, two
+// independent registry instances pointing at the same diskPath could
+// race on the temp filename and clobber each other's mid-flight write
+// before rename. With os.CreateTemp each writer gets a unique temp
+// filename, so each rename is atomic and the final file is loadable.
+//
+// gc-px8.4 (was gc-cby.14).
+func TestIdentityRegistryConcurrentSavesAtomic(t *testing.T) {
+	t.Parallel()
+	disk := filepath.Join(t.TempDir(), "identities.json")
+
+	regA, err := newIdentityRegistry(disk)
+	if err != nil {
+		t.Fatalf("newIdentityRegistry A: %v", err)
+	}
+	regB, err := newIdentityRegistry(disk)
+	if err != nil {
+		t.Fatalf("newIdentityRegistry B: %v", err)
+	}
+
+	const iterations = 25
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iterations; i++ {
+			if err := regA.Set("sess-a-"+strconv.Itoa(i), identityRecord{Username: "A" + strconv.Itoa(i)}); err != nil {
+				t.Errorf("A.Set %d: %v", i, err)
+				return
+			}
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iterations; i++ {
+			if err := regB.Set("sess-b-"+strconv.Itoa(i), identityRecord{Username: "B" + strconv.Itoa(i)}); err != nil {
+				t.Errorf("B.Set %d: %v", i, err)
+				return
+			}
+		}
+	}()
+	wg.Wait()
+
+	// Whatever the interleaving, the final on-disk file must be a
+	// loadable JSON object — never a torn write. We don't assert a
+	// specific record set (last-writer-wins; either A or B's view).
+	final, err := newIdentityRegistry(disk)
+	if err != nil {
+		t.Fatalf("reload after concurrent saves: %v", err)
+	}
+	if final == nil {
+		t.Fatal("reload returned nil registry")
+	}
+
+	// No leftover writeFile0600 temp files in the directory after the
+	// dust settles — every CreateTemp companion either renamed-in or
+	// got Removed via the helper's cleanup path.
+	dir := filepath.Dir(disk)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("readdir %q: %v", dir, err)
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if strings.Contains(name, ".tmp") {
+			t.Errorf("leftover temp file after concurrent saves: %q", name)
+		}
+	}
+}
+
+// TestHandleAliasRegistryConcurrentSavesAtomic mirrors the identity
+// registry concurrent-save test for the handle-alias registry. Same
+// gc-px8.4 (was gc-cby.14) rationale.
+func TestHandleAliasRegistryConcurrentSavesAtomic(t *testing.T) {
+	t.Parallel()
+	disk := filepath.Join(t.TempDir(), "handle-aliases.json")
+
+	regA, err := newHandleAliasRegistry(disk)
+	if err != nil {
+		t.Fatalf("newHandleAliasRegistry A: %v", err)
+	}
+	regB, err := newHandleAliasRegistry(disk)
+	if err != nil {
+		t.Fatalf("newHandleAliasRegistry B: %v", err)
+	}
+
+	const iterations = 25
+	var wg sync.WaitGroup
+	wg.Add(2)
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iterations; i++ {
+			if err := regA.Set("handle-a-"+strconv.Itoa(i), "sess-a-"+strconv.Itoa(i)); err != nil {
+				t.Errorf("A.Set %d: %v", i, err)
+				return
+			}
+		}
+	}()
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iterations; i++ {
+			if err := regB.Set("handle-b-"+strconv.Itoa(i), "sess-b-"+strconv.Itoa(i)); err != nil {
+				t.Errorf("B.Set %d: %v", i, err)
+				return
+			}
+		}
+	}()
+	wg.Wait()
+
+	final, err := newHandleAliasRegistry(disk)
+	if err != nil {
+		t.Fatalf("reload after concurrent saves: %v", err)
+	}
+	if final == nil {
+		t.Fatal("reload returned nil registry")
+	}
+
+	dir := filepath.Dir(disk)
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatalf("readdir %q: %v", dir, err)
+	}
+	for _, e := range entries {
+		name := e.Name()
+		if strings.Contains(name, ".tmp") {
+			t.Errorf("leftover temp file after concurrent saves: %q", name)
+		}
 	}
 }
 

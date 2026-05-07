@@ -2769,19 +2769,15 @@ func (r *identityRegistry) saveLocked() error {
 		return nil
 	}
 	// 0o700/0o600: store maps session-id ↔ persona display name; not world-readable. gc-ywe.6.
-	if err := os.MkdirAll(filepath.Dir(r.diskPath), 0o700); err != nil {
-		return fmt.Errorf("mkdir identity store dir: %w", err)
-	}
+	// writeFile0600 (interactions.go) routes through os.CreateTemp so two
+	// writers in the same directory don't collide on a fixed `<path>.tmp`
+	// name (gc-px8.4 / gc-cby.14).
 	data, err := json.MarshalIndent(r.byID, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode identity store: %w", err)
 	}
-	tmp := r.diskPath + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		return fmt.Errorf("write identity store tmp: %w", err)
-	}
-	if err := os.Rename(tmp, r.diskPath); err != nil {
-		return fmt.Errorf("rename identity store: %w", err)
+	if err := writeFile0600(r.diskPath, data); err != nil {
+		return fmt.Errorf("write identity store: %w", err)
 	}
 	return nil
 }
@@ -2912,19 +2908,15 @@ func (r *handleAliasRegistry) saveLocked() error {
 		return nil
 	}
 	// 0o700/0o600: store maps cross-channel @handle → session-id; not world-readable. gc-ywe.6.
-	if err := os.MkdirAll(filepath.Dir(r.diskPath), 0o700); err != nil {
-		return fmt.Errorf("mkdir handle alias store dir: %w", err)
-	}
+	// writeFile0600 (interactions.go) routes through os.CreateTemp so two
+	// writers in the same directory don't collide on a fixed `<path>.tmp`
+	// name (gc-px8.4 / gc-cby.14).
 	data, err := json.MarshalIndent(r.byHandle, "", "  ")
 	if err != nil {
 		return fmt.Errorf("encode handle alias store: %w", err)
 	}
-	tmp := r.diskPath + ".tmp"
-	if err := os.WriteFile(tmp, data, 0o600); err != nil {
-		return fmt.Errorf("write handle alias store tmp: %w", err)
-	}
-	if err := os.Rename(tmp, r.diskPath); err != nil {
-		return fmt.Errorf("rename handle alias store: %w", err)
+	if err := writeFile0600(r.diskPath, data); err != nil {
+		return fmt.Errorf("write handle alias store: %w", err)
 	}
 	return nil
 }
