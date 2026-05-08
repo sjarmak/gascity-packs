@@ -326,6 +326,91 @@ def test_outbound_returns_auth_failure_when_session_lacks_binding_and_group(
         gc.close()
 
 
+def test_reply_current_thread_current_pulls_thread_ts_from_transcript(
+    gc_mock: GcMock,
+    slack_mock: SlackMock,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Pin the --thread-current resolution chain end-to-end.
+
+    ``--thread-current`` is the protocol used to thread a reply under the
+    most recent inbound message in this session's bound conversation.
+    The resolution chain is:
+
+      1. GET /events?type=extmsg.inbound&limit=50  → find latest inbound event
+      2. extract conversation_id + provider from the event payload
+      3. GET /extmsg/transcript?provider=&conversation_id=&kind=room  → list entries
+      4. (if empty) GET …&kind=dm  → fall through
+      5. take the latest entry where Kind==inbound, use its
+         ProviderMessageID as the ``thread_ts`` on the publish
+
+    A regression in the script (e.g. dropping the room→dm fallback, or
+    reading the wrong field name) is caught here. A regression in gc
+    (e.g. transcript schema changes) is also caught — the test would
+    surface as "thread_ts wasn't propagated to SlackMock".
+    """
+    gc_mock.register_inbound_event(
+        target_session="gc-test-session",
+        conversation_id="C0THREADCHAN",
+        provider="slack",
+        kind="room",
+    )
+    # Seed two transcript entries: an outbound followed by the inbound we
+    # want resolved. --thread-current should walk in reverse and pick
+    # the inbound one.
+    gc_mock.register_transcript_entry(
+        conversation_id="C0THREADCHAN",
+        kind="room",
+        provider_message_id="1700000000.000099",
+        message_kind="outbound",
+    )
+    gc_mock.register_transcript_entry(
+        conversation_id="C0THREADCHAN",
+        kind="room",
+        provider_message_id="1700000000.000777",
+        message_kind="inbound",
+    )
+
+    rc = _import_reply_current_module()
+    exit_code = rc.main([
+        "--session", "gc-test-session",
+        "--thread-current",
+        "--body", "threading under the inbound",
+    ])
+    assert exit_code is None or exit_code == 0
+    capsys.readouterr()  # drain stdout
+
+    # Slack-side: the publish should carry thread_ts pulled from the
+    # latest *inbound* transcript entry (000777, not 000099).
+    slack_calls = slack_mock.calls()
+    assert len(slack_calls) == 1, (
+        f"expected 1 publish, got {len(slack_calls)}: {slack_calls!r}"
+    )
+    sc = slack_calls[0]
+    assert sc.channel == "C0THREADCHAN"
+    assert sc.thread_ts == "1700000000.000777", (
+        f"--thread-current must propagate the latest inbound's ProviderMessageID "
+        f"(1700000000.000777) as thread_ts; got {sc.thread_ts!r}"
+    )
+
+    # gc-side: confirm the transcript GET was issued (with kind=room first,
+    # since the seed put the entries there — no dm fallback expected).
+    transcript_calls = [
+        c for c in gc_mock.calls()
+        if c.path.endswith("/extmsg/transcript")
+    ]
+    assert transcript_calls, (
+        "expected at least one /extmsg/transcript GET, "
+        f"got paths={[c.path for c in gc_mock.calls()]!r}"
+    )
+    # First transcript call must be kind=room (the room-first heuristic).
+    first_transcript = transcript_calls[0]
+    assert first_transcript.query.get("kind") == "room", (
+        f"first transcript lookup must use kind=room; got query={first_transcript.query!r}"
+    )
+    assert first_transcript.query.get("conversation_id") == "C0THREADCHAN"
+
+
 def test_reply_current_resolves_conversation_from_inbound_event(
     gc_mock: GcMock, slack_mock: SlackMock, capsys: pytest.CaptureFixture[str]
 ) -> None:

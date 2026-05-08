@@ -61,6 +61,10 @@ class GcMock:
         self._lock = threading.Lock()
         self._bindings: dict[str, list[dict[str, Any]]] = {}
         self._inbound_events: list[dict[str, Any]] = []
+        # transcripts[(provider, conversation_id, kind)] = list of entries
+        # in chronological order. Each entry mirrors gc's transcript shape:
+        # {Kind, ProviderMessageID, Conversation: {ScopeID, Provider, ...}}.
+        self._transcripts: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
         # group_memberships[session_id] = set of conversation_ids the
         # session can publish into via group membership. This models the
         # post-gastownhall/gascity#1831 fallback path where a session
@@ -155,6 +159,37 @@ class GcMock:
         with self._lock:
             self._inbound_events.append(event)
 
+    def register_transcript_entry(
+        self,
+        *,
+        conversation_id: str,
+        provider: str = "slack",
+        kind: str = "room",
+        provider_message_id: str,
+        message_kind: str = "inbound",
+        account_id: str = "T0TESTWS",
+    ) -> None:
+        """Seed a transcript entry for ``GET /extmsg/transcript`` lookups.
+
+        ``message_kind`` is the transcript-row Kind ("inbound" / "outbound").
+        ``--thread-current`` resolves the latest *inbound* entry for the
+        session's conversation.
+        """
+        key = (provider, conversation_id, kind)
+        entry = {
+            "Kind": message_kind,
+            "ProviderMessageID": provider_message_id,
+            "Conversation": {
+                "ScopeID": self.city_name,
+                "Provider": provider,
+                "AccountID": account_id,
+                "ConversationID": conversation_id,
+                "Kind": kind,
+            },
+        }
+        with self._lock:
+            self._transcripts.setdefault(key, []).append(entry)
+
     def register_group_membership(
         self, session_id: str, conversation_id: str
     ) -> None:
@@ -231,6 +266,10 @@ class GcMock:
             self._handle_events_query(req, query)
             return
 
+        if method == "GET" and suffix == "/extmsg/transcript":
+            self._handle_transcript_query(req, query)
+            return
+
         req.send_response(404)
         req.end_headers()
         req.wfile.write(f"unhandled: {method} {suffix}".encode())
@@ -268,6 +307,25 @@ class GcMock:
         except ValueError:
             limit = 50
         items = items[-limit:]
+        resp = json.dumps({"items": items}).encode()
+        req.send_response(200)
+        req.send_header("Content-Type", "application/json")
+        req.send_header("Content-Length", str(len(resp)))
+        req.end_headers()
+        req.wfile.write(resp)
+
+    def _handle_transcript_query(
+        self,
+        req: http.server.BaseHTTPRequestHandler,
+        query: dict[str, str],
+    ) -> None:
+        """GET /extmsg/transcript?scope_id=&provider=&conversation_id=&kind=[&account_id=]"""
+        provider = query.get("provider", "")
+        conversation_id = query.get("conversation_id", "")
+        kind = query.get("kind", "")
+        key = (provider, conversation_id, kind)
+        with self._lock:
+            items = list(self._transcripts.get(key, []))
         resp = json.dumps({"items": items}).encode()
         req.send_response(200)
         req.send_header("Content-Type", "application/json")
