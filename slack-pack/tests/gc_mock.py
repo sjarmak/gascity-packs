@@ -44,12 +44,29 @@ class GcCall:
 class GcMock:
     """HTTP server that stands in for gc's API surface in tests."""
 
-    def __init__(self, city_name: str = "test-city") -> None:
+    def __init__(
+        self,
+        city_name: str = "test-city",
+        *,
+        enforce_authorization: bool = False,
+    ) -> None:
         self.city_name = city_name
+        # When True, /extmsg/outbound checks that the (session_id,
+        # conversation_id) pair is authorized via a direct binding OR a
+        # group membership. When False (default), all outbound requests
+        # succeed unconditionally — useful for tests that don't care
+        # about the auth path.
+        self.enforce_authorization = enforce_authorization
         self._calls: list[GcCall] = []
         self._lock = threading.Lock()
         self._bindings: dict[str, list[dict[str, Any]]] = {}
         self._inbound_events: list[dict[str, Any]] = []
+        # group_memberships[session_id] = set of conversation_ids the
+        # session can publish into via group membership. This models the
+        # post-gastownhall/gascity#1831 fallback path where a session
+        # without a direct binding can still authorize through an
+        # extmsg-group it participates in.
+        self._group_memberships: dict[str, set[str]] = {}
         self._adapter_callback_url: str | None = None
         self._msg_counter = 0
         self._server = self._build_server()
@@ -137,6 +154,18 @@ class GcMock:
         }
         with self._lock:
             self._inbound_events.append(event)
+
+    def register_group_membership(
+        self, session_id: str, conversation_id: str
+    ) -> None:
+        """Mark session_id as a participant in the extmsg-group bound to conversation_id.
+
+        With ``enforce_authorization=True``, this lets the session publish to
+        the conversation without a direct binding — the post-#1831 group-
+        fallback path. Pre-#1831 behavior would 403 the publish.
+        """
+        with self._lock:
+            self._group_memberships.setdefault(session_id, set()).add(conversation_id)
 
     def set_adapter_callback(self, url: str) -> None:
         """Make ``/extmsg/outbound`` forward to this URL with X-GC-Request: true.
@@ -246,6 +275,27 @@ class GcMock:
         req.end_headers()
         req.wfile.write(resp)
 
+    def _resolve_authorization(
+        self, session_id: str, conversation_id: str
+    ) -> tuple[bool, str]:
+        """Mirror gc's /extmsg/outbound auth chain (post-#1831):
+
+          1. direct binding for (session, conversation) → "binding"
+          2. else group membership for (session, conversation) → "group_membership"
+          3. else unauthorized
+        """
+        with self._lock:
+            for entry in self._bindings.get(session_id, []):
+                conv = entry.get("Conversation") or {}
+                if (
+                    entry.get("Status") == "active"
+                    and conv.get("conversation_id") == conversation_id
+                ):
+                    return True, "binding"
+            if conversation_id in self._group_memberships.get(session_id, set()):
+                return True, "group_membership"
+        return False, ""
+
     def _handle_outbound(
         self,
         req: http.server.BaseHTTPRequestHandler,
@@ -256,6 +306,37 @@ class GcMock:
             req.end_headers()
             req.wfile.write(b"outbound body must be a JSON object")
             return
+
+        if self.enforce_authorization:
+            session_id = body.get("session_id", "")
+            conv = body.get("conversation") or {}
+            conversation_id = conv.get("conversation_id", "")
+            authorized, auth_via = self._resolve_authorization(
+                session_id, conversation_id
+            )
+            if not authorized:
+                # Mirror gc's response shape on auth failure.
+                resp = json.dumps({
+                    "Receipt": {
+                        "Delivered": False,
+                        "MessageID": "",
+                        "Conversation": conv,
+                        "FailureKind": "auth",
+                        "FailureMessage": (
+                            f"session {session_id!r} not authorized for "
+                            f"conversation {conversation_id!r}: no active "
+                            "binding and no group membership"
+                        ),
+                    }
+                }).encode()
+                req.send_response(200)  # gc returns 200 with FailureKind, not 403
+                req.send_header("Content-Type", "application/json")
+                req.send_header("Content-Length", str(len(resp)))
+                req.end_headers()
+                req.wfile.write(resp)
+                return
+        else:
+            auth_via = "unenforced"
 
         message_id = self._next_message_id()
         delivered = True
@@ -290,13 +371,17 @@ class GcMock:
                 delivered = False
                 forward_error = str(exc)
 
-        receipt = {
+        receipt: dict[str, Any] = {
             "Receipt": {
                 "Delivered": delivered,
                 "MessageID": message_id,
                 "Conversation": body.get("conversation"),
             }
         }
+        if self.enforce_authorization:
+            # Surface which auth path was taken so tests can assert on
+            # the binding-vs-group-fallback distinction.
+            receipt["Receipt"]["AuthVia"] = auth_via
         if forward_error:
             receipt["Receipt"]["FailureKind"] = "adapter"
             receipt["Receipt"]["FailureMessage"] = forward_error

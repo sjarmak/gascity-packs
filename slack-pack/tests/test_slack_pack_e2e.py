@@ -200,6 +200,132 @@ def test_publish_fails_loudly_when_no_binding(
     )
 
 
+def test_reply_current_publishes_via_group_membership_fallback(
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+) -> None:
+    """Pin the gastownhall/gascity#1802 group-fallback contract from the slack-pack side.
+
+    Setup mirrors a session that is a participant in a multi-session
+    extmsg-group bound to a Slack channel, but does NOT itself hold a
+    direct binding to that conversation. Pre-#1831 gc returned
+    FailureKind=auth on outbound from such a session; #1831 added a
+    fallback to authorize via group membership.
+
+    The test exercises this from slack-pack's vantage point:
+
+      * GcMock is configured with enforce_authorization=True so its
+        /extmsg/outbound mirrors gc's authorization chain — direct
+        binding first, then group membership, then unauthorized.
+      * No binding is registered for the session.
+      * A group membership IS registered for (session, conversation).
+      * reply-current is invoked with --conversation-id explicit (which
+        bypasses the script-level binding lookup so the request actually
+        reaches /extmsg/outbound — the gc-side path under test).
+      * Assert: GcMock authorizes via "group_membership", SlackMock
+        receives the publish, and the script's stdout shows
+        Receipt.AuthVia="group_membership".
+    """
+    # Bring up isolated mocks for this test (the autouse fixture wires
+    # the default ones with enforce_authorization=False, which would
+    # paper over the auth contract under test).
+    slack = SlackMock(require_gc_request=True)
+    gc = GcMock(city_name="test-city", enforce_authorization=True)
+    gc.set_adapter_callback(slack.url)
+
+    monkeypatch.setenv("GC_API_BASE_URL", gc.url)
+    monkeypatch.setenv("GC_CITY_NAME", "test-city")
+    monkeypatch.setenv("GC_CITY_PATH", str(tmp_path))
+    monkeypatch.setenv("SLACK_WORKSPACE_ID", "T0TESTWS")
+    monkeypatch.setenv("GC_SESSION_ID", "gc-test-session")
+
+    try:
+        # NO register_binding(). The session has no direct binding.
+        gc.register_group_membership(
+            "gc-test-session", conversation_id="C0GROUPCHAN"
+        )
+
+        rc = _import_reply_current_module()
+        exit_code = rc.main([
+            "--session", "gc-test-session",
+            "--conversation-id", "C0GROUPCHAN",
+            "--kind", "room",
+            "--body", "publishing via group fallback",
+        ])
+        assert exit_code is None or exit_code == 0
+
+        out = json.loads(capsys.readouterr().out)
+        assert out["conversation_id"] == "C0GROUPCHAN"
+        receipt = out["result"]["Receipt"]
+        assert receipt["Delivered"] is True
+        assert receipt["AuthVia"] == "group_membership", (
+            f"expected publish to authorize via group membership "
+            f"(post-#1831 fallback), got AuthVia={receipt.get('AuthVia')!r} "
+            "(this surfaces a regression that drops the group-fallback path)"
+        )
+
+        # adapter leg: SlackMock saw the publish.
+        slack_calls = slack.calls()
+        assert len(slack_calls) == 1
+        assert slack_calls[0].channel == "C0GROUPCHAN"
+        assert slack_calls[0].text == "publishing via group fallback"
+        assert slack_calls[0].gc_request == "true"
+    finally:
+        slack.close()
+        gc.close()
+
+
+def test_outbound_returns_auth_failure_when_session_lacks_binding_and_group(
+    capsys: pytest.CaptureFixture[str],
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+) -> None:
+    """Negative case: no binding AND no group membership → Delivered: false / FailureKind: auth.
+
+    This pins the response shape slack-pack consumers must handle. Surfaces
+    a regression that, e.g., changes the FailureKind label or returns 403
+    instead of a typed Receipt envelope. The script itself currently just
+    prints whatever gc returns (no exit code change) — that's a known
+    behavior gap, but at least the wire contract is locked here.
+    """
+    slack = SlackMock(require_gc_request=True)
+    gc = GcMock(city_name="test-city", enforce_authorization=True)
+    gc.set_adapter_callback(slack.url)
+
+    monkeypatch.setenv("GC_API_BASE_URL", gc.url)
+    monkeypatch.setenv("GC_CITY_NAME", "test-city")
+    monkeypatch.setenv("GC_CITY_PATH", str(tmp_path))
+    monkeypatch.setenv("SLACK_WORKSPACE_ID", "T0TESTWS")
+    monkeypatch.setenv("GC_SESSION_ID", "gc-test-session")
+
+    try:
+        # Neither binding nor group membership registered.
+        rc = _import_reply_current_module()
+        rc.main([
+            "--session", "gc-test-session",
+            "--conversation-id", "C0LONELY",
+            "--kind", "room",
+            "--body", "should fail at gc auth",
+        ])
+
+        out = json.loads(capsys.readouterr().out)
+        receipt = out["result"]["Receipt"]
+        assert receipt["Delivered"] is False
+        assert receipt["FailureKind"] == "auth", (
+            f"expected FailureKind=auth, got {receipt!r}"
+        )
+        assert "no active binding" in receipt.get("FailureMessage", "")
+
+        # SlackMock should have received nothing (gc rejected before forwarding).
+        assert slack.calls() == [], (
+            f"unauthorized publish must not reach the adapter; got {slack.calls()!r}"
+        )
+    finally:
+        slack.close()
+        gc.close()
+
+
 def test_reply_current_resolves_conversation_from_inbound_event(
     gc_mock: GcMock, slack_mock: SlackMock, capsys: pytest.CaptureFixture[str]
 ) -> None:
