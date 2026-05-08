@@ -49,6 +49,7 @@ class GcMock:
         self._calls: list[GcCall] = []
         self._lock = threading.Lock()
         self._bindings: dict[str, list[dict[str, Any]]] = {}
+        self._inbound_events: list[dict[str, Any]] = []
         self._adapter_callback_url: str | None = None
         self._msg_counter = 0
         self._server = self._build_server()
@@ -110,6 +111,33 @@ class GcMock:
         with self._lock:
             self._bindings.setdefault(session_id, []).append(entry)
 
+    def register_inbound_event(
+        self,
+        *,
+        target_session: str,
+        conversation_id: str,
+        provider: str = "slack",
+        kind: str = "dm",
+        message_id: str = "",
+    ) -> None:
+        """Seed an extmsg.inbound event so reply-current's lookup path resolves.
+
+        Mirrors the payload shape produced by gc when a real Slack event_callback
+        arrives at the slack-pack adapter and gets forwarded to /extmsg/inbound.
+        """
+        event = {
+            "type": "extmsg.inbound",
+            "payload": {
+                "target_session": target_session,
+                "conversation_id": conversation_id,
+                "provider": provider,
+                "kind": kind,
+                "message_id": message_id,
+            },
+        }
+        with self._lock:
+            self._inbound_events.append(event)
+
     def set_adapter_callback(self, url: str) -> None:
         """Make ``/extmsg/outbound`` forward to this URL with X-GC-Request: true.
 
@@ -170,6 +198,10 @@ class GcMock:
             self._handle_outbound(req, body)
             return
 
+        if method == "GET" and suffix == "/events":
+            self._handle_events_query(req, query)
+            return
+
         req.send_response(404)
         req.end_headers()
         req.wfile.write(f"unhandled: {method} {suffix}".encode())
@@ -183,6 +215,31 @@ class GcMock:
         with self._lock:
             entries = list(self._bindings.get(session_id, []))
         resp = json.dumps({"items": entries}).encode()
+        req.send_response(200)
+        req.send_header("Content-Type", "application/json")
+        req.send_header("Content-Length", str(len(resp)))
+        req.end_headers()
+        req.wfile.write(resp)
+
+    def _handle_events_query(
+        self,
+        req: http.server.BaseHTTPRequestHandler,
+        query: dict[str, str],
+    ) -> None:
+        """GET /events — scoped event-stream snapshot. Used for inbound-event lookup."""
+        wanted_type = query.get("type", "")
+        with self._lock:
+            if wanted_type == "extmsg.inbound":
+                items = list(self._inbound_events)
+            else:
+                items = []
+        # Apply limit if supplied (default behavior in the real API).
+        try:
+            limit = int(query.get("limit", "50"))
+        except ValueError:
+            limit = 50
+        items = items[-limit:]
+        resp = json.dumps({"items": items}).encode()
         req.send_response(200)
         req.send_header("Content-Type", "application/json")
         req.send_header("Content-Length", str(len(resp)))

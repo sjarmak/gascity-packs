@@ -85,6 +85,14 @@ def _import_publish_module():
     return slack_chat_publish
 
 
+def _import_reply_current_module():
+    for name in ("slack_chat_reply_current", "slack_intake_common"):
+        sys.modules.pop(name, None)
+    import slack_chat_reply_current  # type: ignore
+
+    return slack_chat_reply_current
+
+
 def test_publish_round_trip_through_gc_to_slack(
     gc_mock: GcMock, slack_mock: SlackMock, capsys: pytest.CaptureFixture[str]
 ) -> None:
@@ -189,4 +197,75 @@ def test_publish_fails_loudly_when_no_binding(
     assert slack_mock.calls() == [], (
         "publish without binding must not reach the adapter; "
         f"got {slack_mock.calls()!r}"
+    )
+
+
+def test_reply_current_resolves_conversation_from_inbound_event(
+    gc_mock: GcMock, slack_mock: SlackMock, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """reply-current's inbound-event lookup → conversation envelope → publish.
+
+    Pipeline:
+      1. A synthetic extmsg.inbound event is seeded in GcMock targeting our
+         session (modeling: a Slack message arrived, the slack-pack adapter
+         forwarded it to gc /extmsg/inbound, and gc emitted the event).
+      2. reply-current is invoked with only --body — no --conversation-id.
+      3. The script issues GET /events?type=extmsg.inbound&limit=50, finds
+         the matching event, extracts conversation_id, and publishes back
+         through GcMock → SlackMock.
+
+    Pins:
+      * The event-stream query shape (GET /events?type=extmsg.inbound).
+      * That reply-current's resolution chain reaches the inbound-event
+        path (rather than falling through to the binding-lookup or
+        SystemExit branches).
+      * That the kind is auto-detected from the channel-id prefix (C0… → room).
+      * That the resolved conversation_id propagates through to the Slack
+        publish.
+    """
+    gc_mock.register_inbound_event(
+        target_session="gc-test-session",
+        conversation_id="C0RIGCHAN",  # 'C' prefix → room
+        provider="slack",
+        kind="room",
+    )
+
+    rc = _import_reply_current_module()
+    exit_code = rc.main([
+        "--session", "gc-test-session",
+        "--body", "threaded reply via inbound resolution",
+    ])
+    assert exit_code is None or exit_code == 0
+
+    parsed = json.loads(capsys.readouterr().out)
+    assert parsed["session_id"] == "gc-test-session"
+    assert parsed["conversation_id"] == "C0RIGCHAN"
+    assert parsed["result"]["Receipt"]["Delivered"] is True
+
+    # gc-leg: events query happened, then the outbound POST.
+    gc_calls = gc_mock.calls()
+    paths = [c.path for c in gc_calls]
+    assert "/v0/city/test-city/events" in paths, (
+        f"expected events lookup, got paths={paths!r}"
+    )
+    events_call = next(c for c in gc_calls if c.path.endswith("/events"))
+    assert events_call.method == "GET"
+    assert events_call.query.get("type") == "extmsg.inbound"
+
+    outbound = next(c for c in gc_calls if c.path.endswith("/extmsg/outbound"))
+    conv = outbound.body["conversation"]
+    assert conv["conversation_id"] == "C0RIGCHAN"
+    # 'C' prefix should auto-detect to room (the script's
+    # _slack_kind_from_channel_id helper).
+    assert conv["kind"] == "room", (
+        f"expected room kind from C-prefix channel id, got {conv['kind']!r}"
+    )
+
+    # adapter-leg: SlackMock saw the publish with the resolved conversation_id.
+    slack_calls = slack_mock.calls()
+    assert len(slack_calls) == 1
+    assert slack_calls[0].channel == "C0RIGCHAN"
+    assert slack_calls[0].text == "threaded reply via inbound resolution"
+    assert slack_calls[0].gc_request == "true", (
+        "gc → adapter leg must carry X-GC-Request: true (post-#1817)"
     )
