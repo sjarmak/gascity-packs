@@ -1,0 +1,192 @@
+"""End-to-end pipeline tests for slack-pack.
+
+Wires ``GcMock`` and ``SlackMock`` together to exercise the full
+``slack-pack script -> gc /extmsg/* -> http_adapter -> Slack`` round-trip
+without running the real gc binary. Existing tests in this directory
+mock the HTTP layer at the script level (patched ``_request``); these
+tests don't — they let scripts make real HTTP calls against the in-
+process mocks. That catches a different class of bug (URL/path
+construction errors, header omissions, response-shape mismatches) that
+script-level mocking can't.
+
+Coverage rationale (gastownhall/gascity#1817 + #1802 context):
+
+  * #1817 (http_adapter CSRF gap): we cannot directly pin gc's
+    ``HTTPAdapter.Publish`` behavior here — that lives in gascity, not
+    gascity-packs. But the SlackMock's CSRF gate (require_gc_request)
+    documents the contract gc owes the adapter, and ``GcMock`` honors
+    it by always setting ``X-GC-Request: true`` when forwarding. A
+    regression there would surface as ``Delivered: false /
+    FailureKind: adapter`` — visible in this test.
+  * #1802 (binding fallback): the slack-pack script's binding lookup
+    via ``GET /extmsg/bindings?session_id=<sid>`` is exercised here
+    against the GcMock; if the script changes the lookup shape, the
+    test breaks.
+
+These tests are scenario-level and intentionally narrow — one happy
+path per pipeline. The matrix of error/edge cases stays in the
+existing per-script unit tests, which patch ``_request`` and run
+faster.
+"""
+
+from __future__ import annotations
+
+import json
+import pathlib
+import sys
+
+import pytest
+
+TESTS_DIR = pathlib.Path(__file__).resolve().parent
+sys.path.insert(0, str(TESTS_DIR))
+
+from gc_mock import GcMock  # type: ignore  # noqa: E402
+from slack_mock import SlackMock  # type: ignore  # noqa: E402
+
+PACK_DIR = TESTS_DIR.parent
+SCRIPTS_DIR = PACK_DIR / "scripts"
+sys.path.insert(0, str(SCRIPTS_DIR))
+
+
+@pytest.fixture
+def slack_mock() -> "SlackMock":
+    m = SlackMock(require_gc_request=True)
+    yield m
+    m.close()
+
+
+@pytest.fixture
+def gc_mock(slack_mock: SlackMock) -> "GcMock":
+    g = GcMock(city_name="test-city")
+    g.set_adapter_callback(slack_mock.url)
+    yield g
+    g.close()
+
+
+@pytest.fixture(autouse=True)
+def _isolate_env(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: pathlib.Path,
+    gc_mock: "GcMock",
+) -> None:
+    monkeypatch.setenv("GC_API_BASE_URL", gc_mock.url)
+    monkeypatch.setenv("GC_CITY_NAME", "test-city")
+    monkeypatch.setenv("GC_CITY_PATH", str(tmp_path))
+    monkeypatch.setenv("SLACK_WORKSPACE_ID", "T0TESTWS")
+    monkeypatch.setenv("GC_SESSION_ID", "gc-test-session")
+    monkeypatch.delenv("GC_SLACK_ADAPTER_ENV", raising=False)
+
+
+def _import_publish_module():
+    for name in ("slack_chat_publish", "slack_intake_common"):
+        sys.modules.pop(name, None)
+    import slack_chat_publish  # type: ignore
+
+    return slack_chat_publish
+
+
+def test_publish_round_trip_through_gc_to_slack(
+    gc_mock: GcMock, slack_mock: SlackMock, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Full pipeline: slack_chat_publish.py → GcMock → SlackMock.
+
+    Pins:
+      * The publish script's binding lookup shape (GET /extmsg/bindings).
+      * The publish script's outbound payload shape (POST /extmsg/outbound).
+      * GcMock's adapter forwarding sets X-GC-Request: true (the post-#1817
+        contract); SlackMock's CSRF gate fails the test if it's missing.
+      * thread_ts and idempotency_key propagate through both legs.
+    """
+    gc_mock.register_binding(
+        "gc-test-session",
+        conversation_id="C0123ROOM",
+        kind="room",
+    )
+
+    pub = _import_publish_module()
+    exit_code = pub.main([
+        "--session", "gc-test-session",
+        "--body", "*hello from e2e*",
+        "--reply-to", "1700000000.000100",
+        "--idempotency-key", "k-e2e-1",
+    ])
+    assert exit_code is None or exit_code == 0  # main may return None on success
+
+    captured_stdout = capsys.readouterr().out
+    parsed = json.loads(captured_stdout)
+    assert parsed["session_id"] == "gc-test-session"
+    assert parsed["conversation_id"] == "C0123ROOM"
+    assert parsed["via"] == "gc"
+    assert parsed["result"]["Receipt"]["Delivered"] is True
+
+    # gc-leg assertions: binding lookup + outbound POST.
+    gc_calls = gc_mock.calls()
+    paths = [c.path for c in gc_calls]
+    assert "/v0/city/test-city/extmsg/bindings" in paths, (
+        f"expected binding lookup, got paths={paths!r}"
+    )
+    binding_call = next(c for c in gc_calls if c.path.endswith("/extmsg/bindings"))
+    assert binding_call.method == "GET"
+    assert binding_call.query.get("session_id") == "gc-test-session"
+
+    outbound_call = next(c for c in gc_calls if c.path.endswith("/extmsg/outbound"))
+    assert outbound_call.method == "POST"
+    body = outbound_call.body
+    assert body["session_id"] == "gc-test-session"
+    assert body["text"] == "*hello from e2e*"
+    assert body["reply_to_message_id"] == "1700000000.000100"
+    assert body["idempotency_key"] == "k-e2e-1"
+    conv = body["conversation"]
+    assert conv["scope_id"] == "test-city"
+    assert conv["provider"] == "slack"
+    assert conv["account_id"] == "T0TESTWS"
+    assert conv["conversation_id"] == "C0123ROOM"
+    assert conv["kind"] == "room"
+    # The script sends X-GC-Request on its own POST to gc. Python's
+    # BaseHTTPRequestHandler title-cases header names ("X-Gc-Request"),
+    # so do a case-insensitive lookup.
+    gc_req_header = next(
+        (v for k, v in outbound_call.headers.items() if k.lower() == "x-gc-request"),
+        None,
+    )
+    assert gc_req_header in ("1", "true"), (
+        f"script must send X-GC-Request to gc, got headers={outbound_call.headers!r}"
+    )
+
+    # adapter-leg assertions: SlackMock saw the publish, with X-GC-Request: true.
+    slack_calls = slack_mock.calls()
+    assert len(slack_calls) == 1, f"expected 1 Slack publish, got {len(slack_calls)}"
+    sc = slack_calls[0]
+    assert sc.channel == "C0123ROOM"
+    assert sc.text == "*hello from e2e*"
+    assert sc.thread_ts == "1700000000.000100"
+    assert sc.idempotency_key == "k-e2e-1"
+    # This is the #1817 regression pin: gc must set X-GC-Request when forwarding
+    # to the adapter callback. SlackMock has require_gc_request=True; if gc
+    # forgot the header, the request would have 403'd and slack_calls would
+    # be empty.
+    assert sc.gc_request == "true", (
+        f"gc → adapter leg must carry X-GC-Request: true (post-#1817), got {sc.gc_request!r}"
+    )
+
+
+def test_publish_fails_loudly_when_no_binding(
+    gc_mock: GcMock, slack_mock: SlackMock
+) -> None:
+    """Publish without a registered binding fails fast (no silent send-into-the-void)."""
+    pub = _import_publish_module()
+    # No register_binding() call — the session has no active binding.
+    with pytest.raises(SystemExit) as exc_info:
+        pub.main([
+            "--session", "gc-test-session",
+            "--body", "should not be sent",
+        ])
+    msg = str(exc_info.value)
+    assert "no active extmsg binding" in msg, (
+        f"expected fail-fast message, got: {msg!r}"
+    )
+    # SlackMock should have received nothing.
+    assert slack_mock.calls() == [], (
+        "publish without binding must not reach the adapter; "
+        f"got {slack_mock.calls()!r}"
+    )
