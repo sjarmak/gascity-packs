@@ -18,10 +18,76 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import subprocess
 import sys
 from typing import Any
 
 import slack_intake_common as common
+
+
+# Reply protocol delivered to each newly-bound participant. Sent on every
+# bind (idempotent — duplicate nudges are harmless). Without this, a
+# participant session that respawned after the original bind would lose
+# the protocol contract and revert to its baseline prompt's reply path.
+PROTOCOL_NUDGE_TEMPLATE = """<system-reminder>
+Slack channel binding established for {conversation_id}.
+You are a slack-bound agent in this conversation.
+
+Reply protocol when you receive a `New message in shared conversation slack/...` reminder:
+
+  1. **FIRST**: react with eyes — BEFORE you compose anything, BEFORE you
+     read context, BEFORE you think about the reply.
+       gc slack react --emoji eyes
+     This is non-blocking and signals to the human that you've seen the
+     message. Replying first means the human waits in silence until your
+     full reply lands, even when you have an instant answer.
+
+  2. THEN compose your reply to a tmpfile.
+
+  3. THEN publish as a threaded reply (NOT publish-to-channel):
+       gc slack reply-current --body-file <tmpfile> --thread-current
+
+  4. THEN ack so the inbound is marked read:
+       gc transcript read --ack
+
+The order is non-negotiable even when you have an instant answer. Even
+when the inbound is a re-ping of an active thread. Even when it's a
+"ping" or "ack". React first, every time.
+
+Use `gc slack publish-to-channel --conversation-id ... --no-thread` ONLY
+for explicit top-level status broadcasts initiated by you, never as a
+reply to an inbound. Eyes-react is for inbound-replies only — proactive
+posts (e.g. surfacing slung work completion) skip the react and just
+publish-to-thread.
+</system-reminder>
+"""
+
+
+def deliver_protocol_nudge(session_id: str, conversation_id: str) -> None:
+    """Send the slack reply-protocol nudge to a session via `gc session nudge`.
+
+    Best-effort — failures (session asleep, unknown target, gc binary
+    missing) are logged to stderr and do not abort the bind. The nudge is
+    idempotent so re-delivery on every bind is safe.
+    """
+    body = PROTOCOL_NUDGE_TEMPLATE.format(conversation_id=conversation_id)
+    try:
+        result = subprocess.run(
+            ["gc", "session", "nudge", session_id, body],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        sys.stderr.write(
+            f"warn: protocol nudge to {session_id} failed: {exc}\n"
+        )
+        return
+    if result.returncode != 0:
+        sys.stderr.write(
+            f"warn: protocol nudge to {session_id} returned "
+            f"rc={result.returncode}: {result.stderr.strip()[:200]}\n"
+        )
 
 
 def _slack_workspace_id() -> str:
@@ -154,6 +220,12 @@ def main(argv: list[str]) -> int:
                         help="Cap peer-triggered publishes per inbound (0 = unlimited)")
     parser.add_argument("--max-total-peer-deliveries", type=int, default=0,
                         help="Cap total peer deliveries per inbound (0 = unlimited)")
+    parser.add_argument("--no-protocol-nudge", action="store_true",
+                        help="Skip auto-delivery of the slack reply-protocol nudge "
+                             "(react first, threaded reply, ack) to each newly-bound "
+                             "participant. By default the nudge is sent on every bind, "
+                             "which is idempotent and safe — disable only if a caller "
+                             "is composing its own protocol delivery.")
     parser.add_argument("--binding-owner", default="",
                         metavar="SESSION",
                         help="Also bind this session to the conversation as the publisher "
@@ -236,6 +308,18 @@ def main(argv: list[str]) -> int:
     }
     common.save_pack_config(cfg)
 
+    # Deliver the protocol nudge to each participant session so respawned
+    # sessions don't lose the reply contract. Best-effort, opt-out via flag.
+    nudged: list[str] = []
+    nudge_failures: list[str] = []
+    if not args.no_protocol_nudge:
+        for _, session in participants:
+            try:
+                deliver_protocol_nudge(session, args.conversation_id)
+                nudged.append(session)
+            except Exception as exc:  # noqa: BLE001 — best-effort, never abort bind
+                nudge_failures.append(f"{session}: {exc}")
+
     print(json.dumps({
         "binding_key": binding_key,
         "group_id": group_id,
@@ -244,6 +328,11 @@ def main(argv: list[str]) -> int:
         "participants": participant_records,
         "binding_owner": binding_owner or None,
         "binding_record": binding_record,
+        "protocol_nudge": {
+            "delivered_to": nudged,
+            "failures": nudge_failures,
+            "skipped": args.no_protocol_nudge,
+        },
     }, indent=2, default=str))
     return 0
 
