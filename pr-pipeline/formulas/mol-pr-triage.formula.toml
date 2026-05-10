@@ -81,13 +81,24 @@ gate: gh_not_authed"
 ```
 
 **3. Resolve vars and record initial state:**
+
+Triage report is written to a city-scope path (via `$GC_CITY_PATH`) so the
+caller (typically a PL) can read it after the polecat exits. The polecat's
+own worktree is transient and may be cleaned up; the city scope persists.
+Falls back to the polecat-local relative path if `$GC_CITY_PATH` isn't
+set (e.g. running outside a managed city).
+
 ```bash
 LIMIT="{{limit}}"
 [ -z "$LIMIT" ] && LIMIT=10
 CATEGORY="{{category}}"
 [ -z "$CATEGORY" ] && CATEGORY="all"
 TS=$(date +%Y%m%d-%H%M%S)
-TRIAGE_DIR=".gc/pr-pipeline/triage"
+if [ -n "${GC_CITY_PATH:-}" ]; then
+    TRIAGE_DIR="${GC_CITY_PATH}/.gc/pr-pipeline/triage"
+else
+    TRIAGE_DIR=".gc/pr-pipeline/triage"
+fi
 mkdir -p "$TRIAGE_DIR"
 TRIAGE_PATH="$TRIAGE_DIR/$TS.md"
 
