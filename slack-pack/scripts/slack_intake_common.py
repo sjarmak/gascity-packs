@@ -219,7 +219,14 @@ def publish_via_gc_outbound(
     reply_to_message_id: str = "",
     idempotency_key: str = "",
 ) -> dict[str, Any]:
-    """Publish through gc so peer fanout + transcript recording fire."""
+    """Publish through gc so peer fanout + transcript recording fire.
+
+    Returns the raw receipt JSON from the adapter. HTTP-200 with
+    `delivered: false` is a real failure (slack auth/channel/rate-limit
+    rejection); callers MUST pass the result through
+    :func:`interpret_publish_receipt` and fail loudly on non-delivery,
+    or stamp loop-close on a silently-lost post.
+    """
     body: dict[str, Any] = {
         "session_id": session_id,
         "conversation": {
@@ -250,7 +257,12 @@ def publish_via_adapter(
     reply_to_message_id: str = "",
     idempotency_key: str = "",
 ) -> dict[str, Any]:
-    """Publish directly to the local adapter (skips gc; peers won't see it)."""
+    """Publish directly to the local adapter (skips gc; peers won't see it).
+
+    Same delivered-field contract as :func:`publish_via_gc_outbound`:
+    callers MUST inspect the receipt via :func:`interpret_publish_receipt`.
+    HTTP-200 alone is insufficient evidence of slack delivery.
+    """
     body: dict[str, Any] = {
         "session_id": session_id,
         "conversation": {
@@ -635,6 +647,9 @@ def publish_to_channel_via_adapter(
     they have no binding for, after receiving a `Slack address-by-handle`
     system reminder. session_id flows through so the adapter applies the
     matching identity registry override.
+
+    Same delivered-field contract as :func:`publish_via_gc_outbound`:
+    callers MUST inspect the receipt via :func:`interpret_publish_receipt`.
     """
     publish_url = adapter_publish_url()
     body: dict[str, Any] = {
