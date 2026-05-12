@@ -1,43 +1,47 @@
 description = """
-Merge-only PR workflow — 3 steps: intake, rebase-check, finalize (Path A only).
+Merge-Only PR workflow — 3 steps from intake through merge.
 
-Sling a contributor PR to a polecat to rebase + merge WITHOUT running the
-multi-model review. Use when the maintainer has already eyeballed the PR
-and just wants the mechanical rebase/CI-wait/squash-merge cycle.
-
-This formula's step bodies are copy-with-prune from `mol-adopt-pr` (intake +
-rebase-check verbatim; finalize reduced to Path A). It is NOT a parameterized
-mol-adopt-pr — by design, narrow contracts beat skip flags.
+Sling a contributor PR to a polecat for rebase + squash merge, SKIPPING the
+review and human-gate steps. Use only when the maintainer has already
+eyeballed the PR and wants a fast merge path. Crash-safe: `bd mol current`
+resumes at the right step.
 
 The molecule root bead IS the control bead — all run state is stored in its
-notes via `bd update <root-id> --notes "key: value"`. Crash-safe: `bd mol
-current` resumes at the right step.
+notes via `bd update <root-id> --notes "key: value"`. No separate tracking
+bead needed.
 
 ## Contract
 
-1. Caller slings with `--var pr=<url-or-number>`
-2. Polecat parses + checks out, rebases if needed, waits for CI, squash-merges
-3. If maintainer commits exist on the branch, STOP — caller must use
-   `mol-adopt-pr` instead (Paths B/C/D are out of scope here)
+1. Caller slings with `--var pr=<url-or-number>` (and optionally `--var skip_gemini=true` for compat)
+2. Polecat reads steps, executes each in order
+3. After rebase-check, polecat proceeds directly to finalize (NO review, NO human-gate)
+4. Polecat finalizes via Path A: squash merge
 
 ## Variables
 
 | Variable | Source | Description |
 |----------|--------|-------------|
 | pr | caller | PR URL or bare integer (required) |
-| skip_gemini | caller | Accepted for caller-side compat with mol-adopt-pr. Has no effect here — no review is run. Default "false" |
+| skip_gemini | caller | Kept for compat with mol-adopt-pr callers; ignored here (no review step) |
 
 ## Failure Modes
 
 | Situation | Action |
 |-----------|--------|
 | gh command fails | Check `gh auth status`, report error, stop |
-| Scope mismatch (branch diverged from main) | Post comment, request changes, close root bead |
 | Rebase has complex conflicts | Abort rebase, post comment, close root bead, stop |
-| Maintainer commits found after rebase | STOP — call mol-adopt-pr instead. Do not push or merge |
 | Push fails | Report error, stop. User resolves manually |
 | CI fails | Report failure, stop, wait for nudge |
-| PR already merged | Close root bead, exit cleanly |"""
+
+## Difference from mol-adopt-pr
+
+mol-pr-merge-only omits the `review` and `human-gate` steps. Paths B/C/D
+from mol-adopt-pr.finalize are also omitted: with no review, there are no
+maintainer fixup commits, so MAINTAINER_COMMIT_COUNT is always 0 → Path A.
+
+Use mol-adopt-pr when you want the full review + human-gate flow.
+Use mol-pr-merge-only when the maintainer has already eyeballed the PR and
+wants a fast skip-review merge path."""
 formula = "mol-pr-merge-only"
 version = 1
 
@@ -47,7 +51,7 @@ description = "PR URL (https://github.com/org/repo/pull/N) or bare integer"
 required = true
 
 [vars.skip_gemini]
-description = "Accepted for caller compatibility with mol-adopt-pr; no effect — no review is run"
+description = "Kept for compatibility with mol-adopt-pr callers; has no effect (no review step)"
 default = "false"
 
 [[steps]]
@@ -88,8 +92,8 @@ the branch has diverged from main. **STOP immediately:**
 
 **5. Check maintainer edits:**
 Record in root bead notes: `maintainer_edits: true` or `maintainer_edits: false`.
-If false, warn but continue — finalize will STOP if any maintainer commits
-are detected, regardless of this flag.
+If false, warn but continue — finalize will still use Path A since no review
+was performed (no maintainer fixup commits are expected in this flow).
 
 **6. Checkout the PR branch:**
 ```bash
@@ -108,8 +112,7 @@ base_branch: <baseRefName>
 maintainer_edits: <true|false>
 original_head: pending
 rebase_status: pending
-merge_path: A_only
-skip_gemini: {{skip_gemini}}"
+merge_path: A"
 ```
 
 **8. Display summary:**
@@ -156,14 +159,14 @@ If `maintainer_edits` is false → **STOP**:
 **4. Fetch upstream base:**
 ```bash
 UPSTREAM_URL="https://github.com/<owner>/<repo>.git"
-git fetch "$UPSTREAM_URL" <baseRefName>:refs/merge-only/upstream-base
+git fetch "$UPSTREAM_URL" <baseRefName>:refs/adopt-pr/upstream-base
 PRE_REBASE_HEAD=$(git rev-parse HEAD)
-PR_FILES=$(git diff --name-only refs/merge-only/upstream-base...HEAD)
+PR_FILES=$(git diff --name-only refs/adopt-pr/upstream-base...HEAD)
 ```
 
 **5. Attempt rebase:**
 ```bash
-git rebase refs/merge-only/upstream-base
+git rebase refs/adopt-pr/upstream-base
 ```
 
 If clean → record state, proceed.
@@ -204,20 +207,18 @@ Update notes with:
 
 [[steps]]
 id = "finalize"
-title = "Wait for CI, push, squash-merge (Path A only)"
+title = "Push and squash-merge (skip-review)"
 needs = ["rebase-check"]
 description = """
-Path A only: no maintainer commits, no synthesis comment, no review trail.
-Wait for CI, push if rebased, squash-merge.
-
-If maintainer commits are detected on the branch, this formula STOPS — the
-caller must use `mol-adopt-pr` instead (which handles Paths B/C/D).
+Skip-review finalize: post a minimal merge-only ack, wait for CI, push if
+rebased, squash-merge. This is Path A from mol-adopt-pr.finalize with the
+synthesis-comment machinery pruned (no review_run_dir to read from).
 
 **1. Read root bead notes:**
 ```bash
 ROOT_ID=$(bd mol current --json | jq -r '.molecule_id')
 ```
-Extract all state: `pr_number`, `repo`, `base_branch`, `original_head`,
+Extract state: `pr_number`, `repo`, `base_branch`, `original_head`,
 `head_ref`, `rebase_status`, `pr_title`, `pr_author`.
 
 **2. Check if PR was already merged:**
@@ -225,38 +226,56 @@ Extract all state: `pr_number`, `repo`, `base_branch`, `original_head`,
 PR_STATE=$(gh pr view <number> --json state --jq '.state')
 ```
 
-If `MERGED`:
-- Close root bead with `bd update $ROOT_ID --notes "<notes with status: already_merged>"`
-  followed by `bd close $ROOT_ID --reason "PR already merged"`
-- Exit cleanly.
+If `MERGED` → done, close root bead with "PR already merged", exit.
 
-**3. Verify no maintainer commits (Path A guard):**
+**3. Determine merge path:**
+
+This formula always uses Path A. With no review step there are no
+maintainer fixup commits, so `MAINTAINER_COMMIT_COUNT` is expected to be 0.
+As a guard:
 ```bash
 MAINTAINER_COMMIT_COUNT=$(git rev-list --count $ORIGINAL_HEAD..HEAD)
 ```
-
-If `MAINTAINER_COMMIT_COUNT > 0` → **STOP**:
-- This formula handles Path A only.
-- Update notes: `status: aborted_maintainer_commits, maintainer_commit_count: $MAINTAINER_COMMIT_COUNT`
-- Print:
+- `MAINTAINER_COMMIT_COUNT == 0` → continue with Path A.
+- `MAINTAINER_COMMIT_COUNT > 0` → **STOP**. mol-pr-merge-only does not
+  handle maintainer fixup commits. Record the unexpected state and exit:
+  ```bash
+  bd update $ROOT_ID --notes "<existing notes>
+  unexpected_state: maintainer commits present in merge-only flow ($MAINTAINER_COMMIT_COUNT)"
+  bd close $ROOT_ID --reason "merge-only flow saw maintainer commits; re-sling under mol-adopt-pr"
   ```
-  [merge-only] STOP — found $MAINTAINER_COMMIT_COUNT maintainer commit(s) past $ORIGINAL_HEAD.
-  [merge-only]   mol-pr-merge-only handles Path A only.
-  [merge-only]   Re-sling this PR with mol-adopt-pr (handles Paths B/C/D).
-  ```
-- Do NOT close the root bead automatically — leave for human to decide.
-- Exit.
 
-Otherwise record `merge_path: A`.
+Update notes: `merge_path: A`.
 
-**4. Wait for CI.**
+---
+
+### Path A: Squash Merge (skip-review)
+
+**A.1: Post merge-only ack comment.**
+
+Build a minimal comment (no synthesis — review was skipped):
+
+```markdown
+## Adoption (skip-review merge)
+
+Thanks for the contribution, @<author>! Merging via the maintainer's
+fast-path workflow — the maintainer has reviewed the changes manually
+and elected to skip the automated multi-model review.
+
+---
+_Adopted via `mol-pr-merge-only` workflow. Contributor commits preserved._
+```
+
+Post: `gh pr comment <number> --body "<comment>"`
+
+**A.2: Wait for CI.**
 
 First verify CI checks exist:
 ```bash
 gh pr checks <number>
 ```
 If no checks reported → **STOP**, print message telling maintainer to approve
-the GitHub Actions workflow run. Wait for nudge.
+GitHub Actions workflow run. Wait for nudge.
 
 Once checks exist:
 ```bash
@@ -264,38 +283,28 @@ gh pr checks <number> --watch
 ```
 If CI fails → **STOP**, report failure, wait for nudge.
 
-**5. Push rebased branch (if applicable).**
+**A.3: Push rebased branch (if applicable).**
 If rebase was performed (`rebase_status` is not `not_needed`):
 ```bash
 git push --force-with-lease
 ```
 
-**6. Squash merge:**
+**A.4: Squash merge:**
 ```bash
 gh pr merge <number> --squash
 ```
 
-**7. Cleanup:**
+**A.5: Cleanup:**
 ```bash
-git update-ref -d refs/merge-only/upstream-base 2>/dev/null || true
-bd update $ROOT_ID --notes "<existing notes with these overrides>
-merge_path: A
-status: merged"
+git update-ref -d refs/adopt-pr/upstream-base 2>/dev/null || true
+bd update $ROOT_ID --notes "<notes with merge_path: A, status: merged>"
 ```
 
-**8. Report:**
-```
-[merge-only] Complete
-[merge-only]   PR #<number> squash-merged
-[merge-only]   Rebase: <rebase_status>
-[merge-only]   Refs cleaned up
-[merge-only]   Root bead updated
-```
+---
 
 **Critical rules:**
-- **No force-push** except after rebase (always `--force-with-lease`)
+- **No force-push** except after a rebase (always `--force-with-lease`)
+- **Contributor credit preserved** — squash commit keeps original author
 - **CI checks must exist** — never merge without CI. First-time forks need manual approval.
-- **No synthesis comment** — this formula leaves no review trail by design.
-- **Path A only** — if maintainer commits are present, escalate to mol-adopt-pr.
 
-**Exit criteria:** PR squash-merged, refs cleaned, root bead updated."""
+**Exit criteria:** PR squash-merged, root bead updated with `status: merged`."""
