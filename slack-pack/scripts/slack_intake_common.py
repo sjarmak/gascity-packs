@@ -272,6 +272,46 @@ def publish_via_adapter(
         raise AdapterError(str(exc)) from exc
 
 
+def interpret_publish_receipt(result: Any) -> tuple[bool, str]:
+    """Inspect a publish-receipt JSON and return (delivered, failure_kind).
+
+    The HTTP layer can succeed (200) while the receipt's `delivered`
+    field is false — slack rejected for auth, channel, rate-limit, etc.
+    Without this inspection, callers stamp loop_close_posted_at based on
+    a 200 alone and the post is silently lost.
+
+    Handles three shapes seen in the wild:
+      - Adapter-direct (lowercase keys, per adapter/main.go publishReceipt
+        JSON tags): {"delivered": bool, "failure_kind": "...", ...}
+      - gc-wrapped, capitalized (Go struct fields without json tags):
+        {"Receipt": {"Delivered": bool, "FailureKind": "...", ...}}
+      - gc-wrapped, lowercase: {"receipt": {"delivered": bool, ...}}
+
+    Fail-closed semantics: if no recognizable `delivered` key is found,
+    returns (False, "schema_mismatch") — better to noisily fail an
+    unknown response than silently mask one.
+    """
+    if not isinstance(result, dict):
+        return False, "non_dict_response"
+    if "delivered" in result:
+        delivered = bool(result.get("delivered"))
+        kind = str(result.get("failure_kind", "")) if not delivered else ""
+        return delivered, kind
+    receipt = result.get("Receipt") if isinstance(result.get("Receipt"), dict) else None
+    if receipt is None:
+        receipt = result.get("receipt") if isinstance(result.get("receipt"), dict) else None
+    if isinstance(receipt, dict):
+        if "Delivered" in receipt:
+            delivered = bool(receipt.get("Delivered"))
+            kind = str(receipt.get("FailureKind", "")) if not delivered else ""
+            return delivered, kind
+        if "delivered" in receipt:
+            delivered = bool(receipt.get("delivered"))
+            kind = str(receipt.get("failure_kind", "")) if not delivered else ""
+            return delivered, kind
+    return False, "schema_mismatch"
+
+
 # --- session resolution ---------------------------------------------------
 
 def current_session_id() -> str:
