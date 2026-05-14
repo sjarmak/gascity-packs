@@ -166,10 +166,11 @@ before reporting consensus. This is stronger than one-shot
 synthesis because reviewers can interrogate each other's
 blocker/major flags.
 
-Requires CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 in your env
-(configured at agent.toml level for the polecat pool). Verify
-before spawning the team:
+Resolve the root bead ID (used by the env-gate and the iteration
+notes below), then verify CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 in
+your env (configured at agent.toml level for the polecat pool):
 
+    ROOT_ID=$(bd mol current --json | jq -r '.molecule_id')
     [[ "$CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS" = "1" ]] || {
         bd update "$ROOT_ID" --notes "review_mode: blocked-env-missing"
         echo "review-iterate blocked: CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS not set in env"
@@ -178,9 +179,13 @@ before spawning the team:
 
 ## Iteration loop (cap at 3 iterations)
 
-1. Prepare the diff context:
+1. Prepare the diff context. `BRANCH` is sanitized for the temp-file
+   name so `/` characters in the branch name (e.g. `feat/foo`) don't
+   create unintended directory paths:
 
-       git diff origin/main..HEAD > /tmp/pr-ship-${BRANCH//\\//-}-iter${ITER_N}.patch
+       SAFE_BRANCH="${BRANCH//\\//-}"
+       PATCH_PATH=$(mktemp -t "pr-ship-${SAFE_BRANCH}-iter${ITER_N}.XXXXXX.patch")
+       git diff origin/main..HEAD > "$PATCH_PATH"
 
 2. Create the agent team with a natural-language spawn instruction.
    The "competing hypotheses" pattern from the Agent Teams docs:
@@ -222,12 +227,17 @@ before spawning the team:
    (`git commit -m "fix: ..."`), increment ITER_N, go to step 1.
    Cap at 3 iterations.
 
-6. Record per-iteration state:
+6. Record per-iteration state. Use a heredoc so the multi-line note
+   is robust against shell copy-paste (literal newlines inside a
+   double-quoted string can pick up unintended leading whitespace):
 
-       ROOT_ID=$(bd mol current --json | jq -r '.molecule_id')
-       bd update "$ROOT_ID" --notes "review_iter_$ITER_N: blockers=<n>, majors=<n>, minors=<n>
+       bd update "$ROOT_ID" --notes "$(cat <<EOF
+       review_iter_$ITER_N: blockers=<n>, majors=<n>, minors=<n>
        review_fix_commits_$ITER_N: <sha>,<sha>,...
-       review_team_synthesis_$ITER_N: <path to synthesis report>"
+       review_team_synthesis_$ITER_N: <path to synthesis report>
+       review_team_patch_$ITER_N: $PATCH_PATH
+       EOF
+       )"
 
 7. Clean up the team before exiting the step. Tell the lead to
    "Clean up the team" — always cleanup via the lead, never via a

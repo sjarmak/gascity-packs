@@ -209,9 +209,11 @@ consensus. This is the incoming-PR-side counterpart to mol-pr-ship's
 review-iterate stage — same Agent Teams mechanism, different scope
 (one-shot review producing a synthesis artifact for the human-gate step).
 
-Requires CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 in your env (configured
-at agent.toml level for the polecat pool). Verify before spawning:
+Resolve the root bead ID (used by the env-gate and the notes
+recorded below), then verify CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1
+in your env (configured at agent.toml level for the polecat pool):
 
+    ROOT_ID=$(bd mol current --json | jq -r '.molecule_id')
     [[ "$CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS" = "1" ]] || {
         bd update "$ROOT_ID" --notes "review_mode: blocked-env-missing"
         echo "review blocked: CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS not set in env"
@@ -220,18 +222,22 @@ at agent.toml level for the polecat pool). Verify before spawning:
 
 **1. Read root bead notes:**
 
-```bash
-ROOT_ID=$(bd mol current --json | jq -r '.molecule_id')
-```
-Extract `pr_number`, `repo`, `base_branch`, `skip_gemini` from notes.
+Extract `pr_number`, `repo`, `base_branch`, `skip_gemini` from the
+notes on `$ROOT_ID` (already resolved above).
 
 **2. Fetch canonical upstream base + prepare diff context:**
+
+Use `mktemp` so concurrent runs against the same PR number from
+different repos/users don't collide on `/tmp/adopt-pr-<N>.patch`.
+The path is recorded in the root bead notes so the synthesis step
+can find it:
 
 ```bash
 UPSTREAM_URL="https://github.com/<owner>/<repo>.git"
 git fetch "$UPSTREAM_URL" <base_branch>:refs/adopt-pr/upstream-base
-DIFF_PATH=/tmp/adopt-pr-${pr_number}.patch
+DIFF_PATH=$(mktemp -t "adopt-pr-${pr_number}-XXXXXX.patch")
 gh pr diff $pr_number --repo <owner>/<repo> > "$DIFF_PATH"
+bd update "$ROOT_ID" --notes "review_team_patch_path: $DIFF_PATH"
 ```
 
 **3. Create the agent team with a natural-language spawn instruction.**
@@ -247,8 +253,9 @@ Use the "competing hypotheses" pattern from the Agent Teams docs:
       - reviewer-code using code-reviewer agent type
       - reviewer-codex using codex:codex-rescue agent type
 
-    Each teammate reads /tmp/adopt-pr-<PR_NUMBER>.patch and reviews
-    against the 11-category rubric (Behavioral Correctness, Contract
+    Each teammate reads the patch at $DIFF_PATH (recorded on
+    `$ROOT_ID` as `review_team_patch_path`) and reviews against the
+    11-category rubric (Behavioral Correctness, Contract
     Fidelity, Change Impact / Blast Radius, Concurrency, Error Handling,
     Security, Resource Lifecycle, Release Safety, Test Evidence,
     Architectural Consistency, Debuggability) with severity
@@ -267,13 +274,17 @@ Use the "competing hypotheses" pattern from the Agent Teams docs:
     validations (if applicable), new findings with severity + source
     attribution + suggested fixes, and a category coverage summary.
 
-**4. Save artifact path on root bead:**
+**4. Save artifact path on root bead.** Use a heredoc so the
+multi-line note doesn't pick up unintended leading whitespace when
+copy-pasted:
 
 ```bash
 SYNTHESIS_PATH=".gc/adopt-pr/reviews/pr-${pr_number}.md"
-bd update $ROOT_ID --notes "<existing notes>
+bd update "$ROOT_ID" --notes "$(cat <<EOF
 review_synthesis_path: $SYNTHESIS_PATH
-review_team_completed_at: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+review_team_completed_at: $(date -u +%Y-%m-%dT%H:%M:%SZ)
+EOF
+)"
 ```
 
 **5. Present findings summary to orient the human reviewer:**
@@ -282,7 +293,7 @@ review_team_completed_at: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 [adopt-pr] Multi-agent review complete (Agent Teams)
 [adopt-pr]   Decision: <approve|request_changes|block>
 [adopt-pr]   Findings: <N> total (<blockers>, <majors>, <minors>)
-[adopt-pr]   Synthesis: .gc/adopt-pr/reviews/pr-<N>.md
+[adopt-pr]   Synthesis: .gc/adopt-pr/reviews/pr-<PR_NUMBER>.md
 [adopt-pr]   Reviewers: go-reviewer + security-reviewer + code-reviewer + codex:codex-rescue
 ```
 
