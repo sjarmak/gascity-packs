@@ -198,62 +198,112 @@ Update notes with:
 
 [[steps]]
 id = "review"
-title = "Run multi-model review"
+title = "Run multi-agent adversarial review via Agent Teams"
 needs = ["rebase-check"]
 description = """
-Fetch the canonical upstream base and invoke the multi-model review engine.
+Run multi-agent adversarial review via Claude Code Agent Teams. The
+polecat (you) is the team lead; you spawn 3-4 reviewer teammates
+referencing existing subagent definitions, then conduct a structured
+debate where teammates challenge each other's findings before reporting
+consensus. This is the incoming-PR-side counterpart to mol-pr-ship's
+review-iterate stage — same Agent Teams mechanism, different scope
+(one-shot review producing a synthesis artifact for the human-gate step).
+
+Requires CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 in your env (configured
+at agent.toml level for the polecat pool). Verify before spawning:
+
+    [[ "$CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS" = "1" ]] || {
+        bd update "$ROOT_ID" --notes "review_mode: blocked-env-missing"
+        echo "review blocked: CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS not set in env"
+        exit 2
+    }
 
 **1. Read root bead notes:**
+
 ```bash
 ROOT_ID=$(bd mol current --json | jq -r '.molecule_id')
 ```
 Extract `pr_number`, `repo`, `base_branch`, `skip_gemini` from notes.
 
-**2. Fetch canonical upstream base:**
+**2. Fetch canonical upstream base + prepare diff context:**
+
 ```bash
 UPSTREAM_URL="https://github.com/<owner>/<repo>.git"
 git fetch "$UPSTREAM_URL" <base_branch>:refs/adopt-pr/upstream-base
+DIFF_PATH=/tmp/adopt-pr-${pr_number}.patch
+gh pr diff $pr_number --repo <owner>/<repo> > "$DIFF_PATH"
 ```
 
-**3. Invoke /review-pr:**
-```
-/review-pr <pr_number>
-```
-If `skip_gemini` is "true", append `--skip-gemini`:
-```
-/review-pr <pr_number> --skip-gemini
-```
+**3. Create the agent team with a natural-language spawn instruction.**
 
-**CRITICAL:** When the review completes and asks whether to post the comment
-to GitHub, **DECLINE** (do not post). The finalize step posts its own
-synthesized comment.
+Use the "competing hypotheses" pattern from the Agent Teams docs:
 
-**4. Save the run_dir:**
+    Create an agent team to adversarially review incoming PR <PR_NUMBER>
+    for regression risk. Spawn 4 reviewer teammates by name, each
+    referencing an existing subagent definition:
 
-After the review completes, note the run_dir path from the output.
-Update root bead notes:
+      - reviewer-go using go-reviewer agent type
+      - reviewer-sec using security-reviewer agent type
+      - reviewer-code using code-reviewer agent type
+      - reviewer-codex using codex:codex-rescue agent type
+
+    Each teammate reads /tmp/adopt-pr-<PR_NUMBER>.patch and reviews
+    against the 11-category rubric (Behavioral Correctness, Contract
+    Fidelity, Change Impact / Blast Radius, Concurrency, Error Handling,
+    Security, Resource Lifecycle, Release Safety, Test Evidence,
+    Architectural Consistency, Debuggability) with severity
+    (blocker/major/minor/nit) + confidence (high/medium/low).
+
+    After each teammate produces an initial review, have them CHALLENGE
+    each other's blocker and major findings directly via teammate
+    messaging — like a scientific debate. Each teammate attempts to
+    disprove the others' high-severity flags. The review that survives
+    debate is the final report.
+
+    Lead (you, polecat) waits for all teammates to finish the debate
+    phase, synthesizes the post-debate consensus, and writes a single
+    decision artifact at .gc/adopt-pr/reviews/pr-<PR_NUMBER>.md
+    containing: decision (approve/request_changes/block), fix
+    validations (if applicable), new findings with severity + source
+    attribution + suggested fixes, and a category coverage summary.
+
+**4. Save artifact path on root bead:**
+
 ```bash
+SYNTHESIS_PATH=".gc/adopt-pr/reviews/pr-${pr_number}.md"
 bd update $ROOT_ID --notes "<existing notes>
-review_run_dir: <run_dir_path>"
+review_synthesis_path: $SYNTHESIS_PATH
+review_team_completed_at: $(date -u +%Y-%m-%dT%H:%M:%SZ)"
 ```
 
-The synthesis artifact is at `<run_dir>/outputs/synthesis.md`.
-
-**5. Present findings summary:**
-
-Read the synthesis and present a brief summary to orient the human reviewer:
-- Decision (approve/request_changes)
-- Top findings by severity
-- Key files affected
+**5. Present findings summary to orient the human reviewer:**
 
 ```
-[adopt-pr] Review complete
-[adopt-pr]   Decision: <approve|request_changes>
+[adopt-pr] Multi-agent review complete (Agent Teams)
+[adopt-pr]   Decision: <approve|request_changes|block>
 [adopt-pr]   Findings: <N> total (<blockers>, <majors>, <minors>)
-[adopt-pr]   Run dir: <path>
+[adopt-pr]   Synthesis: .gc/adopt-pr/reviews/pr-<N>.md
+[adopt-pr]   Reviewers: go-reviewer + security-reviewer + code-reviewer + codex:codex-rescue
 ```
 
-**Exit criteria:** Review complete, findings presented, run_dir saved in notes."""
+**6. Clean up the team before exiting the step.** Tell the lead to "Clean
+up the team" — always cleanup via the lead, never via a teammate (per
+Agent Teams docs warning).
+
+**CRITICAL:** Do NOT post the synthesis as a PR comment here. The finalize
+step posts its own synthesized comment after the human-gate closes.
+
+## Fallback
+
+If agent teams cannot be created in this session (env var unset, version
+mismatch, lead-already-managing-a-team), fall back to spawning the same
+4 reviewers as standalone parallel subagents (single Agent tool message
+with 4 calls), synthesize without the debate phase, and note
+`review_mode: subagent-fallback` on the bead. Subagent fallback is
+degraded but functional.
+
+**Exit criteria:** Review complete, synthesis written to
+`.gc/adopt-pr/reviews/pr-<N>.md`, root bead notes updated with the path."""
 
 [[steps]]
 id = "human-gate"

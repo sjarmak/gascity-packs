@@ -155,61 +155,104 @@ outcome recorded.
 
 [[steps]]
 id = "review-iterate"
-title = "Stage 2 — iterate self-review until no blockers/majors"
+title = "Stage 2 — multi-agent adversarial review via Agent Teams"
 needs = ["simplify"]
 description = """
-Iterate `mol-pr-review` (or equivalent self-review) until there are no
-blocker or major findings. This is the load-bearing stage.
+Stage 2 — multi-agent adversarial review via Claude Code Agent
+Teams. The polecat (you) is the team lead; you spawn 3-4 reviewer
+teammates referencing existing subagent definitions, then conduct
+a structured debate where teammates challenge each other's findings
+before reporting consensus. This is stronger than one-shot
+synthesis because reviewers can interrogate each other's
+blocker/major flags.
 
-The loop:
+Requires CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 in your env
+(configured at agent.toml level for the polecat pool). Verify
+before spawning the team:
 
-1. Run a self-review pass against the diff. If a real `mol-pr-review`
-   sub-formula or `gh pr` exists for this branch, use it. Otherwise,
-   walk the diff against the 11 scorecard categories inline:
-   - Cat 1 Behavioral Correctness, Cat 2 Contract Fidelity,
-     Cat 3 Blast Radius, Cat 4 Concurrency,
-     Cat 5 Error Handling, Cat 6 Security,
-     Cat 7 Resource Lifecycle, Cat 8 Release Safety,
-     Cat 9 Test Evidence, Cat 10 Architectural Consistency,
-     Cat 11 Debuggability.
+    [[ "$CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS" = "1" ]] || {
+        bd update "$ROOT_ID" --notes "review_mode: blocked-env-missing"
+        echo "review-iterate blocked: CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS not set in env"
+        exit 2
+    }
 
-2. Pre-flag the seven recurring themes (see `mol-pr-review` for the
-   full list — test isolation, test retry, stale-state guards,
-   fail-closed, bootstrap init, API contract, transient retry).
+## Iteration loop (cap at 3 iterations)
 
-3. Classify findings as **blocker**, **major**, or **minor**:
-   - blocker: correctness/safety defect that must be fixed before merge
-   - major:   design/precision defect a careful reviewer will flag
-   - minor:   style or nice-to-have
+1. Prepare the diff context:
 
-4. If any blocker or major remains:
-   - Fix in-place
-   - Commit (`git commit -m "fix: ..."`)
-   - Go to step 1 of the loop
+       git diff origin/main..HEAD > /tmp/pr-ship-${BRANCH//\\//-}-iter${ITER_N}.patch
 
-5. Exit the loop when no blockers/majors remain (minors OK to ship).
+2. Create the agent team with a natural-language spawn instruction.
+   The "competing hypotheses" pattern from the Agent Teams docs:
 
-**Cap at 3 iterations.** If iteration 3 still has blockers or majors,
-report as **blocked — review not converging** and stop the formula.
+       Create an agent team to adversarially review the staged branch
+       <BRANCH> for regression risk. Spawn 4 reviewer teammates by
+       name, each referencing an existing subagent definition:
 
-Record per-iteration state:
+         - reviewer-go using go-reviewer agent type
+         - reviewer-sec using security-reviewer agent type
+         - reviewer-code using code-reviewer agent type
+         - reviewer-codex using codex:codex-rescue agent type
 
-```bash
-ROOT_ID=$(bd mol current --json | jq -r '.molecule_id')
-ITER_N=<1|2|3>
-bd update "$ROOT_ID" --notes "review_iter_$ITER_N: blockers=<n>, majors=<n>, minors=<n>
-review_fix_commits_$ITER_N: <sha>,<sha>,..."
-```
+       Each teammate reads /tmp/pr-ship-<...>-iterN.patch and reviews
+       against the 11-category rubric (Behavioral Correctness,
+       Contract Fidelity, Change Impact / Blast Radius, Concurrency,
+       Error Handling, Security, Resource Lifecycle, Release Safety,
+       Test Evidence, Architectural Consistency, Debuggability) with
+       severity (blocker/major/minor/nit) + confidence (high/medium/low).
+
+       After each teammate produces an initial review, have them
+       CHALLENGE each other's blocker and major findings directly via
+       teammate messaging — like a scientific debate. Each teammate
+       attempts to disprove the others' high-severity flags. The
+       review that survives debate is the final report.
+
+       Lead (you, polecat) waits for all teammates to finish the
+       debate phase, synthesizes the post-debate consensus, and writes
+       the per-iteration scorecard.
+
+3. Wait for the team's debate to finish. The shared task list
+   coordinates progress. Use the `TeammateIdle` checkpoint when
+   available.
+
+4. Synthesize: read the consensus output and classify remaining
+   findings as blocker / major / minor.
+
+5. If any blocker or major remains → fix in-place, commit
+   (`git commit -m "fix: ..."`), increment ITER_N, go to step 1.
+   Cap at 3 iterations.
+
+6. Record per-iteration state:
+
+       ROOT_ID=$(bd mol current --json | jq -r '.molecule_id')
+       bd update "$ROOT_ID" --notes "review_iter_$ITER_N: blockers=<n>, majors=<n>, minors=<n>
+       review_fix_commits_$ITER_N: <sha>,<sha>,...
+       review_team_synthesis_$ITER_N: <path to synthesis report>"
+
+7. Clean up the team before exiting the step. Tell the lead to
+   "Clean up the team" — always cleanup via the lead, never via a
+   teammate (per Agent Teams docs warning).
+
+## Exit criteria
+
+Same as today's formula:
+  - Converged: no blockers, no majors remain. Minors OK to ship.
+  - Cap-hit: iteration 3 still has blockers/majors. Report blocked
+    at Stage 4 with `review_status: not_converged` on the root bead.
 
 After convergence (or 3-iter cap):
 
-```bash
-bd update "$ROOT_ID" --notes "review_status: <converged | not_converged>
-review_final: blockers=<n>, majors=<n>, minors=<n>"
-```
+    bd update "$ROOT_ID" --notes "review_status: <converged | not_converged>
+    review_final: blockers=<n>, majors=<n>, minors=<n>"
 
-**Exit criteria:** Either converged (no blockers/majors) or hit 3-iter
-cap (formula reports blocked and stops at Stage 4).
+## Fallback
+
+If agent teams cannot be created in this session (env var unset,
+version mismatch, lead-already-managing-a-team), fall back to
+spawning the same 4 reviewers as standalone parallel subagents
+(single Agent tool message with 4 calls), synthesize without the
+debate phase, and note `review_mode: subagent-fallback` on the
+bead. Subagent fallback is degraded but functional.
 """
 
 [[steps]]
