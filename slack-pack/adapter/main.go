@@ -1903,7 +1903,24 @@ func processSlackEvent(cfg config, aliasReg *handleAliasRegistry, threadReg *thr
 
 	text := msg.Text
 	target := ""
-	if cfg.handlePrefix != "" {
+	// Slack User Group autocomplete (bead gpk-2zi): when a human picks
+	// a workspace User Group from native @-autocomplete whose label
+	// matches a registered handle alias, treat the inbound exactly as
+	// if they had typed `@<handle>:`. The token shape Slack delivers
+	// is `<!subteam^TEAMID|@handle>`. We map by the `@handle` label
+	// only — the adapter does NOT learn TEAMIDs ahead of time. The
+	// aliasReg.Get gate is intentional: a workspace may have other
+	// User Groups whose labels do not correspond to gc handles, and
+	// those must NOT trigger address-by-handle dispatch.
+	if aliasReg != nil {
+		if h, rest, ok := parseSubteamMentionPrefix(msg.Text); ok {
+			if _, aliased := aliasReg.Get(h); aliased {
+				target = h
+				text = rest
+			}
+		}
+	}
+	if target == "" && cfg.handlePrefix != "" {
 		if h, rest := parseHandlePrefix(msg.Text, cfg.handlePrefix); h != "" {
 			target = h
 			text = rest
