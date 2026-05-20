@@ -5,6 +5,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -101,7 +103,7 @@ func TestProcessSlackEventSubteamMentionRoutedAsAddressByHandle(t *testing.T) {
 	env := slackEventEnvelope{Type: "event_callback", Event: rawMsg}
 
 	var releases int32
-	processSlackEvent(cfg, aliasReg, nil, nil, env, func() { atomic.AddInt32(&releases, 1) })
+	processSlackEvent(cfg, aliasReg, nil, nil, nil, env, func() { atomic.AddInt32(&releases, 1) })
 
 	// The inbound POST must carry the parsed target + remainder.
 	inbounds := capture.snapshotInbounds()
@@ -173,7 +175,7 @@ func TestProcessSlackEventSubteamMentionUnregisteredHandleFallsThrough(t *testin
 	})
 	env := slackEventEnvelope{Type: "event_callback", Event: rawMsg}
 
-	processSlackEvent(cfg, aliasReg, nil, nil, env, func() {})
+	processSlackEvent(cfg, aliasReg, nil, nil, nil, env, func() {})
 
 	inbounds := capture.snapshotInbounds()
 	if len(inbounds) != 1 {
@@ -231,7 +233,7 @@ func TestProcessSlackEventSubteamMentionTakesPrecedenceOverSingleAtPrefix(t *tes
 	})
 	env := slackEventEnvelope{Type: "event_callback", Event: rawMsg}
 
-	processSlackEvent(cfg, aliasReg, nil, nil, env, func() {})
+	processSlackEvent(cfg, aliasReg, nil, nil, nil, env, func() {})
 
 	inbounds := capture.snapshotInbounds()
 	if len(inbounds) != 1 {
@@ -282,7 +284,7 @@ func TestProcessSlackEventSingleAtHandleStillDispatches(t *testing.T) {
 	})
 	env := slackEventEnvelope{Type: "event_callback", Event: rawMsg}
 
-	processSlackEvent(cfg, aliasReg, nil, nil, env, func() {})
+	processSlackEvent(cfg, aliasReg, nil, nil, nil, env, func() {})
 
 	inbounds := capture.snapshotInbounds()
 	if len(inbounds) != 1 {
@@ -304,5 +306,267 @@ func TestProcessSlackEventSingleAtHandleStillDispatches(t *testing.T) {
 	}
 	if got := atomic.LoadInt32(&capture.sessionHits); got != 1 {
 		t.Errorf("session-message hits = %d, want 1 (single-@ alias dispatch must still fire)", got)
+	}
+}
+
+// newTestSubteamAliasMap builds a subteamAliasMap from an in-memory
+// {subteam_id: handle} map by staging it through a tmpfile. Tests that
+// need a populated map use this rather than touching production
+// defaults, so each test owns an isolated state.
+func newTestSubteamAliasMap(t *testing.T, entries map[string]string) *subteamAliasMap {
+	t.Helper()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "subteam-aliases.json")
+	data, err := json.Marshal(entries)
+	if err != nil {
+		t.Fatalf("marshal subteam map: %v", err)
+	}
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("write subteam map: %v", err)
+	}
+	m, err := newSubteamAliasMap(path)
+	if err != nil {
+		t.Fatalf("newSubteamAliasMap: %v", err)
+	}
+	return m
+}
+
+// TestProcessSlackEventUnlabeledSubteamMappedRoutesAsAddressByHandle is
+// the gpk-hmr.2 happy path: an UNLABELED subteam token
+// `<!subteam^Sxxx>` whose ID resolves through subteamAliasMap to a gc
+// handle must route through the same address-by-handle dispatch path
+// the labeled form uses. The "addressed you" system-reminder is what
+// the receiving session expects — anything else (generic channel
+// fanout, or just an ExplicitTarget with no alias dispatch) silently
+// breaks the gpk-hmr observed-gap fix.
+func TestProcessSlackEventUnlabeledSubteamMappedRoutesAsAddressByHandle(t *testing.T) {
+	capture := &subteamCapture{}
+	gcStub := httptest.NewServer(capture.handler())
+	t.Cleanup(gcStub.Close)
+
+	cfg := config{
+		gcAPIBase:     gcStub.URL,
+		cityName:      "test-city",
+		provider:      "slack",
+		accountID:     "T1",
+		handlePrefix:  "@",
+		slackBotToken: "xoxb-test",
+		dispatchSem:   defaultTestDispatchSem,
+	}
+	aliasReg := newTestHandleAliasRegistry(t)
+	if err := aliasReg.Set("mayor", "gc-2568"); err != nil {
+		t.Fatalf("aliasReg.Set: %v", err)
+	}
+	subteamMap := newTestSubteamAliasMap(t, map[string]string{
+		"S0B4MUNDZCH": "mayor",
+	})
+
+	rawMsg, _ := json.Marshal(slackMessageEvent{
+		Type:    "message",
+		Channel: "C1",
+		User:    "U1",
+		TS:      "1700000000.000500",
+		Text:    "<!subteam^S0B4MUNDZCH> please check the queue",
+	})
+	env := slackEventEnvelope{Type: "event_callback", Event: rawMsg}
+
+	processSlackEvent(cfg, aliasReg, nil, nil, subteamMap, env, func() {})
+
+	inbounds := capture.snapshotInbounds()
+	if len(inbounds) != 1 {
+		t.Fatalf("got %d inbound POSTs, want 1", len(inbounds))
+	}
+	if inbounds[0].ExplicitTarget != "mayor" {
+		t.Errorf("ExplicitTarget = %q, want %q (subteam map should resolve S0B4MUNDZCH→mayor)",
+			inbounds[0].ExplicitTarget, "mayor")
+	}
+	if inbounds[0].Text != "please check the queue" {
+		t.Errorf("Text = %q, want %q (subteam token must be stripped)",
+			inbounds[0].Text, "please check the queue")
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if atomic.LoadInt32(&capture.sessionHits) > 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := atomic.LoadInt32(&capture.sessionHits); got != 1 {
+		t.Fatalf("session-message hits = %d, want 1 (alias dispatch should have fired)", got)
+	}
+
+	// The dispatched body must carry the "Slack address-by-handle"
+	// system-reminder form — that's the gpk-hmr acceptance check. A
+	// "New message in shared conversation" generic-fanout body here
+	// would indicate the inbound went through the channel-fanout path
+	// instead and the bead's observed gap is NOT fixed.
+	capture.mu.Lock()
+	gotPath := capture.sessionPath
+	gotBody := append([]byte(nil), capture.sessionPayload...)
+	capture.mu.Unlock()
+	if !strings.Contains(gotPath, "/session/gc-2568/messages") {
+		t.Errorf("session path = %q, want to contain %q", gotPath, "/session/gc-2568/messages")
+	}
+	bodyStr := string(gotBody)
+	if !strings.Contains(bodyStr, "Slack address-by-handle: @mayor addressed you") {
+		t.Errorf("dispatched body missing address-by-handle reminder:\n%s", bodyStr)
+	}
+	if strings.Contains(bodyStr, "New message in shared conversation") {
+		t.Errorf("dispatched body looks like channel-fanout (generic reminder), not address-by-handle:\n%s", bodyStr)
+	}
+}
+
+// TestProcessSlackEventUnlabeledSubteamUnmappedFallsThroughToChannelFanout
+// asserts the gpk-hmr.2 negative case: an unlabeled `<!subteam^Sxxx>`
+// whose ID has NO entry in subteamAliasMap must NOT trigger
+// address-by-handle dispatch. The inbound still posts (so the
+// channel-bound session sees it as a regular shared-conversation
+// message), with the full original text preserved and an empty
+// ExplicitTarget. No alias session-message POST fires.
+func TestProcessSlackEventUnlabeledSubteamUnmappedFallsThroughToChannelFanout(t *testing.T) {
+	capture := &subteamCapture{}
+	gcStub := httptest.NewServer(capture.handler())
+	t.Cleanup(gcStub.Close)
+
+	cfg := config{
+		gcAPIBase:     gcStub.URL,
+		cityName:      "test-city",
+		provider:      "slack",
+		accountID:     "T1",
+		handlePrefix:  "@",
+		slackBotToken: "xoxb-test",
+		dispatchSem:   defaultTestDispatchSem,
+	}
+	aliasReg := newTestHandleAliasRegistry(t)
+	// Empty map — no subteam ID is mapped.
+	subteamMap := newTestSubteamAliasMap(t, map[string]string{})
+
+	rawMsg, _ := json.Marshal(slackMessageEvent{
+		Type:    "message",
+		Channel: "C1",
+		User:    "U1",
+		TS:      "1700000000.000600",
+		Text:    "<!subteam^S_UNKNOWN> hello team",
+	})
+	env := slackEventEnvelope{Type: "event_callback", Event: rawMsg}
+
+	processSlackEvent(cfg, aliasReg, nil, nil, subteamMap, env, func() {})
+
+	inbounds := capture.snapshotInbounds()
+	if len(inbounds) != 1 {
+		t.Fatalf("got %d inbound POSTs, want 1", len(inbounds))
+	}
+	if inbounds[0].ExplicitTarget != "" {
+		t.Errorf("ExplicitTarget = %q, want empty (subteam ID was not in map)", inbounds[0].ExplicitTarget)
+	}
+	if inbounds[0].Text != "<!subteam^S_UNKNOWN> hello team" {
+		t.Errorf("Text = %q, want full original token preserved (fall-through case)", inbounds[0].Text)
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	if got := atomic.LoadInt32(&capture.sessionHits); got != 0 {
+		t.Errorf("session-message hits = %d, want 0 (no map entry, no dispatch)", got)
+	}
+}
+
+// TestProcessSlackEventUnlabeledSubteamWithNilMapFallsThrough is a
+// safety net: even if subteamAliasMap is nil (operator never
+// populated it; pre-gpk-hmr.2 callers), an unlabeled subteam token
+// must still post the inbound and NOT crash. Nil-safe Get on
+// subteamAliasMap is what makes this work; the test pins the
+// guarantee.
+func TestProcessSlackEventUnlabeledSubteamWithNilMapFallsThrough(t *testing.T) {
+	capture := &subteamCapture{}
+	gcStub := httptest.NewServer(capture.handler())
+	t.Cleanup(gcStub.Close)
+
+	cfg := config{
+		gcAPIBase:     gcStub.URL,
+		cityName:      "test-city",
+		provider:      "slack",
+		accountID:     "T1",
+		handlePrefix:  "@",
+		slackBotToken: "xoxb-test",
+		dispatchSem:   defaultTestDispatchSem,
+	}
+	aliasReg := newTestHandleAliasRegistry(t)
+
+	rawMsg, _ := json.Marshal(slackMessageEvent{
+		Type:    "message",
+		Channel: "C1",
+		User:    "U1",
+		TS:      "1700000000.000700",
+		Text:    "<!subteam^S0B4MUNDZCH> hi",
+	})
+	env := slackEventEnvelope{Type: "event_callback", Event: rawMsg}
+
+	processSlackEvent(cfg, aliasReg, nil, nil, nil, env, func() {})
+
+	inbounds := capture.snapshotInbounds()
+	if len(inbounds) != 1 {
+		t.Fatalf("got %d inbound POSTs, want 1", len(inbounds))
+	}
+	if inbounds[0].ExplicitTarget != "" {
+		t.Errorf("ExplicitTarget = %q, want empty (nil subteamMap should fall through)", inbounds[0].ExplicitTarget)
+	}
+	if inbounds[0].Text != "<!subteam^S0B4MUNDZCH> hi" {
+		t.Errorf("Text = %q, want full original (nil map = no rewrite)", inbounds[0].Text)
+	}
+}
+
+// TestProcessSlackEventLabeledSubteamCarriesAddressByHandleReminder
+// upgrades the gpk-2zi happy-path assertion: not only must the
+// session-message POST fire, the body must contain the
+// "Slack address-by-handle: @<handle> addressed you" reminder. This is
+// the strong-form check the gpk-hmr parent acceptance criterion calls
+// out for BOTH shapes, and a regression here would silently swap the
+// reminder for the generic "New message" form even with the right
+// path and target.
+func TestProcessSlackEventLabeledSubteamCarriesAddressByHandleReminder(t *testing.T) {
+	capture := &subteamCapture{}
+	gcStub := httptest.NewServer(capture.handler())
+	t.Cleanup(gcStub.Close)
+
+	cfg := config{
+		gcAPIBase:     gcStub.URL,
+		cityName:      "test-city",
+		provider:      "slack",
+		accountID:     "T1",
+		handlePrefix:  "@",
+		slackBotToken: "xoxb-test",
+		dispatchSem:   defaultTestDispatchSem,
+	}
+	aliasReg := newTestHandleAliasRegistry(t)
+	if err := aliasReg.Set("mayor", "gc-2568"); err != nil {
+		t.Fatalf("aliasReg.Set: %v", err)
+	}
+
+	rawMsg, _ := json.Marshal(slackMessageEvent{
+		Type:    "message",
+		Channel: "C1",
+		User:    "U1",
+		TS:      "1700000000.000800",
+		Text:    "<!subteam^S0B4MUNDZCH|@mayor> labeled shape",
+	})
+	env := slackEventEnvelope{Type: "event_callback", Event: rawMsg}
+
+	processSlackEvent(cfg, aliasReg, nil, nil, nil, env, func() {})
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if atomic.LoadInt32(&capture.sessionHits) > 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := atomic.LoadInt32(&capture.sessionHits); got != 1 {
+		t.Fatalf("session-message hits = %d, want 1 (labeled form alias dispatch must fire)", got)
+	}
+	capture.mu.Lock()
+	bodyStr := string(capture.sessionPayload)
+	capture.mu.Unlock()
+	if !strings.Contains(bodyStr, "Slack address-by-handle: @mayor addressed you") {
+		t.Errorf("labeled-form dispatched body missing address-by-handle reminder:\n%s", bodyStr)
 	}
 }
