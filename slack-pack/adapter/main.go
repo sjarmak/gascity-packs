@@ -936,6 +936,9 @@ func main() {
 	}
 	log.Printf("thread session registry: store=%s", cfg.threadSessionsStorePath)
 
+	threadHandleSticky := newThreadHandleStickiness()
+	log.Printf("thread handle stickiness: in-memory only (no persistence in v1)")
+
 	roomLaunchReg, err := newRoomLaunchMappingRegistry(cfg.roomLaunchPath)
 	if err != nil {
 		log.Fatalf("room launch mapping registry: %v", err)
@@ -986,7 +989,7 @@ func main() {
 	// (HMAC-verified) and /healthz. Bound to 0.0.0.0 by default so
 	// Tailscale Funnel can reach it.
 	publicMux := http.NewServeMux()
-	publicMux.HandleFunc("/slack/events", handleSlackEvents(cfg, aliasReg, threadReg, roomLaunchReg, subteamAliases))
+	publicMux.HandleFunc("/slack/events", handleSlackEvents(cfg, aliasReg, threadReg, roomLaunchReg, subteamAliases, threadHandleSticky))
 	publicMux.HandleFunc("/slack/interactions", handleSlackInteractions(cfg, channelMapReg, rigMapReg))
 	registerOAuthHandlers(publicMux, cfg, appsReg)
 	publicMux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
@@ -1716,7 +1719,7 @@ func postToSlack(token string, req slackPostMessageReq) (*slackPostMessageResp, 
 	return &sr, nil
 }
 
-func handleSlackEvents(cfg config, aliasReg *handleAliasRegistry, threadReg *threadSessionRegistry, roomLaunchReg *roomLaunchMappingRegistry, subteamMap *subteamAliasMap) http.HandlerFunc {
+func handleSlackEvents(cfg config, aliasReg *handleAliasRegistry, threadReg *threadSessionRegistry, roomLaunchReg *roomLaunchMappingRegistry, subteamMap *subteamAliasMap, threadHandleSticky *threadHandleStickiness) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -1771,7 +1774,7 @@ func handleSlackEvents(cfg config, aliasReg *handleAliasRegistry, threadReg *thr
 		// cfg.dispatchSem when an inbound triggers an alias dispatch (which
 		// would otherwise hold two slots concurrently — see gc-cby.26
 		// Phase 4 review fix).
-		go processSlackEvent(cfg, aliasReg, threadReg, roomLaunchReg, subteamMap, env, release)
+		go processSlackEvent(cfg, aliasReg, threadReg, roomLaunchReg, subteamMap, threadHandleSticky, env, release)
 	}
 }
 
@@ -1885,7 +1888,7 @@ func slackKindFromChannelType(channelType, channelID string) string {
 // in tests or in deployments that disable launcher mode entirely; the
 // `@@<handle>` branch falls through to the regular `@<handle>` path
 // when nil.
-func processSlackEvent(cfg config, aliasReg *handleAliasRegistry, threadReg *threadSessionRegistry, roomLaunchReg *roomLaunchMappingRegistry, subteamMap *subteamAliasMap, env slackEventEnvelope, release func()) {
+func processSlackEvent(cfg config, aliasReg *handleAliasRegistry, threadReg *threadSessionRegistry, roomLaunchReg *roomLaunchMappingRegistry, subteamMap *subteamAliasMap, threadHandleSticky *threadHandleStickiness, env slackEventEnvelope, release func()) {
 	released := false
 	defer func() {
 		if !released {
@@ -1977,6 +1980,22 @@ func processSlackEvent(cfg config, aliasReg *handleAliasRegistry, threadReg *thr
 		if h, rest := parseHandlePrefix(msg.Text, cfg.handlePrefix); h != "" {
 			target = h
 			text = rest
+		}
+	}
+
+	// Thread-stickiness: if no explicit target was parsed AND this is a
+	// thread reply (msg.ThreadTS is set and points at an earlier message,
+	// not at the current message itself), inherit the target from the
+	// thread root if a prior alias-dispatch registered one. Lets a human
+	// say `@mayor: hi` once at the top of a thread and then keep replying
+	// in the thread without re-tagging. An explicit re-tag in the thread
+	// reply still wins because this lookup runs only on parser miss.
+	if target == "" && threadHandleSticky != nil && msg.ThreadTS != "" && msg.ThreadTS != msg.TS {
+		if stickyHandle, ok := threadHandleSticky.Lookup(msg.Channel, msg.ThreadTS); ok {
+			target = stickyHandle
+			// text is unchanged: the human didn't write a prefix, so we
+			// route the full message body — same shape as if they had
+			// typed `@<handle>: <body>` from the start.
 		}
 	}
 
@@ -2072,6 +2091,16 @@ func processSlackEvent(cfg config, aliasReg *handleAliasRegistry, threadReg *thr
 	// because target != its handle.
 	if target != "" && aliasReg != nil {
 		if aliasedSessionID, ok := aliasReg.Get(target); ok {
+			// Thread-stickiness bind: record (channel, msg.TS) -> target
+			// so subsequent thread replies (whose msg.ThreadTS will
+			// equal this msg.TS) inherit the same handle without the
+			// human re-tagging. Only binds when the dispatch actually
+			// fires — a target with no alias entry shouldn't poison the
+			// sticky map. Subsequent thread replies look this up before
+			// the parsers run.
+			if threadHandleSticky != nil {
+				threadHandleSticky.Bind(msg.Channel, msg.TS, target)
+			}
 			// Transfer the slot we already hold to the alias goroutine.
 			// No new acquireDispatchSlot — that would double-count
 			// against dispatchSem (gc-cby.26 Phase 4 review fix).

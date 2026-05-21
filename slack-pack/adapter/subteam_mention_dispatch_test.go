@@ -103,7 +103,7 @@ func TestProcessSlackEventSubteamMentionRoutedAsAddressByHandle(t *testing.T) {
 	env := slackEventEnvelope{Type: "event_callback", Event: rawMsg}
 
 	var releases int32
-	processSlackEvent(cfg, aliasReg, nil, nil, nil, env, func() { atomic.AddInt32(&releases, 1) })
+	processSlackEvent(cfg, aliasReg, nil, nil, nil, nil, env, func() { atomic.AddInt32(&releases, 1) })
 
 	// The inbound POST must carry the parsed target + remainder.
 	inbounds := capture.snapshotInbounds()
@@ -175,7 +175,7 @@ func TestProcessSlackEventSubteamMentionUnregisteredHandleFallsThrough(t *testin
 	})
 	env := slackEventEnvelope{Type: "event_callback", Event: rawMsg}
 
-	processSlackEvent(cfg, aliasReg, nil, nil, nil, env, func() {})
+	processSlackEvent(cfg, aliasReg, nil, nil, nil, nil, env, func() {})
 
 	inbounds := capture.snapshotInbounds()
 	if len(inbounds) != 1 {
@@ -233,7 +233,7 @@ func TestProcessSlackEventSubteamMentionTakesPrecedenceOverSingleAtPrefix(t *tes
 	})
 	env := slackEventEnvelope{Type: "event_callback", Event: rawMsg}
 
-	processSlackEvent(cfg, aliasReg, nil, nil, nil, env, func() {})
+	processSlackEvent(cfg, aliasReg, nil, nil, nil, nil, env, func() {})
 
 	inbounds := capture.snapshotInbounds()
 	if len(inbounds) != 1 {
@@ -284,7 +284,7 @@ func TestProcessSlackEventSingleAtHandleStillDispatches(t *testing.T) {
 	})
 	env := slackEventEnvelope{Type: "event_callback", Event: rawMsg}
 
-	processSlackEvent(cfg, aliasReg, nil, nil, nil, env, func() {})
+	processSlackEvent(cfg, aliasReg, nil, nil, nil, nil, env, func() {})
 
 	inbounds := capture.snapshotInbounds()
 	if len(inbounds) != 1 {
@@ -370,7 +370,7 @@ func TestProcessSlackEventUnlabeledSubteamMappedRoutesAsAddressByHandle(t *testi
 	})
 	env := slackEventEnvelope{Type: "event_callback", Event: rawMsg}
 
-	processSlackEvent(cfg, aliasReg, nil, nil, subteamMap, env, func() {})
+	processSlackEvent(cfg, aliasReg, nil, nil, subteamMap, nil, env, func() {})
 
 	inbounds := capture.snapshotInbounds()
 	if len(inbounds) != 1 {
@@ -451,7 +451,7 @@ func TestProcessSlackEventUnlabeledSubteamUnmappedFallsThroughToChannelFanout(t 
 	})
 	env := slackEventEnvelope{Type: "event_callback", Event: rawMsg}
 
-	processSlackEvent(cfg, aliasReg, nil, nil, subteamMap, env, func() {})
+	processSlackEvent(cfg, aliasReg, nil, nil, subteamMap, nil, env, func() {})
 
 	inbounds := capture.snapshotInbounds()
 	if len(inbounds) != 1 {
@@ -501,7 +501,7 @@ func TestProcessSlackEventUnlabeledSubteamWithNilMapFallsThrough(t *testing.T) {
 	})
 	env := slackEventEnvelope{Type: "event_callback", Event: rawMsg}
 
-	processSlackEvent(cfg, aliasReg, nil, nil, nil, env, func() {})
+	processSlackEvent(cfg, aliasReg, nil, nil, nil, nil, env, func() {})
 
 	inbounds := capture.snapshotInbounds()
 	if len(inbounds) != 1 {
@@ -551,7 +551,7 @@ func TestProcessSlackEventLabeledSubteamCarriesAddressByHandleReminder(t *testin
 	})
 	env := slackEventEnvelope{Type: "event_callback", Event: rawMsg}
 
-	processSlackEvent(cfg, aliasReg, nil, nil, nil, env, func() {})
+	processSlackEvent(cfg, aliasReg, nil, nil, nil, nil, env, func() {})
 
 	deadline := time.Now().Add(2 * time.Second)
 	for time.Now().Before(deadline) {
