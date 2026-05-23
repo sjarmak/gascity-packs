@@ -10,16 +10,18 @@ notes via `bd update <root-id> --notes "key: value"`. No separate tracking
 bead needed.
 
 **Polecat publish authority (hard rule):** The polecat NEVER runs `gh pr merge`,
-`git push`, or `gh pr create` on paths B/C/D. The `finalize` step resolves the
-merge path, prepares all local artifacts (squash, rebase, branch, cherry-pick,
-synthesis body), then for paths B/C/D records a *branch-ready handoff bundle*
-(`status: ready-for-publish` plus the resolved publish commands) in the root
-bead, mails mayor, and continues to the `complete` step. Mayor performs publish
-(push + optionally `gh pr create`), waits for CI, and merges asynchronously per
-the per-action approval rule, independent of the polecat's lifecycle. Path A is
-the contributor's own PR branch round-trip — the polecat still pushes the
-rebased contributor commits there (no new artifact under maintainer identity)
-and still hands off `gh pr merge` to mayor.
+`git push`, `gh pr create`, or `gh pr comment` on paths B/C/D. The `finalize`
+step resolves the merge path, prepares all local artifacts (squash, rebase,
+branch, cherry-pick, synthesis body), then for paths B/C/D records a
+*branch-ready handoff bundle* (`status: ready-for-publish` plus the resolved
+publish + comment + merge commands) in the root bead, mails mayor, and continues
+to the `complete` step. Mayor performs publish (push + optionally
+`gh pr create`), posts the synthesis comment (`gh pr comment`), waits for CI,
+and merges asynchronously per the per-action approval rule, independent of the
+polecat's lifecycle. Path A is the contributor's own PR branch round-trip — the
+polecat still pushes the rebased contributor commits there (no new artifact
+under maintainer identity), posts the synthesis comment on the contributor's
+existing PR itself, and only hands off `gh pr merge` to mayor.
 
 ## Contract
 
@@ -34,7 +36,7 @@ and still hands off `gh pr merge` to mayor.
    mails mayor → `complete`. Polecat does NOT push, create, comment, wait CI,
    or merge on B/C/D.
 7. Mayor reads the root bead and performs publish + downstream actions
-   out-of-band, per per-action approval
+   out-of-band, per the per-action approval rule
 
 ## Variables
 
@@ -326,8 +328,9 @@ Determine the merge path, then:
   asynchronously.
 
 **Polecats NEVER run `gh pr merge`** on any path.
-**Polecats NEVER run `git push` or `gh pr create` on paths B/C/D** — those
-publish maintainer-authored content under maintainer identity and require
+**Polecats NEVER run `git push`, `gh pr create`, or `gh pr comment` on paths
+B/C/D** — those publish maintainer-authored content (push of new history,
+new PRs, or synthesis comments under maintainer identity) and require
 per-action mayor approval.
 
 **1. Read root bead notes:**
@@ -480,9 +483,12 @@ rewrote the contributor branch locally with maintainer changes squashed in;
 publishing that rewrite under maintainer identity is mayor's per-action
 publish step.
 
-Resolve the push command:
+Resolve the push command. `REBASE_STATUS` is the shell variable carrying the
+`rebase_status` field extracted from root bead notes in step 1 (see also
+A.3, which reads the same field):
 ```bash
-if [ $CONTRIBUTOR_COUNT -gt 1 ] || [ "$REBASE_STATUS" != "not_needed" ]; then
+REBASE_STATUS=$(bd_notes_get "$ROOT_ID" rebase_status)   # extracted in step 1
+if [ "$CONTRIBUTOR_COUNT" -gt 1 ] || [ "$REBASE_STATUS" != "not_needed" ]; then
     PUSH_CMD="git push --force-with-lease"
 else
     PUSH_CMD="git push"
@@ -496,29 +502,38 @@ SYNTH_PATH="<review_run_dir>/outputs/comment-path-b.md"
 # write the rendered comment body to $SYNTH_PATH
 ```
 
-Record the full branch-ready handoff bundle on the root bead:
+Resolve concrete handoff values and record the full branch-ready handoff
+bundle on the root bead. Use double-quoted command strings so `$SYNTH_PATH`
+and other shell variables expand at write time — the notes must contain
+fully resolved, copy-pasteable commands for mayor:
 ```bash
-bd update $ROOT_ID --notes "<notes with
+HEAD_SHA=$(git rev-parse HEAD)
+POST_SYNTH_CMD="gh pr comment <number> --body-file $SYNTH_PATH"
+CI_WAIT_CMD="gh pr checks <number> --watch"
+MERGE_CMD="gh pr merge <number> --merge"
+
+bd update "$ROOT_ID" --notes "<notes with
   merge_path: B,
   status: ready-for-publish,
   branch: <head_ref>,
-  head_sha: $(git rev-parse HEAD),
+  head_sha: $HEAD_SHA,
   push_command: $PUSH_CMD,
-  post_synthesis_command: 'gh pr comment <number> --body-file <synth_path>',
   synthesis_path: $SYNTH_PATH,
-  ci_check_command: 'gh pr checks <number> --watch',
-  merge_command: 'gh pr merge <number> --merge'>"
+  post_synthesis_command: $POST_SYNTH_CMD,
+  ci_check_command: $CI_WAIT_CMD,
+  merge_command: $MERGE_CMD>"
 ```
 
-Then mail mayor:
+Then mail mayor (variable values shown for the example; substitute actual
+resolved values in the body):
 ```
 [adopt-pr] Path B branch-ready — squash + maintainer-rebase done locally; ready for publish.
 [adopt-pr]   PR:                   <number>
-[adopt-pr]   Branch / SHA:         <head_ref> @ <head_sha>
+[adopt-pr]   Branch / SHA:         <head_ref> @ $HEAD_SHA
 [adopt-pr]   Push command:         $PUSH_CMD
-[adopt-pr]   Post-synthesis cmd:   gh pr comment <number> --body-file <synth_path>
-[adopt-pr]   CI wait cmd:          gh pr checks <number> --watch
-[adopt-pr]   Merge command:        gh pr merge <number> --merge
+[adopt-pr]   Post-synthesis cmd:   $POST_SYNTH_CMD
+[adopt-pr]   CI wait cmd:          $CI_WAIT_CMD
+[adopt-pr]   Merge command:        $MERGE_CMD
 [adopt-pr]   Root bead:            $ROOT_ID
 ```
 
@@ -553,33 +568,51 @@ CLOSE_PATH="<review_run_dir>/outputs/comment-path-c-original-close.md"
 # write the rendered bodies
 ```
 
-Record the full branch-ready handoff bundle on the root bead:
+Resolve concrete handoff values and record the full branch-ready handoff
+bundle on the root bead. Build each command in a shell variable first so the
+recorded notes contain fully resolved, copy-pasteable commands for mayor
+(no unexpanded `$NEW_BRANCH` / `$SYNTH_PATH` / etc. in the recorded text):
 ```bash
-bd update $ROOT_ID --notes "<notes with
+HEAD_SHA=$(git rev-parse HEAD)
+REPO_FULL="<owner>/<repo>"
+BASE_REF="<baseRefName>"
+ORIGIN_OWNER="<origin-owner>"
+PR_TITLE="<pr_title>"
+PR_BODY="<body referencing original PR>"
+NEW_NUMBER_PLACEHOLDER="<new-number>"   # mayor substitutes after gh pr create
+
+PUSH_CMD="git push -u origin $NEW_BRANCH"
+PR_CREATE_CMD="gh pr create --repo $REPO_FULL --base $BASE_REF --head $ORIGIN_OWNER:$NEW_BRANCH --title \"$PR_TITLE\" --body \"$PR_BODY\""
+POST_SYNTH_CMD="gh pr comment $NEW_NUMBER_PLACEHOLDER --body-file $SYNTH_PATH"
+CI_WAIT_CMD="gh pr checks $NEW_NUMBER_PLACEHOLDER --watch"
+MERGE_CMD="gh pr merge $NEW_NUMBER_PLACEHOLDER --repo $REPO_FULL --merge"
+CLOSE_ORIG_CMD="gh pr comment <number> --body-file $CLOSE_PATH && gh pr close <number>"
+
+bd update "$ROOT_ID" --notes "<notes with
   merge_path: C,
   status: ready-for-publish,
   branch: $NEW_BRANCH,
-  head_sha: $(git rev-parse HEAD),
-  push_command: 'git push -u origin $NEW_BRANCH',
-  pr_create_command: 'gh pr create --repo <owner>/<repo> --base <baseRefName> --head <origin-owner>:$NEW_BRANCH --title \"<pr_title>\" --body \"<body referencing original PR>\"',
+  head_sha: $HEAD_SHA,
+  push_command: $PUSH_CMD,
+  pr_create_command: $PR_CREATE_CMD,
   synthesis_path: $SYNTH_PATH,
-  post_synthesis_command: 'gh pr comment <new-number> --body-file $SYNTH_PATH',
-  ci_check_command: 'gh pr checks <new-number> --watch',
-  merge_command: 'gh pr merge <new-number> --repo <owner>/<repo> --merge',
+  post_synthesis_command: $POST_SYNTH_CMD,
+  ci_check_command: $CI_WAIT_CMD,
+  merge_command: $MERGE_CMD,
   close_original_comment_path: $CLOSE_PATH,
-  close_original_command: 'gh pr comment <number> --body-file $CLOSE_PATH && gh pr close <number>'>"
+  close_original_command: $CLOSE_ORIG_CMD>"
 ```
 
 Then mail mayor:
 ```
 [adopt-pr] Path C branch-ready — local branch prepared with maintainer + contributor commits; ready for publish.
-[adopt-pr]   New branch / SHA:     $NEW_BRANCH @ <head_sha>
-[adopt-pr]   Push command:         git push -u origin $NEW_BRANCH
-[adopt-pr]   PR-create command:    gh pr create --repo <owner>/<repo> --base <baseRefName> --head <origin-owner>:$NEW_BRANCH --title "<pr_title>" --body "..."
-[adopt-pr]   Post-synthesis cmd:   gh pr comment <new-number> --body-file $SYNTH_PATH
-[adopt-pr]   CI wait cmd:          gh pr checks <new-number> --watch
-[adopt-pr]   Merge command:        gh pr merge <new-number> --repo <owner>/<repo> --merge
-[adopt-pr]   Close-original cmds:  gh pr comment <number> --body-file $CLOSE_PATH && gh pr close <number>
+[adopt-pr]   New branch / SHA:     $NEW_BRANCH @ $HEAD_SHA
+[adopt-pr]   Push command:         $PUSH_CMD
+[adopt-pr]   PR-create command:    $PR_CREATE_CMD
+[adopt-pr]   Post-synthesis cmd:   $POST_SYNTH_CMD
+[adopt-pr]   CI wait cmd:          $CI_WAIT_CMD
+[adopt-pr]   Merge command:        $MERGE_CMD
+[adopt-pr]   Close-original cmds:  $CLOSE_ORIG_CMD
 [adopt-pr]   Original PR:          <number>
 [adopt-pr]   Root bead:            $ROOT_ID
 ```
@@ -614,33 +647,51 @@ LINK_PATH="<review_run_dir>/outputs/comment-path-d-original-link.md"
 # write the rendered bodies
 ```
 
-Record the full branch-ready handoff bundle on the root bead:
+Resolve concrete handoff values and record the full branch-ready handoff
+bundle on the root bead. Build each command in a shell variable first so the
+recorded notes contain fully resolved, copy-pasteable commands for mayor
+(no unexpanded `$FOLLOWUP_BRANCH` / `$SYNTH_PATH` / etc. in the recorded text):
 ```bash
-bd update $ROOT_ID --notes "<notes with
+HEAD_SHA=$(git rev-parse HEAD)
+REPO_FULL="<owner>/<repo>"
+BASE_REF="<baseRefName>"
+ORIGIN_OWNER="<origin-owner>"
+FOLLOWUP_TITLE="<followup-title>"
+FOLLOWUP_BODY="<body linking to original PR>"
+FOLLOWUP_NUMBER_PLACEHOLDER="<followup-number>"   # mayor substitutes after gh pr create
+
+PUSH_CMD="git push -u origin $FOLLOWUP_BRANCH"
+PR_CREATE_CMD="gh pr create --repo $REPO_FULL --base $BASE_REF --head $ORIGIN_OWNER:$FOLLOWUP_BRANCH --title \"$FOLLOWUP_TITLE\" --body \"$FOLLOWUP_BODY\""
+POST_SYNTH_CMD="gh pr comment $FOLLOWUP_NUMBER_PLACEHOLDER --body-file $SYNTH_PATH"
+CI_WAIT_CMD="gh pr checks $FOLLOWUP_NUMBER_PLACEHOLDER --watch"
+MERGE_CMD="gh pr merge $FOLLOWUP_NUMBER_PLACEHOLDER --squash"
+COMMENT_ORIG_CMD="gh pr comment <number> --body-file $LINK_PATH"
+
+bd update "$ROOT_ID" --notes "<notes with
   merge_path: D,
   status: ready-for-publish,
   branch: $FOLLOWUP_BRANCH,
-  head_sha: $(git rev-parse HEAD),
-  push_command: 'git push -u origin $FOLLOWUP_BRANCH',
-  pr_create_command: 'gh pr create --repo <owner>/<repo> --base <baseRefName> --head <origin-owner>:$FOLLOWUP_BRANCH --title \"<followup-title>\" --body \"<body linking to original PR>\"',
+  head_sha: $HEAD_SHA,
+  push_command: $PUSH_CMD,
+  pr_create_command: $PR_CREATE_CMD,
   synthesis_path: $SYNTH_PATH,
-  post_synthesis_command: 'gh pr comment <followup-number> --body-file $SYNTH_PATH',
-  ci_check_command: 'gh pr checks <followup-number> --watch',
-  merge_command: 'gh pr merge <followup-number> --squash',
+  post_synthesis_command: $POST_SYNTH_CMD,
+  ci_check_command: $CI_WAIT_CMD,
+  merge_command: $MERGE_CMD,
   original_link_comment_path: $LINK_PATH,
-  comment_original_command: 'gh pr comment <number> --body-file $LINK_PATH'>"
+  comment_original_command: $COMMENT_ORIG_CMD>"
 ```
 
 Then mail mayor:
 ```
 [adopt-pr] Path D branch-ready — follow-up branch prepared with maintainer fixups; ready for publish.
-[adopt-pr]   Follow-up branch:     $FOLLOWUP_BRANCH @ <head_sha>
-[adopt-pr]   Push command:         git push -u origin $FOLLOWUP_BRANCH
-[adopt-pr]   PR-create command:    gh pr create --repo <owner>/<repo> --base <baseRefName> --head <origin-owner>:$FOLLOWUP_BRANCH --title "..." --body "..."
-[adopt-pr]   Post-synthesis cmd:   gh pr comment <followup-number> --body-file $SYNTH_PATH
-[adopt-pr]   CI wait cmd:          gh pr checks <followup-number> --watch
-[adopt-pr]   Merge command:        gh pr merge <followup-number> --squash
-[adopt-pr]   Comment-original cmd: gh pr comment <number> --body-file $LINK_PATH
+[adopt-pr]   Follow-up branch:     $FOLLOWUP_BRANCH @ $HEAD_SHA
+[adopt-pr]   Push command:         $PUSH_CMD
+[adopt-pr]   PR-create command:    $PR_CREATE_CMD
+[adopt-pr]   Post-synthesis cmd:   $POST_SYNTH_CMD
+[adopt-pr]   CI wait cmd:          $CI_WAIT_CMD
+[adopt-pr]   Merge command:        $MERGE_CMD
+[adopt-pr]   Comment-original cmd: $COMMENT_ORIG_CMD
 [adopt-pr]   Original PR:          <number>
 [adopt-pr]   Root bead:            $ROOT_ID
 ```
