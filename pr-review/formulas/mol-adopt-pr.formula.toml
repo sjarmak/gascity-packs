@@ -1,20 +1,26 @@
 description = """
-Adopt-PR workflow — 6 steps from intake through merge.
+Adopt-PR workflow — 6 steps from intake through merge-handoff.
 
-Sling a contributor PR to a polecat for review and merge. The polecat follows
-each step in order; a human gate after review blocks until the maintainer
-closes it manually. Crash-safe: `bd mol current` resumes at the right step.
+Sling a contributor PR to a polecat for review. The polecat follows each step
+in order; a human gate after review blocks until the maintainer closes it
+manually. Crash-safe: `bd mol current` resumes at the right step.
 
 The molecule root bead IS the control bead — all run state is stored in its
 notes via `bd update <root-id> --notes "key: value"`. No separate tracking
 bead needed.
+
+**Polecat publish authority (hard rule):** The polecat NEVER runs `gh pr merge`.
+The `finalize` step resolves the merge path and records the merge command in
+the root bead, then hands off to mayor. Mayor performs the merge per the
+per-action approval rule. This applies to all four paths (A/B/C/D).
 
 ## Contract
 
 1. Caller slings with `--var pr=<url-or-number>` (and optionally `--var skip_gemini=true`)
 2. Polecat reads steps, executes each in order
 3. After review, human-gate blocks until maintainer closes it
-4. Polecat resumes finalize → merge → cleanup
+4. Polecat resumes finalize → resolves merge path → hands merge command to mayor → exits
+5. Mayor performs the merge after per-action approval
 
 ## Variables
 
@@ -290,10 +296,12 @@ iteration (via `bd mol current`) or when nudged.
 
 [[steps]]
 id = "finalize"
-title = "Push, post synthesis, merge"
+title = "Push, post synthesis, hand merge to mayor"
 needs = ["human-gate"]
 description = """
-Determine the merge path, push, post synthesis comment, wait for CI, merge.
+Determine the merge path, push, post synthesis comment, wait for CI, then
+record the resolved merge command in the root bead and hand off to mayor.
+**Polecats NEVER run `gh pr merge`** — that is mayor's per-action publish step.
 
 **1. Read root bead notes:**
 ```bash
@@ -370,15 +378,28 @@ If rebase was performed (`rebase_status` is not `not_needed`):
 git push --force-with-lease
 ```
 
-**A.4: Squash merge:**
+**A.4: Hand off the merge to mayor.**
+**Polecats NEVER run `gh pr merge`.** Record the resolved merge command in the
+root bead and STOP. The maintainer (via mayor) performs the merge.
+
 ```bash
-gh pr merge <number> --squash
+bd update $ROOT_ID --notes "<notes with merge_path: A, merge_ready: true, merge_command: 'gh pr merge <number> --squash'>"
 ```
+
+Then mail mayor:
+```
+[adopt-pr] Path A ready for merge — synthesis posted, CI green, no maintainer changes.
+[adopt-pr]   PR:            <number>
+[adopt-pr]   Merge command: gh pr merge <number> --squash
+[adopt-pr]   Root bead:     $ROOT_ID
+```
+
+Exit. Mayor reads the bead and runs the merge per the per-action approval rule.
 
 **A.5: Cleanup:**
 ```bash
 git update-ref -d refs/adopt-pr/upstream-base
-bd update $ROOT_ID --notes "<notes with merge_path: A, status: merged>"
+bd update $ROOT_ID --notes "<notes with merge_path: A, status: ready-for-merge>"
 ```
 
 ---
@@ -437,10 +458,16 @@ Maintainer Changes, Final Review Status sections).
 
 **B.4: Wait for CI** (same as Path A).
 
-**B.5: Merge commit:**
+**B.5: Hand off the merge to mayor.**
+**Polecats NEVER run `gh pr merge`.** Record the resolved merge command in the
+root bead and STOP:
+
 ```bash
-gh pr merge <number> --merge
+bd update $ROOT_ID --notes "<notes with merge_path: B, merge_ready: true, merge_command: 'gh pr merge <number> --merge'>"
 ```
+
+Then mail mayor with the same handoff pattern as A.4 (substitute Path B / merge command).
+Mayor performs the merge.
 
 **B.6: Cleanup** (same as Path A).
 
@@ -463,7 +490,9 @@ gh pr create --repo <owner>/<repo> --base <baseRefName> \
 ```
 **C.6:** Post synthesis on new PR (Path C template — credits contributor).
 **C.7:** Wait for CI on new PR.
-**C.8:** Merge new PR: `gh pr merge <new-number> --repo <owner>/<repo> --merge`
+**C.8:** Hand off merge of new PR to mayor. **Polecats NEVER run `gh pr merge`.**
+Record `merge_command: 'gh pr merge <new-number> --repo <owner>/<repo> --merge'`
+in root bead, mail mayor, and STOP. Mayor performs the merge.
 **C.9:** Close original PR with warm thank-you comment.
 **C.10:** Cleanup.
 
@@ -477,7 +506,9 @@ gh pr create --repo <owner>/<repo> --base <baseRefName> \
 **D.4:** Create follow-up PR referencing original.
 **D.5:** Post synthesis on follow-up PR (Path D template).
 **D.6:** Wait for CI.
-**D.7:** Squash merge follow-up: `gh pr merge <followup-number> --squash`
+**D.7:** Hand off merge of follow-up to mayor. **Polecats NEVER run `gh pr merge`.**
+Record `merge_command: 'gh pr merge <followup-number> --squash'` in root bead,
+mail mayor, and STOP. Mayor performs the merge.
 **D.8:** Comment on original PR linking to follow-up.
 **D.9:** Cleanup.
 
@@ -490,7 +521,9 @@ gh pr create --repo <owner>/<repo> --base <baseRefName> \
 - **Squash guardrails mandatory** — all four checks must pass before pushing rewritten history
 - **All reviews use canonical upstream base** — fetched from the real upstream URL, not origin
 
-**Exit criteria:** PR merged (or new PR created and merged), synthesis posted."""
+**Exit criteria:** Synthesis posted, CI green, merge path resolved, merge command
+recorded in root bead notes, mayor mailed. Polecat exits before invoking
+`gh pr merge` (mayor performs the merge per the per-action approval rule)."""
 
 [[steps]]
 id = "complete"
