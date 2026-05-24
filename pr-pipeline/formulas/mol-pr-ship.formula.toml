@@ -79,9 +79,16 @@ fi
 mkdir -p .gc/pr-pipeline/ship
 SAFE=$(echo "$BRANCH" | tr '/' '_')
 REPORT_PATH=".gc/pr-pipeline/ship/${SAFE}.md"
-bd update "$ROOT_ID" --notes "branch: $BRANCH
+
+# Multi-line notes go via heredoc: literal newlines inside a double-quoted
+# string are not robust to shell copy-paste (leading whitespace can get
+# baked into the value). This is the canonical pattern across this pack.
+bd update "$ROOT_ID" --notes "$(cat <<EOF
+branch: $BRANCH
 report_path: $REPORT_PATH
-status: in_progress"
+status: in_progress
+EOF
+)"
 ```
 
 **Exit criteria:** Branch resolved, report path set, not on default branch.
@@ -145,8 +152,11 @@ Record stage outcome:
 
 ```bash
 ROOT_ID=$(bd mol current --json | jq -r '.molecule_id')
-bd update "$ROOT_ID" --notes "simplify: <complete | reverted | skipped>
-simplify_commits: <sha1>,<sha2>,..."
+bd update "$ROOT_ID" --notes "$(cat <<EOF
+simplify: <complete | reverted | skipped>
+simplify_commits: <sha1>,<sha2>,...
+EOF
+)"
 ```
 
 **Exit criteria:** Diff simplified (or skipped/reverted), build green,
@@ -166,9 +176,11 @@ before reporting consensus. This is stronger than one-shot
 synthesis because reviewers can interrogate each other's
 blocker/major flags.
 
-Resolve the root bead ID (used by the env-gate and the iteration
-notes below), then verify CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1 in
-your env (configured at agent.toml level for the polecat pool):
+**1. Resolve root bead + env-gate.**
+
+Resolve `ROOT_ID` first (the env-gate's `bd update` needs it), then verify
+`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` in your env (configured at
+agent.toml level for the polecat pool):
 
     ROOT_ID=$(bd mol current --json | jq -r '.molecule_id')
     [[ "$CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS" = "1" ]] || {
@@ -179,15 +191,16 @@ your env (configured at agent.toml level for the polecat pool):
 
 ## Iteration loop (cap at 3 iterations)
 
-1. Prepare the diff context. `BRANCH` is sanitized for the temp-file
+2. Prepare the diff context. `BRANCH` is sanitized for the temp-file
    name so `/` characters in the branch name (e.g. `feat/foo`) don't
-   create unintended directory paths:
+   create unintended directory paths. Use `tr` to avoid bash parameter-
+   expansion ambiguity with escaped slashes inside a TOML basic string:
 
-       SAFE_BRANCH="${BRANCH//\\//-}"
+       SAFE_BRANCH=$(printf '%s' "$BRANCH" | tr '/' '-')
        PATCH_PATH=$(mktemp -t "pr-ship-${SAFE_BRANCH}-iter${ITER_N}.XXXXXX.patch")
        git diff origin/main..HEAD > "$PATCH_PATH"
 
-2. Create the agent team with a natural-language spawn instruction.
+3. Create the agent team with a natural-language spawn instruction.
    The "competing hypotheses" pattern from the Agent Teams docs:
 
        Create an agent team to adversarially review the staged branch
@@ -216,18 +229,18 @@ your env (configured at agent.toml level for the polecat pool):
        debate phase, synthesizes the post-debate consensus, and writes
        the per-iteration scorecard.
 
-3. Wait for the team's debate to finish. The shared task list
+4. Wait for the team's debate to finish. The shared task list
    coordinates progress. Use the `TeammateIdle` checkpoint when
    available.
 
-4. Synthesize: read the consensus output and classify remaining
+5. Synthesize: read the consensus output and classify remaining
    findings as blocker / major / minor.
 
-5. If any blocker or major remains → fix in-place, commit
-   (`git commit -m "fix: ..."`), increment ITER_N, go to step 1.
+6. If any blocker or major remains → fix in-place, commit
+   (`git commit -m "fix: ..."`), increment ITER_N, go to step 2.
    Cap at 3 iterations.
 
-6. Record per-iteration state. Use a heredoc so the multi-line note
+7. Record per-iteration state. Use a heredoc so the multi-line note
    is robust against shell copy-paste (literal newlines inside a
    double-quoted string can pick up unintended leading whitespace):
 
@@ -239,7 +252,7 @@ your env (configured at agent.toml level for the polecat pool):
        EOF
        )"
 
-7. Clean up the team before exiting the step. Tell the lead to
+8. Clean up the team before exiting the step. Tell the lead to
    "Clean up the team" — always cleanup via the lead, never via a
    teammate (per Agent Teams docs warning).
 
@@ -252,8 +265,11 @@ Same as today's formula:
 
 After convergence (or 3-iter cap):
 
-    bd update "$ROOT_ID" --notes "review_status: <converged | not_converged>
-    review_final: blockers=<n>, majors=<n>, minors=<n>"
+    bd update "$ROOT_ID" --notes "$(cat <<EOF
+    review_status: <converged | not_converged>
+    review_final: blockers=<n>, majors=<n>, minors=<n>
+    EOF
+    )"
 
 ## Fallback
 
@@ -331,8 +347,11 @@ fi
 Record outcomes:
 
 ```bash
-bd update "$ROOT_ID" --notes "gates_passed:$GATES_PASSED
-gates_failed:$GATES_FAILED"
+bd update "$ROOT_ID" --notes "$(cat <<EOF
+gates_passed:$GATES_PASSED
+gates_failed:$GATES_FAILED
+EOF
+)"
 ```
 
 **Note on test failures:** if a failure is documented as a baseline
@@ -410,9 +429,12 @@ Decide verdict mechanically:
 ```bash
 VERDICT="<READY | BLOCKED>"
 BLOCKERS="<one-line summary of what blocks, or 'none'>"
-bd update "$ROOT_ID" --notes "readiness: $VERDICT
+bd update "$ROOT_ID" --notes "$(cat <<EOF
+readiness: $VERDICT
 blockers: $BLOCKERS
-status: complete"
+status: complete
+EOF
+)"
 echo "[ship] Pipeline complete for branch $BRANCH"
 echo "[ship]   Verdict: $VERDICT"
 echo "[ship]   Path: $REPORT_PATH"

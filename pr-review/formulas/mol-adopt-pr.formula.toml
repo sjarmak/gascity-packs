@@ -89,9 +89,15 @@ If false, warn but continue — Phase 6 uses Path C if maintainer changes exist.
 gh pr checkout <number>
 ```
 
-**7. Record state in root bead notes:**
+**7. Record state in root bead notes.**
+
+Multi-line notes must be passed via a heredoc — a literal newline-bearing
+double-quoted string is not safe across shells (leading whitespace can be
+included in the value, and some shells reinterpret embedded `$` differently).
+The canonical pattern used throughout this pack:
 ```bash
-bd update $ROOT_ID --notes "pr_number: <N>
+bd update "$ROOT_ID" --notes "$(cat <<EOF
+pr_number: <PR_NUMBER>
 pr_url: <url>
 repo: <owner/repo>
 pr_title: <title>
@@ -103,13 +109,15 @@ original_head: pending
 rebase_status: pending
 merge_path: undetermined
 skip_gemini: {{skip_gemini}}
-review_run_dir: pending"
+review_run_dir: pending
+EOF
+)"
 ```
 
 **8. Display summary:**
 ```
 [adopt-pr] Intake complete
-[adopt-pr]   PR #<N>: "<title>"
+[adopt-pr]   PR #<PR_NUMBER>: "<title>"
 [adopt-pr]   Author: <author.login>
 [adopt-pr]   Base: <baseRefName> <- Head: <headRefName>
 [adopt-pr]   Stats: +<additions> -<deletions> across <changedFiles> files
@@ -209,26 +217,29 @@ consensus. This is the incoming-PR-side counterpart to mol-pr-ship's
 review-iterate stage — same Agent Teams mechanism, different scope
 (one-shot review producing a synthesis artifact for the human-gate step).
 
-Resolve the root bead ID (used by the env-gate and the notes
-recorded below), then verify CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1
-in your env (configured at agent.toml level for the polecat pool):
+**1. Resolve root bead + env-gate.**
 
-    ROOT_ID=$(bd mol current --json | jq -r '.molecule_id')
-    [[ "$CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS" = "1" ]] || {
-        bd update "$ROOT_ID" --notes "review_mode: blocked-env-missing"
-        echo "review blocked: CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS not set in env"
-        exit 2
-    }
+Resolve `ROOT_ID` first (the env-gate's `bd update` needs it), then verify
+`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1` in your env (configured at
+agent.toml level for the polecat pool):
+```bash
+ROOT_ID=$(bd mol current --json | jq -r '.molecule_id')
+[[ "$CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS" = "1" ]] || {
+    bd update "$ROOT_ID" --notes "review_mode: blocked-env-missing"
+    echo "review blocked: CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS not set in env"
+    exit 2
+}
+```
 
-**1. Read root bead notes:**
+**2. Read root bead notes:**
 
 Extract `pr_number`, `repo`, `base_branch`, `skip_gemini` from the
-notes on `$ROOT_ID` (already resolved above).
+notes on `$ROOT_ID` (already resolved in step 1).
 
-**2. Fetch canonical upstream base + prepare diff context:**
+**3. Fetch canonical upstream base + prepare diff context:**
 
 Use `mktemp` so concurrent runs against the same PR number from
-different repos/users don't collide on `/tmp/adopt-pr-<N>.patch`.
+different repos/users don't collide on `/tmp/adopt-pr-<PR_NUMBER>.patch`.
 The path is recorded in the root bead notes so the synthesis step
 can find it:
 
@@ -240,7 +251,7 @@ gh pr diff $pr_number --repo <owner>/<repo> > "$DIFF_PATH"
 bd update "$ROOT_ID" --notes "review_team_patch_path: $DIFF_PATH"
 ```
 
-**3. Create the agent team with a natural-language spawn instruction.**
+**4. Create the agent team with a natural-language spawn instruction.**
 
 Use the "competing hypotheses" pattern from the Agent Teams docs:
 
@@ -274,7 +285,7 @@ Use the "competing hypotheses" pattern from the Agent Teams docs:
     validations (if applicable), new findings with severity + source
     attribution + suggested fixes, and a category coverage summary.
 
-**4. Save artifact path on root bead.** Use a heredoc so the
+**5. Save artifact path on root bead.** Use a heredoc so the
 multi-line note doesn't pick up unintended leading whitespace when
 copy-pasted:
 
@@ -287,7 +298,7 @@ EOF
 )"
 ```
 
-**5. Present findings summary to orient the human reviewer:**
+**6. Present findings summary to orient the human reviewer:**
 
 ```
 [adopt-pr] Multi-agent review complete (Agent Teams)
@@ -297,7 +308,7 @@ EOF
 [adopt-pr]   Reviewers: go-reviewer + security-reviewer + code-reviewer + codex:codex-rescue
 ```
 
-**6. Clean up the team before exiting the step.** Tell the lead to "Clean
+**7. Clean up the team before exiting the step.** Tell the lead to "Clean
 up the team" — always cleanup via the lead, never via a teammate (per
 Agent Teams docs warning).
 
@@ -314,7 +325,7 @@ with 4 calls), synthesize without the debate phase, and note
 degraded but functional.
 
 **Exit criteria:** Review complete, synthesis written to
-`.gc/adopt-pr/reviews/pr-<N>.md`, root bead notes updated with the path."""
+`.gc/adopt-pr/reviews/pr-<PR_NUMBER>.md`, root bead notes updated with the path."""
 
 [[steps]]
 id = "human-gate"
