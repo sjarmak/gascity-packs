@@ -157,10 +157,47 @@ func TestParseSubteamMentionPrefix(t *testing.T) {
 			wantOK:        true,
 		},
 
+		// --- labeled form without `@` (gpk-ee3 new behavior) -----------
+		// Slack omits the `@` in the label when a human types a User
+		// Group mention (e.g. `@zelda-pl` expands to `<!subteam^Sxxx|zelda-pl>`).
+		// The label is treated as the handle, identical to the `@`-form.
+		{
+			name:          "label without leading at sign accepted",
+			text:          "<!subteam^S012|mayor> hi",
+			wantHandle:    "mayor",
+			wantSubteamID: "S012",
+			wantRemainder: "hi",
+			wantOK:        true,
+		},
+		{
+			name:          "label without at sign, dash handle, no remainder",
+			text:          "<!subteam^S0XXX|zelda-pl>",
+			wantHandle:    "zelda-pl",
+			wantSubteamID: "S0XXX",
+			wantRemainder: "",
+			wantOK:        true,
+		},
+		{
+			name:          "label without at sign, colon-space remainder",
+			text:          "<!subteam^S0XXX|zelda-pl>: deploy now",
+			wantHandle:    "zelda-pl",
+			wantSubteamID: "S0XXX",
+			wantRemainder: "deploy now",
+			wantOK:        true,
+		},
+		{
+			name:          "label without at sign, invalid char rejected",
+			text:          "<!subteam^S0XXX|foo bar> hi",
+			wantHandle:    "",
+			wantSubteamID: "",
+			wantRemainder: "",
+			wantOK:        false,
+		},
+
 		// --- rejected shapes -------------------------------------------
 		{
-			name:          "label missing leading at sign rejected",
-			text:          "<!subteam^S012|mayor> hi",
+			name:          "empty label (bare pipe) rejected",
+			text:          "<!subteam^S012|> hi",
 			wantHandle:    "",
 			wantSubteamID: "",
 			wantRemainder: "",

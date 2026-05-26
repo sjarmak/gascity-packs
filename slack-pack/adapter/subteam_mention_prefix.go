@@ -42,11 +42,14 @@ import "strings"
 //
 //   - Leading whitespace is tolerated; the token must start at the
 //     trimmed text's first byte.
-//   - For the labeled form, the label is the longest run of
-//     [A-Za-z0-9_-] following the `@`. Empty label or a label with
-//     other characters returns ok=false (operators should populate
-//     subteamAliasMap directly rather than relying on a malformed
-//     label).
+//   - For the labeled form, the label is the run of [A-Za-z0-9_-]
+//     after an OPTIONAL single leading `@`. Slack's native
+//     @-autocomplete emits `|@handle`, but a User Group mention typed
+//     by a human commonly arrives as `|handle` with no `@` — both are
+//     accepted and normalized to the same `@`-stripped handle. Empty
+//     label, a bare `@`, or a label containing any other character
+//     returns ok=false (operators should populate subteamAliasMap
+//     directly rather than relying on a malformed label).
 //   - For the unlabeled form, TEAMID is everything between `^` and
 //     `>`; empty TEAMID returns ok=false.
 //   - After the closing `>`, any leading colon (`:`) is trimmed,
@@ -57,7 +60,7 @@ import "strings"
 //   - text whose trimmed head is not `<!subteam^`
 //   - missing closing `>`
 //   - empty subteam ID (`<!subteam^>`, `<!subteam^|@h>`)
-//   - empty label in the labeled form (`<!subteam^Sxxx|@>`)
+//   - empty label in the labeled form (`<!subteam^Sxxx|>` or `<!subteam^Sxxx|@>`)
 //   - label with an invalid character (`<!subteam^X|@bad.handle>`)
 //
 // On any non-match the returned strings are empty so the caller cannot
@@ -95,11 +98,16 @@ func parseSubteamMentionPrefix(text string) (handle, subteamID, remainder string
 
 	var parsedHandle string
 	if pipe >= 0 {
-		// Labeled form: validate the `@<handle>` shape.
-		if len(label) == 0 || label[0] != '@' {
-			return "", "", "", false
+		// Labeled form: accept `@handle` (Slack @-autocomplete) and the
+		// bare `handle` shape (human-typed User Group mention — Slack
+		// omits the `@` in the label for those). Strip one optional
+		// leading `@`, then require the remainder be a valid handle
+		// character run. An empty label, or a label that is just `@`,
+		// leaves an empty candidate and is rejected below.
+		candidate := label
+		if len(candidate) > 0 && candidate[0] == '@' {
+			candidate = candidate[1:]
 		}
-		candidate := label[1:]
 		handleEnd := 0
 		for i := 0; i < len(candidate); i++ {
 			r := candidate[i]

@@ -78,6 +78,19 @@ Not yet implemented (planned):
       record; `--remove-channels c1,c2` drops just the listed channels
       (the record itself is deleted if the set becomes empty). Both
       removal paths are idempotent.
+- [x] `gc slack sync-subteam-aliases` — reconcile
+      `<city>/.gc/slack/subteam-aliases.json` (the Slack User Group
+      ("subteam") id → gc handle map) with the workspace's live User
+      Groups via Slack `usergroups.list`. Like `sync-commands`, it diffs
+      live against on-disk and supports `--dry-run` and
+      `--output text|json`; unlike it, the write is a non-destructive
+      MERGE — existing entries are preserved, handles are refreshed where
+      the live name differs, new User Groups are added, and entries with
+      no matching live group are kept and reported as "local-only" rather
+      than dropped. The bot token (`--token` / `$SLACK_BOT_TOKEN`) must
+      carry the `usergroups:read` scope; without it the verb reports a
+      readable `missing_scope` error and writes nothing. After a write it
+      prints the same SIGHUP reminder as the other registry-writing verbs.
 - [ ] `gc slack enable-room-launch` (`@@handle` thread-scoped sessions)
 - [ ] `gc slack post-message` (workflow status projection)
 - [x] `gc slack retry-peer-fanout` (walks `extmsg.peer_fanout_failed`
@@ -129,7 +142,7 @@ either can travel intact when the pack is mirrored upstream:
 - **Operator CLI** — `examples/slack-pack/cli/gc-slack-cli`, built
   from `cli/main.go` + `cli/cmd/`. Backs the `gc slack <cmd>` verb
   surface (import-app, map-channel, map-rig, sync-commands,
-  enable-room-launch, post-message). One-shot per invocation; not
+  sync-subteam-aliases, enable-room-launch, post-message). One-shot per invocation; not
   supervised. The pack's `commands/<cmd>.sh` wrappers exec it at
   `$GC_PACK_DIR/cli/gc-slack-cli` so operator command-line ergonomics
   stay identical to the pre-relocation gc-binary verbs.
@@ -289,7 +302,7 @@ package docstring at the top of that file. Summary:
 | `HANDLE_PREFIX`                | `@`                                              | Leading address token for keyword routing. Empty disables routing.              |
 | `IDENTITY_STORE_PATH`          | `/tmp/gc-slack-adapter/identities.json`          | JSON file backing the per-session `chat:write.customize` identity registry.    |
 | `HANDLE_ALIAS_STORE_PATH`      | `/tmp/gc-slack-adapter/handle-aliases.json`      | JSON file backing the cross-channel handle → session-id alias registry.        |
-| `SLACK_SUBTEAM_ALIAS_FILE`     | `<GC_CITY_PATH>/.gc/slack/subteam-aliases.json` (or `/tmp/gc-slack-adapter/subteam-aliases.json`) | Operator-edited JSON map of Slack User Group ("subteam") IDs → gc handles. Required to route the unlabeled `<!subteam^Sxxx>` mention shape; the labeled `<!subteam^Sxxx|@handle>` shape is gated by `HANDLE_ALIAS_STORE_PATH` instead. Read-only at runtime; SIGHUP or restart to reload. |
+| `SLACK_SUBTEAM_ALIAS_FILE`     | `<GC_CITY_PATH>/.gc/slack/subteam-aliases.json` (or `/tmp/gc-slack-adapter/subteam-aliases.json`) | JSON map of Slack User Group ("subteam") IDs → gc handles, hand-edited or written by `gc slack sync-subteam-aliases`. Required to route the unlabeled `<!subteam^Sxxx>` mention shape; the labeled `<!subteam^Sxxx\|@handle>` / `<!subteam^Sxxx\|handle>` shape is gated by `HANDLE_ALIAS_STORE_PATH` instead. Read-only at runtime; SIGHUP or restart to reload. |
 | `INBOUND_FILE_STORE`           | `/tmp/gc-slack-adapter/inbound`                  | Directory for downloaded inbound Slack file attachments.                        |
 | `INBOUND_FILE_TTL`             | `168h` (7 days)                                  | Janitor retention. `0` disables sweeping.                                       |
 | `INBOUND_FILE_SWEEP_INTERVAL`  | `1h`                                             | Janitor scan period. `0` disables sweeping.                                     |
@@ -318,15 +331,16 @@ the adapter runs as a `[[service]]`; do not set them by hand):
 
 ### SIGHUP-driven reload
 
-Four of the adapter's registries are written by `gc slack` CLI
+Five of the adapter's registries are written by `gc slack` CLI
 commands and read by the adapter at startup:
 
-| Registry             | File                          | CLI writer                    |
-| -------------------- | ----------------------------- | ----------------------------- |
-| Apps                 | `apps.json`                   | `gc slack import-app`         |
-| Channel mappings     | `channel_mappings.json`       | `gc slack map-channel`        |
-| Rig mappings         | `rig_mappings.json`           | `gc slack map-rig`            |
-| Room launch mappings | `room_launch_mappings.json`   | `gc slack enable-room-launch` |
+| Registry             | File                          | CLI writer                      |
+| -------------------- | ----------------------------- | ------------------------------- |
+| Apps                 | `apps.json`                   | `gc slack import-app`           |
+| Channel mappings     | `channel_mappings.json`       | `gc slack map-channel`          |
+| Rig mappings         | `rig_mappings.json`           | `gc slack map-rig`              |
+| Room launch mappings | `room_launch_mappings.json`   | `gc slack enable-room-launch`   |
+| Subteam aliases      | `subteam-aliases.json`        | `gc slack sync-subteam-aliases` |
 
 Send `SIGHUP` to the running adapter to pick up CLI-driven changes
 without a full restart:
@@ -335,7 +349,7 @@ without a full restart:
 pkill -HUP gc-slack-adapter
 ```
 
-Reload is all-or-nothing across the four files — a single parse
+Reload is all-or-nothing across the five files — a single parse
 failure (corrupt JSON, unknown `target_kind`, missing required field,
 file >10 MiB) aborts the cycle with the live in-memory state
 untouched. Errors are logged at WARN; the adapter keeps serving.

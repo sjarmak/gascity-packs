@@ -309,6 +309,121 @@ func TestProcessSlackEventSingleAtHandleStillDispatches(t *testing.T) {
 	}
 }
 
+// TestProcessSlackEventSubteamMentionLabelWithoutAtRoutesToHandle is the
+// gpk-ee3 happy path: Slack omits the `@` in a User Group label when a
+// human types the mention naturally (e.g. `@zelda-pl` expands to
+// `<!subteam^Sxxx|zelda-pl>`). That bare-label form must route through
+// the same address-by-handle dispatch path the `@`-labeled form uses —
+// before gpk-ee3 it landed with target="" and no dispatch fired.
+func TestProcessSlackEventSubteamMentionLabelWithoutAtRoutesToHandle(t *testing.T) {
+	capture := &subteamCapture{}
+	gcStub := httptest.NewServer(capture.handler())
+	t.Cleanup(gcStub.Close)
+
+	cfg := config{
+		gcAPIBase:     gcStub.URL,
+		cityName:      "test-city",
+		provider:      "slack",
+		accountID:     "T1",
+		handlePrefix:  "@",
+		slackBotToken: "xoxb-test",
+		dispatchSem:   defaultTestDispatchSem,
+	}
+	aliasReg := newTestHandleAliasRegistry(t)
+	if err := aliasReg.Set("zelda-pl", "gc-9001"); err != nil {
+		t.Fatalf("aliasReg.Set: %v", err)
+	}
+
+	rawMsg, _ := json.Marshal(slackMessageEvent{
+		Type:    "message",
+		Channel: "C1",
+		User:    "U1",
+		TS:      "1700000000.000900",
+		Text:    "<!subteam^S0ZELDA|zelda-pl> ship it",
+	})
+	env := slackEventEnvelope{Type: "event_callback", Event: rawMsg}
+
+	processSlackEvent(cfg, aliasReg, nil, nil, nil, nil, env, func() {})
+
+	inbounds := capture.snapshotInbounds()
+	if len(inbounds) != 1 {
+		t.Fatalf("got %d inbound POSTs, want 1", len(inbounds))
+	}
+	if inbounds[0].ExplicitTarget != "zelda-pl" {
+		t.Errorf("ExplicitTarget = %q, want %q (bare label must route as handle)",
+			inbounds[0].ExplicitTarget, "zelda-pl")
+	}
+	if inbounds[0].Text != "ship it" {
+		t.Errorf("Text = %q, want %q (subteam token must be stripped)", inbounds[0].Text, "ship it")
+	}
+
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		if atomic.LoadInt32(&capture.sessionHits) > 0 {
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := atomic.LoadInt32(&capture.sessionHits); got != 1 {
+		t.Fatalf("session-message hits = %d, want 1 (bare-label alias dispatch should fire)", got)
+	}
+	capture.mu.Lock()
+	gotPath := capture.sessionPath
+	capture.mu.Unlock()
+	if !strings.Contains(gotPath, "/session/gc-9001/messages") {
+		t.Errorf("session path = %q, want to contain %q", gotPath, "/session/gc-9001/messages")
+	}
+}
+
+// TestProcessSlackEventSubteamMentionBareLabelInvalidCharFallsThrough is
+// the gpk-ee3 safety case: a bare label containing an invalid handle
+// character (a space here) must NOT parse as a subteam mention. The
+// parser returns ok=false, the inbound posts with the full original
+// text and an empty ExplicitTarget, and no alias dispatch fires.
+func TestProcessSlackEventSubteamMentionBareLabelInvalidCharFallsThrough(t *testing.T) {
+	capture := &subteamCapture{}
+	gcStub := httptest.NewServer(capture.handler())
+	t.Cleanup(gcStub.Close)
+
+	cfg := config{
+		gcAPIBase:     gcStub.URL,
+		cityName:      "test-city",
+		provider:      "slack",
+		accountID:     "T1",
+		handlePrefix:  "@",
+		slackBotToken: "xoxb-test",
+		dispatchSem:   defaultTestDispatchSem,
+	}
+	aliasReg := newTestHandleAliasRegistry(t)
+
+	rawMsg, _ := json.Marshal(slackMessageEvent{
+		Type:    "message",
+		Channel: "C1",
+		User:    "U1",
+		TS:      "1700000000.001000",
+		Text:    "<!subteam^S0XXX|foo bar> hello",
+	})
+	env := slackEventEnvelope{Type: "event_callback", Event: rawMsg}
+
+	processSlackEvent(cfg, aliasReg, nil, nil, nil, nil, env, func() {})
+
+	inbounds := capture.snapshotInbounds()
+	if len(inbounds) != 1 {
+		t.Fatalf("got %d inbound POSTs, want 1", len(inbounds))
+	}
+	if inbounds[0].ExplicitTarget != "" {
+		t.Errorf("ExplicitTarget = %q, want empty (invalid bare label must not parse)", inbounds[0].ExplicitTarget)
+	}
+	if inbounds[0].Text != "<!subteam^S0XXX|foo bar> hello" {
+		t.Errorf("Text = %q, want full original preserved (parse miss)", inbounds[0].Text)
+	}
+
+	time.Sleep(50 * time.Millisecond)
+	if got := atomic.LoadInt32(&capture.sessionHits); got != 0 {
+		t.Errorf("session-message hits = %d, want 0 (no valid handle, no dispatch)", got)
+	}
+}
+
 // newTestSubteamAliasMap builds a subteamAliasMap from an in-memory
 // {subteam_id: handle} map by staging it through a tmpfile. Tests that
 // need a populated map use this rather than touching production
