@@ -459,6 +459,21 @@ GitHub snapshot metadata such as repo, number, kind, title, body hash, state,
 labels, author, PR head SHA, and PR base branch. Workflow-specific metadata
 records the latest triage, review, or fix run.
 
+The v0 source bead convention is explicit and intentionally boring:
+
+- source beads are normal `type=task` beads used only as non-runnable
+  index/cache records; they are not routed, assigned, or used as readiness
+  gates
+- lookup is by `gc.kind=github_source`, `gc.github.kind=issue|pull`,
+  `gc.github.repo=owner/repo`, and `gc.github.number=<number>`
+- create/update uses `--external-ref <canonical-url>` and flat
+  `gc.github.*` metadata, including `gc.github.url`,
+  `gc.github.snapshot_path`, `gc.github.body_hash` for issues, and
+  `gc.github.head_sha` for pull requests
+- changing GitHub title, labels, assignee, state, or author refreshes source
+  metadata but does not invalidate workflow reuse unless the workflow-specific
+  key changes
+
 #### GitHub API Boundary
 
 GitHub operations go through pack-owned wrapper scripts under

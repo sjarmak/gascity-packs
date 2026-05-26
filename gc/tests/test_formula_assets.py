@@ -87,6 +87,34 @@ class FormulaAssetTests(unittest.TestCase):
                 self.assertIn("{{pack_root}}/assets/scripts/github_api.py", text)
                 self.assertNotIn("{{pack_root}}" + "/scripts/", text)
 
+    def test_github_adapter_formulas_define_source_bead_contract(self) -> None:
+        root = pathlib.Path(__file__).resolve().parents[1]
+        expected = {
+            "github-issue-triage": ("issue", "gc.github.body_hash"),
+            "github-issue-fix": ("issue", "gc.github.body_hash"),
+            "github-pr-review": ("pull", "gc.github.head_sha"),
+        }
+        required_common = {
+            "bd list --metadata-field gc.kind=github_source",
+            "bd create",
+            "bd update",
+            "--external-ref",
+            "gc.github.kind",
+            "gc.github.repo",
+            "gc.github.number",
+            "gc.github.url",
+            "gc.github.snapshot_path",
+            "Do not route the source bead",
+        }
+
+        for name, (github_kind, idempotency_key) in expected.items():
+            with self.subTest(name=name):
+                text = (root / "formulas" / f"{name}.formula.toml").read_text(encoding="utf-8")
+                for fragment in required_common:
+                    self.assertIn(fragment, text)
+                self.assertIn(f"gc.github.kind={github_kind}", text)
+                self.assertIn(idempotency_key, text)
+
     def test_all_declared_formula_vars_are_rendered_into_graph_text(self) -> None:
         root = pathlib.Path(__file__).resolve().parents[1]
         for path in sorted((root / "formulas").glob("*.formula.toml")):
