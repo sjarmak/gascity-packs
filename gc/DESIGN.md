@@ -2,7 +2,7 @@
 title: GC Workflow Pack V0
 status: Implemented V0
 created_at: 2026-05-25
-updated_at: 2026-05-25
+updated_at: 2026-05-26
 sources:
   - ~/gc-packs.md
   - ../CONTEXT.md
@@ -25,6 +25,8 @@ The pack provides:
 - visible internal formulas or helpers for `build-run`, `do-work-item`,
   fix-convoy synthesis, final publishing, and same-session shared-lifecycle
   implementation
+- GitHub adapter skills and formulas for issue triage, PR review, and issue
+  fix workflows
 - scripts for task-payload validation, convoy/bead creation, context bundle
   validation, verdict report validation, and artifact-path resolution
 
@@ -50,9 +52,8 @@ The current `gc` pack is a starter implementation:
 - [gc/skills/design/SKILL.md](./skills/design/SKILL.md) writes `design.md`.
 - [gc/skills/decompose/SKILL.md](./skills/decompose/SKILL.md) writes
   `tasks.md` and then runs `scripts/create_beads_from_tasks.py`.
-- [gc/scripts/create_beads_from_tasks.py](./scripts/create_beads_from_tasks.py)
-  reads a payload with `epics[]` and `beads[]`, creates epic/task beads, and
-  wires dependencies.
+- the legacy bead-creation script reads a payload with `epics[]` and `beads[]`,
+  creates epic/task beads, and wires dependencies.
 - [gc/formulas/implement.formula.toml](./formulas/implement.formula.toml) is a
   single formula that takes `plan_slug` and optional `work_beads`, routes those
   beads, waits for closure, then runs inline gap-analysis and review loops.
@@ -88,8 +89,9 @@ This does not match the desired v0:
 
 - Do not add hardcoded roles to Go or pack scripts.
 - Do not make the `gc` pack part of Gas City SDK core.
-- Do not implement GitHub issue triage or GitHub issue-fix wrappers in this v0.
-  Names and source requirements are reserved for a later pass.
+- Do not duplicate the existing bugflow or adopt-pr workflow internals in the
+  GitHub adapter formulas. The GitHub workflows are thin edge adapters over
+  the generic `gc` primitives.
 - Do not require standalone `decompose` to generate context bundles.
 - Do not close convoy heads as a side effect of implementation or build.
 - Do not make direct `implement` run gap-analysis or review loops.
@@ -278,6 +280,32 @@ attempts to route a `type=epic` bead as a graph.v2 target.
   decomposition artifacts with human approval gates. After decomposition is
   approved, the skill launches durable `build-run`.
 
+`gh-issue-triage`
+
+- Input: full canonical GitHub issue URL.
+- Output: structured triage report artifact and one GitHub triage comment keyed
+  by the issue body hash.
+- Behavior: run or reuse idempotent issue triage. It may use a disposable
+  triage worktree to create reproduction artifacts, but it does not create
+  implementation convoys.
+
+`gh-pr-review`
+
+- Input: full canonical GitHub PR URL.
+- Output: structured review report artifact and one sticky normal PR comment
+  for the reviewed head SHA.
+- Behavior: delegate review judgment to the generic report-only `review`
+  formula, then gate or post the PR comment according to posting policy.
+
+`gh-issue-fix`
+
+- Input: full canonical GitHub issue URL.
+- Output: issue-fix run artifacts, optional draft or ready PR, and one sticky
+  issue status comment.
+- Behavior: run/reuse triage, generate approved requirements from triage,
+  proceed through durable design/decompose/build behavior, publish only when
+  explicitly requested, and never merge in v0.
+
 ### Public Formulas
 
 `implement`
@@ -348,6 +376,36 @@ attempts to route a `type=epic` bead as a graph.v2 target.
 - PR title/body are generated from final report and artifact references unless
   caller supplied overrides.
 
+`github-issue-triage`
+
+- Targetless graph.v2 formula.
+- Input: `github_issue_url`.
+- Output: source snapshot, `triage-report.md`, triage comment body, and
+  canonical source/run metadata.
+- Behavior: full URL validation, issue snapshot fetch, body-hash idempotency,
+  optional disposable triage worktree for reproduction artifacts, report
+  validation, and create-or-update triage comment.
+
+`github-pr-review`
+
+- Targetless graph.v2 formula.
+- Input: `github_pr_url`, optional `post_mode = "human_gate"|"auto"`.
+- Output: PR snapshot, generic review report, rendered comment, and PR comment
+  URL/id.
+- Behavior: key attempts by PR head SHA, reuse/update the same comment for the
+  same head, create a new review attempt for new heads, and never mutate code.
+
+`github-issue-fix`
+
+- Targetless graph.v2 formula.
+- Input: `github_issue_url`, `mode = "interactive"|"autonomous"`, and
+  `pr_mode = "none"|"draft"|"ready"`.
+- Output: GitHub fix run artifact tree, sticky status comment, build final
+  report, and optional PR URL.
+- Behavior: run idempotent triage first, resume latest active fix run by
+  default, generate requirements from triage, run durable planning/build
+  phases, edit one issue status comment at major transitions, and never merge.
+
 `drain`
 
 - Visible internal drain pattern, not a supported normal launch target.
@@ -373,6 +431,272 @@ attempts to route a `type=epic` bead as a graph.v2 target.
 | `fix-convoy` | visible internal helper invoked by `build-run` | failed verdict report plus source convoy/run metadata | no | no | required before bead or convoy creation | reject unknown report schemas and unsafe generated payloads |
 | `do-work-item` | reusable graph.v2 item formula inside existing lifecycle | drain-unit item phase; not a normal target | no | no | validates ownership and verification command before execution | reject direct public launch |
 | `publish` | visible internal helper invoked by `implement` or `build-run` | final report, branch/ref, remote, and PR options | no | yes | sanitizes generated PR metadata | reject missing preflight or unsafe refs |
+| `github-issue-triage` | public GitHub adapter formula or launch skill | targetless full GitHub issue URL | no | GitHub issue comment only | validates report schema, body hash, reproduction artifacts, and comment body | reject shorthand URLs |
+| `github-pr-review` | public GitHub adapter formula or launch skill | targetless full GitHub PR URL plus optional post mode | no | GitHub PR comment only | validates PR head SHA, review report, rendered comment, and human gate result | reject code mutation and formal review events |
+| `github-issue-fix` | public GitHub adapter formula or launch skill | targetless full GitHub issue URL plus mode and PR mode | invokes `build-run` after generated planning artifacts | optional draft or ready PR only | validates triage handoff, generated requirements, sticky comment, PR ownership, and build result | never merge in v0 |
+
+### GitHub Adapter Extension
+
+The GitHub adapter workflows live in the `gc` pack for v0. They are thin edge
+adapters, not copies of bugflow or adopt-pr. GitHub-specific formulas own URL
+normalization, source snapshots, GitHub comments, PR publication, and durable
+adapter metadata. Generic planning, implementation, gap-analysis, review,
+fix-convoy, and publish behavior stays in the existing `gc` formulas.
+
+All GitHub adapter formulas are targetless `graph.v2` formulas. They accept
+only full canonical GitHub URLs:
+
+```text
+https://github.com/<owner>/<repo>/issues/<number>
+https://github.com/<owner>/<repo>/pull/<number>
+```
+
+V0 rejects shorthand inputs such as `org/repo#123`, `#123`, bare numbers, and
+URLs without the `https://github.com/` scheme. Each formula creates or reuses a
+canonical GitHub source bead keyed by the object identity, then creates
+workflow-specific run/root state. The shared source bead records current
+GitHub snapshot metadata such as repo, number, kind, title, body hash, state,
+labels, author, PR head SHA, and PR base branch. Workflow-specific metadata
+records the latest triage, review, or fix run.
+
+#### GitHub API Boundary
+
+GitHub operations go through pack-owned wrapper scripts under
+`assets/scripts/`. The default implementation calls `gh api`, but formulas call
+only the stable wrapper surface so users can replace the backend later.
+
+Required wrapper capabilities:
+
+- parse and validate full issue and PR URLs
+- fetch issue snapshots
+- fetch PR snapshots including head SHA, base branch, author, and diff refs
+- resolve the authenticated GitHub actor
+- create or update issue comments
+- create or update PR comments
+- push a branch when publish policy allows it
+- create or update a draft or ready PR
+- search existing PRs by workflow marker and author
+
+The wrappers must return typed JSON and non-zero exit on ambiguity or missing
+capabilities. Formula prompts must not call `gh` directly except as an explicit
+diagnostic after a wrapper has failed.
+
+#### Script Asset Layout
+
+All pack helper scripts live under `gc/assets/scripts/`. Existing helpers move
+from the legacy script directory to `gc/assets/scripts/` with no compatibility
+shims. Formula text uses `{{pack_root}}/assets/scripts/...`; skills, README
+examples, and human documentation use `<pack-root>/assets/scripts/...`.
+
+Tests must assert there are no remaining legacy script-directory references
+after the migration and that executable shell helpers remain executable.
+
+#### Human Gate Pattern
+
+The GitHub adapter workflows use a shared human-gate pattern, but each parent
+workflow owns the meaning of iteration. The shared gate only sends mail to
+`human`, records the gate summary and attachments, waits for the human reply,
+and emits a durable result:
+
+```yaml
+schema: gc.human-gate-result.v1
+gate_name: <name>
+decision: approved|rejected|needs_iteration
+attachments:
+  - name: <name>
+    path: <path>
+    description: <description>
+human_message_id: <message-id>
+```
+
+`needs_iteration` is parent-specific:
+
+- issue triage updates or reruns the triage report/comment for the current
+  body hash
+- PR review updates or reruns the review/comment for the current head SHA
+- issue fix creates or resumes fix work, updates the PR branch/body when
+  needed, then loops through review/publish gates
+
+#### Issue Triage
+
+`github-issue-triage` is idempotent by issue body hash only:
+
+```text
+triage_body_hash = sha256(issue.body)
+```
+
+If a triage report/comment already exists for the same repo, issue number, and
+body hash, the formula returns the existing artifact and updates the canonical
+source metadata without rerunning triage. Title, label, assignee, and state
+changes do not invalidate triage. A body hash change creates a new triage run
+and a new body-hash-keyed triage comment. If the comment for the current hash
+was deleted, the formula creates a replacement and updates metadata.
+
+The terminal triage report lives at:
+
+```text
+<artifact-root>/github/issues/<owner>/<repo>/<number>/triage/<body-hash>/triage-report.md
+```
+
+Report front matter:
+
+```yaml
+schema: gc.github-issue-triage-report.v1
+repo: owner/repo
+issue_number: 123
+body_hash: sha256:<hash>
+verdict: reproduced|not_reproduced|needs_info|not_a_bug|duplicate|security_sensitive
+priority: p0|p1|p2|p3
+recommended_next_action: fix|test_hardening|close|ask_reporter|defer|security_process
+reproduction_artifact_path: ""
+reproduction_diff_path: ""
+```
+
+The triage formula may create a disposable triage worktree under the artifact
+tree to produce reproduction evidence. Allowed outputs are failing test
+patches, repro scripts, logs, and environment notes. It must not commit,
+publish, or create implementation convoys. Reproduction diffs are evidence for
+later work; issue-fix may use or adapt them but does not apply them blindly.
+
+Triage auto-posts ordinary public comments for `reproduced`,
+`not_reproduced`, `needs_info`, `not_a_bug`, and `duplicate`. It must human-gate
+before posting details for `security_sensitive` or priority `p0`. A
+`post_mode` variable may force `human_gate` or `auto`, but security-sensitive
+public output remains gated.
+
+#### PR Review
+
+`github-pr-review` keys review attempts by repo, PR number, and PR head SHA. If
+the head SHA is unchanged and a report/comment or waiting human gate exists,
+the formula resumes or updates that attempt. A new head SHA creates a new
+review attempt and comment.
+
+The formula delegates review judgment to the generic targetless `review`
+formula and maps the verdict report to a normal PR comment outcome:
+
+| Review report | GitHub comment outcome |
+| --- | --- |
+| `verdict=pass`, `severity=none` | `approve` |
+| `verdict=fail`, max severity `minor` | `comment` |
+| `verdict=fail`, max severity `major` | `request_changes` |
+| `verdict=fail`, max severity `blocker` | `block` |
+
+V0 posts normal PR comments only. It does not submit GitHub formal review
+events, does not approve through the GitHub review API, and does not request
+changes through the formal review API. It never checks out worktrees for code
+mutation, pushes commits, amends contributor branches, or creates follow-up
+PRs.
+
+Default `post_mode` is `human_gate`; `post_mode=auto` posts directly after
+report and comment validation. For the same head SHA, one sticky workflow
+comment is created or updated. If the sticky comment was deleted, a replacement
+is created. New head SHAs get new review comments.
+
+#### Issue Fix
+
+`github-issue-fix` always invokes issue triage first. Because triage is
+idempotent, this either returns an existing body-hash-keyed report/comment or
+creates a new one. The fix workflow may continue only when triage returns:
+
+- `reproduced` with `recommended_next_action=fix`
+- `not_reproduced` with `recommended_next_action=test_hardening`
+
+It stops without build for `needs_info`, `not_a_bug`, `duplicate`,
+`security_sensitive`, or unknown verdicts. `needs_info` is terminal for the fix
+run; a later body change starts or reuses a new triage run. Security-sensitive
+issues stop with `security_process_required` and avoid normal public
+implementation and PR flow.
+
+`github-issue-fix` supports:
+
+```toml
+[vars.mode]
+description = "Human gate policy: interactive or autonomous."
+default = "interactive"
+
+[vars.pr_mode]
+description = "PR publication mode: none, draft, or ready."
+default = "none"
+```
+
+`mode=interactive` still auto-generates approved requirements from triage, but
+human-gates design, decomposition/start, and public publication checkpoints.
+`mode=autonomous` generates design and decomposition non-interactively and
+continues through build without those front-half gates. `pr_mode` is
+independent of `mode`: autonomous does not imply PR creation.
+
+`pr_mode=none` performs no PR publication. `pr_mode=draft` pushes and opens or
+updates a draft PR after implementation, gap-analysis, and review all pass.
+`pr_mode=ready` pushes and opens or updates a ready-for-review PR after the
+same internal quality gates pass. V0 never merges automatically.
+
+The fix workflow keeps one sticky GitHub issue status comment. It creates the
+comment on first status update and stores the comment id/url on the canonical
+source or run metadata. Later transitions edit the same comment. If the comment
+was deleted, the workflow creates a replacement and updates metadata. The
+status comment is updated at major durable transitions only: triage
+completed/reused, generated planning artifacts, implementation started, PR
+opened/updated, failure/blocked states, and terminal completion.
+
+Rerunning issue-fix for the same issue resumes the latest active nonterminal
+run by default. If no active run exists, it creates a new run. If the issue body
+hash changed while a run is active, issue-fix runs/reuses triage for the new
+hash and asks the human whether to continue the old run with updated context or
+start fresh.
+
+Each issue-fix run owns one generated implementation convoy. Fix convoys
+created by `build-run` remain iteration-specific. The generated requirements
+artifact is mechanically derived from the triage report and issue body and is
+marked `status: approved` in both interactive and autonomous modes. For
+`not_reproduced` plus `test_hardening`, requirements, PR text, and comments must
+say test hardening and must not claim a confirmed bug fix.
+
+Existing PR reuse is author-safe. The workflow may update an existing PR only
+when all of the following are true:
+
+- the PR has the workflow marker for the same issue/source bead
+- the PR targets the same repo/base
+- the PR author is the authenticated GitHub actor resolved by the wrapper
+- the PR is nonterminal and compatible with requested `pr_mode`
+
+If a matching marker exists on a PR by another author, the workflow records
+`foreign_pr_exists` and asks the human whether to stop, create a separate PR, or
+handle it manually. It never updates someone else's PR.
+
+#### GitHub Artifact Layout
+
+GitHub adapter artifacts live under:
+
+```text
+<artifact-root>/github/
+  issues/<owner>/<repo>/<number>/
+    source.json
+    triage/
+      <body-hash>/
+        triage-report.md
+        comment.md
+        repro.patch
+        logs/
+    fix/
+      <run-id>/
+        requirements.md
+        design.md
+        tasks.md
+        context.yaml
+        status-comment.md
+        build/
+          final-report.md
+  pulls/<owner>/<repo>/<number>/
+    source.json
+    reviews/
+      <head-sha>/
+        review.md
+        comment.md
+```
+
+The `fix/<run-id>/` directory intentionally uses the same build-compatible
+layout as the generic `build` flow so `build-run` can consume it without
+GitHub-specific special cases.
 
 ### Drain Manifest Contract
 
@@ -1362,14 +1686,17 @@ Expected pack changes:
 - Add [gc/skills/build/SKILL.md](./skills/build/SKILL.md).
 - Add thin launch skills for implement/review/gap-analysis if the pack wants
   human-facing skill entry points for public formulas.
-- Replace [gc/scripts/create_beads_from_tasks.py](./scripts/create_beads_from_tasks.py)
-  with convoy-aware payload creation or add a new script and retire the old
-  one.
-- Add scripts for context bundle and verdict report validation.
+- Add convoy-aware payload creation at
+  [gc/assets/scripts/create_beads_from_tasks.py](./assets/scripts/create_beads_from_tasks.py),
+  or add a new helper there and retire the old one.
+- Add scripts for context bundle and verdict report validation under
+  `gc/assets/scripts/`.
 - Replace [gc/formulas/implement.formula.toml](./formulas/implement.formula.toml).
 - Add formula files for `build-run`, `do-work`, `do-work-item`,
   `gap-analysis`, `review`, `fix-convoy`, `same-session-implement`, and
   `publish`.
+- Add GitHub adapter formulas for `github-issue-triage`, `github-pr-review`,
+  and `github-issue-fix`.
 
 ## Testing
 
@@ -1407,6 +1734,18 @@ Unit tests:
 - publish dry-run tests cover identity, token scope, remote, branch collision,
   protected/default branches, force rejection, PR base, metadata sanitization,
   and partial-publish resume
+- GitHub URL validators reject shorthand and accept only full canonical issue
+  or PR URLs
+- issue triage idempotency is keyed only by issue body hash
+- PR review idempotency is keyed by PR head SHA
+- issue-fix reruns resume the latest active run by default
+- issue-fix `mode` and `pr_mode` are independent and v0 never merges
+- issue-fix existing PR reuse is limited to PRs authored by the authenticated
+  GitHub actor
+- GitHub workflows use sticky comments where specified and replace deleted
+  sticky comments idempotently
+- GitHub helper scripts live under `assets/scripts/`, with no legacy
+  script-directory compatibility shims
 
 Integration tests, once core prerequisites are available:
 
@@ -1424,6 +1763,12 @@ Integration tests, once core prerequisites are available:
 - build resumes from crashes after report writes, fix-plan writes, fix-convoy
   creation, implementation launch, final-report writes, and partial publish
 - publish can push without PR and PR creation implies push
+- GitHub issue triage repeats without duplicate comments for the same body hash
+- GitHub PR review repeats without duplicate comments for the same head SHA
+- GitHub issue fix resumes the latest active run and preserves one sticky issue
+  status comment
+- GitHub issue fix can publish no PR, a draft PR, or a ready PR, and never
+  merges
 
 High-risk runtime evidence matrix:
 
@@ -1445,6 +1790,9 @@ High-risk runtime evidence matrix:
 | publish preflight prevents unsafe remote mutation | protected branch, branch collision, token, PR base, and metadata fixtures | remote-aware collision and idempotent PR lookup | dry-run publish schema | remote and auth inspection |
 | approvals are hash-bound | stale approval after artifact edit, missing front-half gate | build-run refuses stale design/decompose/start approvals | approval validator schema | canonical content hashing |
 | build recovery is fenced and idempotent | lock takeover, stale owner, partial fix convoy, partial report, partial publish fixtures | crash/restart at every state-machine side effect | store CAS and lock fencing | conditional store primitives |
+| GitHub wrappers are swappable | wrapper fixtures for issue snapshots, PR snapshots, actor, comments, PR create/update, and auth failures | dry-run temp repo using `gh api` where available | wrapper JSON schema | `assets/scripts/github_api.py` |
+| GitHub idempotency is stable | body-hash and head-SHA fixtures, deleted comment replacement, stale metadata refresh | repeated triage/review/fix launches on unchanged inputs | source bead metadata keys | canonical GitHub source bead |
+| human gate results do not decide iteration semantics | gate result fixtures for approve, reject, and needs-iteration | mail/reply resume smoke test | human gate result schema | mail and bead resume support |
 
 Compatibility and rollout matrix:
 
@@ -1457,6 +1805,9 @@ Compatibility and rollout matrix:
 | build-run loops | conditional store primitives and durable artifact writes | checkpoint/resume and idempotent fix-convoy tests | enable `build` back half after recovery tests | final report with recovery status |
 | generated fix work | task payload, command, path, metadata validators | adversarial generated-work tests | no automatic fix execution until validators pass | reject fix plan |
 | publish | auth, ref, dry-run, and PR metadata checks | publish dry-run matrix | require explicit push/PR opt-in | no push or partial-publish recovery |
+| GitHub issue triage | `gh api` wrapper, sticky comment, triage report schema | body-hash idempotency and security/P0 human-gate tests | enable auto-post only after comment tests pass | terminal triage failure or human gate |
+| GitHub PR review | `gh api` wrapper, head-SHA snapshot, review report | head-SHA idempotency and sticky comment tests | default to `post_mode=human_gate` | report written but no public comment |
+| GitHub issue fix | triage, build-run, sticky status comment, PR publication wrapper | run-resume, `mode`, `pr_mode`, foreign PR, and no-merge tests | keep `pr_mode=none` default | final report or sticky status failure |
 
 ## Rollout
 
@@ -1468,14 +1819,18 @@ Compatibility and rollout matrix:
 6. Add same-session shared-lifecycle implementation helper.
 7. Add fix-convoy synthesis and build-run loop.
 8. Add publish helper and README usage.
-9. Run pack tests, formula asset validation, fake-city capability tests, and
+9. Move helper scripts to `assets/scripts/` and update formulas, skills, docs,
+   and tests to remove legacy script-directory references.
+10. Add GitHub wrapper script tests and adapter formula asset tests.
+11. Add GitHub issue triage, PR review, and issue fix skills/formulas.
+12. Run pack tests, formula asset validation, fake-city capability tests, and
    temp-city integration tests.
-10. Exercise against a Gas City core build that includes convoy-first graph.v2,
+13. Exercise against a Gas City core build that includes convoy-first graph.v2,
     drain prerequisites, structured hook statuses, continuation affinity,
     `gc.closed_seq`, and conditional store primitives.
-11. Keep same-session drain, automatic fix-convoy execution, and publish opt-ins
+14. Keep same-session drain, automatic fix-convoy execution, and publish opt-ins
     disabled until their matrix rows pass.
-12. Roll back by disabling public launch skills and leaving formulas installed
+15. Roll back by disabling public launch skills and leaving formulas installed
     but fail-closed through the capability gate.
 
 ## Requirement Coverage
@@ -1488,22 +1843,27 @@ Covered in v0:
 - `$implement`
 - `$review`
 - `$build`
-
-Partially covered:
-
-- GitHub PR creation is covered only as optional publish after implement/build.
-- GitHub PR review comments are not covered by the core `review` formula.
-
-Deferred:
-
 - `$gh-issue-triage`
 - `$gh-pr-review`
 - `$gh-issue-fix`
+
+Partially covered:
+
+- GitHub PR creation is covered through `github-issue-fix` `pr_mode` and the
+  generic publish helper. V0 never merges.
+- GitHub PR review comments are covered by `github-pr-review` as normal PR
+  comments, not formal GitHub review events.
+
+Deferred:
+
 - scripted convoy shredders beyond one-by-one
 - richer gather policies
 - dashboard visualizations
+- automatic merging
+- formal GitHub review API submissions
 
 ## Open Questions
 
-None blocking v0 implementation. Deferred GitHub wrapper behavior needs a later
-grill before implementation.
+None blocking the GitHub adapter implementation. The next implementation pass
+should keep the adapters thin over the generic `gc` primitives and avoid
+recreating bugflow/adopt-pr internals.
