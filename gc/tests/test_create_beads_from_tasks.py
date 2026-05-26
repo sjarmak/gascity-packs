@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from unittest import mock
 
-sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "scripts"))
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "assets" / "scripts"))
 
 import create_beads_from_tasks as script
 

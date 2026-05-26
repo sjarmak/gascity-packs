@@ -51,7 +51,7 @@ The current `gc` pack is a starter implementation:
   `requirements.md`.
 - [gc/skills/design/SKILL.md](./skills/design/SKILL.md) writes `design.md`.
 - [gc/skills/decompose/SKILL.md](./skills/decompose/SKILL.md) writes
-  `tasks.md` and then runs `scripts/create_beads_from_tasks.py`.
+  `tasks.md` and then runs `assets/scripts/create_beads_from_tasks.py`.
 - the legacy bead-creation script reads a payload with `epics[]` and `beads[]`,
   creates epic/task beads, and wires dependencies.
 - [gc/formulas/implement.formula.toml](./formulas/implement.formula.toml) is a

@@ -102,12 +102,12 @@ keys; the script resolves them to bead IDs.
 Use the pack script:
 
 ```bash
-python3 <pack-root>/scripts/create_beads_from_tasks.py <artifact-root>/<plan-slug>/tasks.md --dry-run
-python3 <pack-root>/scripts/create_beads_from_tasks.py <artifact-root>/<plan-slug>/tasks.md
+python3 <pack-root>/assets/scripts/create_beads_from_tasks.py <artifact-root>/<plan-slug>/tasks.md --dry-run
+python3 <pack-root>/assets/scripts/create_beads_from_tasks.py <artifact-root>/<plan-slug>/tasks.md
 ```
 
 If needed, pass an explicit city:
 
 ```bash
-python3 <pack-root>/scripts/create_beads_from_tasks.py tasks.md --city /path/to/city
+python3 <pack-root>/assets/scripts/create_beads_from_tasks.py tasks.md --city /path/to/city
 ```

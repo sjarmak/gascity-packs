@@ -11,10 +11,10 @@ implementation summary, diff, branch, or artifact set.
 ## Workflow
 
 1. Validate the optional context bundle with
-   `scripts/validate_context_bundle.py`.
+   `assets/scripts/validate_context_bundle.py`.
 2. Run the `review` formula in report mode. It does not mutate beads,
    branches, source files, or convoys.
-3. Validate the output with `scripts/validate_verdict_report.py --kind review`.
+3. Validate the output with `assets/scripts/validate_verdict_report.py --kind review`.
 
 ## Launch Contract
 

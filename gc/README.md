@@ -58,8 +58,8 @@ By default artifacts go under the target rig:
 Each skill may use a different artifact root when the user explicitly asks for
 one. The same `<plan-slug>/` structure should be used under the override root.
 
-`gc.decompose` uses `scripts/create_beads_from_tasks.py` after approval. The
-script requires Python 3 with PyYAML available, invokes `gc bd --rig
+`gc.decompose` uses `assets/scripts/create_beads_from_tasks.py` after approval.
+The script requires Python 3 with PyYAML available, invokes `gc bd --rig
 <target_rig>` for runnable beads, invokes `gc convoy --rig <target_rig>` for
 convoy heads and membership, and records the created mapping in `tasks.md`.
 
@@ -79,12 +79,12 @@ items:
 Each item has only `name`, `path`, and `description`. Validate with:
 
 ```sh
-python3 <pack-root>/scripts/validate_context_bundle.py context.yaml --allow-root <artifact-root>
+python3 <pack-root>/assets/scripts/validate_context_bundle.py context.yaml --allow-root <artifact-root>
 ```
 
 Gap-analysis and review reports use `schema: gc.verdict-report.v1` front matter
 with `verdict: pass|fail`. Validate with:
 
 ```sh
-python3 <pack-root>/scripts/validate_verdict_report.py report.md --kind review
+python3 <pack-root>/assets/scripts/validate_verdict_report.py report.md --kind review
 ```

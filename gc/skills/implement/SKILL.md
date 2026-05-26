@@ -11,7 +11,7 @@ to run implementation without the full build loop.
 ## Workflow
 
 1. Verify the target is a convoy or a normalized singleton convoy.
-2. Validate `context_path` with `scripts/validate_context_bundle.py` when one
+2. Validate `context_path` with `assets/scripts/validate_context_bundle.py` when one
    is provided.
 3. Launch the `implement` graph.v2 formula with the target convoy. Do not pass
    legacy `issue`, `bead_id`, or user-defined `convoy_id` variables.

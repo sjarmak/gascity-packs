@@ -68,7 +68,7 @@ class FormulaAssetTests(unittest.TestCase):
 
     def test_check_scripts_are_executable_and_portable(self) -> None:
         root = pathlib.Path(__file__).resolve().parents[1]
-        scripts = sorted((root / "scripts" / "checks").glob("*.sh"))
+        scripts = sorted((root / "assets" / "scripts" / "checks").glob("*.sh"))
 
         self.assertEqual(
             [script.name for script in scripts],
