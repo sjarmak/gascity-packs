@@ -89,7 +89,8 @@ debuggability). Pre-flags 7 recurring fixup themes. Verdict: `block`,
 gc pr-pipeline pr ship --rig api-server
 ```
 
-Four-stage pipeline: simplify → iterate self-review until clean →
+Four-stage pipeline: simplify → iterate an adversarial multi-reviewer
+panel (parallel reviewer subagents + adversarial synthesis) until clean →
 mechanical gates (build/vet/test/docs) → readiness report. **STOPS at
 the report.** Push and PR-open are explicit caller actions this formula
 never performs.
