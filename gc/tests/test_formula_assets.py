@@ -7,11 +7,7 @@ import unittest
 
 
 FORMULAS = {
-    "adopt-pr-review",
     "build-run",
-    "bug-hunt",
-    "bug-report-flow",
-    "bug-report-implementation",
     "design-review",
     "do-work",
     "do-work-item",
@@ -24,7 +20,6 @@ FORMULAS = {
     "github-issue-triage",
     "github-pr-review",
     "implement",
-    "post-merge-pr-review",
     "publish",
     "review",
     "same-session-implement",
@@ -46,10 +41,7 @@ ROLE_AGENTS = {
 }
 
 CATALOG_FORMULAS = {
-    "adopt-pr-review",
     "build-run",
-    "bug-hunt",
-    "bug-report-flow",
     "design-review",
     "gap-analysis",
     "github-issue-fix",
