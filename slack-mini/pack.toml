@@ -16,7 +16,7 @@
 #
 # This pack ships NO operator CLI binary: the single outbound verb is a
 # bash wrapper (commands/post-message.sh) that POSTs to the adapter through
-# gc's /svc/slack reverse proxy.
+# gc's /svc/slack-mini reverse proxy.
 #
 # Tiering: slack-mini strictly subsumed by slack-channel (Tier 2) and
 # slack-full (Tier 3). Pick exactly one Slack tier per city — they all

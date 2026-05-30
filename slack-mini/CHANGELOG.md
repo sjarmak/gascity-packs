@@ -9,7 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 Initial release. slack-mini is Tier 1 of the Slack pack family — the
 minimum viable Slack→gc surface, extracted from slack-pack per the
-tiering design memo (`docs/design/slack-pack-tiering.md`, `gc-yrw.1`).
+slack-pack tiering design memo (`docs/design/slack-pack-tiering.md`,
+landing separately; `gc-yrw.1`).
 
 ### Added
 

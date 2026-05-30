@@ -32,6 +32,7 @@ func TestVerifySlackSignature(t *testing.T) {
 	body := []byte(`{"type":"event_callback"}`)
 	now := strconv.FormatInt(time.Now().Unix(), 10)
 	stale := strconv.FormatInt(time.Now().Add(-10*time.Minute).Unix(), 10)
+	future := strconv.FormatInt(time.Now().Add(10*time.Minute).Unix(), 10)
 	valid := signSlack(secret, now, body)
 
 	tests := []struct {
@@ -45,6 +46,7 @@ func TestVerifySlackSignature(t *testing.T) {
 		{"wrong secret", "nope", now, valid, false},
 		{"tampered body sig", secret, now, signSlack(secret, now, []byte("other")), false},
 		{"stale timestamp", secret, stale, signSlack(secret, stale, body), false},
+		{"far-future timestamp", secret, future, signSlack(secret, future, body), false},
 		{"non-numeric timestamp", secret, "abc", valid, false},
 		{"empty secret", "", now, valid, false},
 		{"empty ts", secret, "", valid, false},
@@ -176,13 +178,13 @@ func TestLoadConfigFromEnv(t *testing.T) {
 	t.Run("proxy_process callback url", func(t *testing.T) {
 		cfg, err := loadConfigFromEnv(clone(map[string]string{
 			"GC_SERVICE_SOCKET":     "/tmp/s.sock",
-			"GC_SERVICE_URL_PREFIX": "/v0/city/mycity/svc/slack/",
+			"GC_SERVICE_URL_PREFIX": "/v0/city/mycity/svc/slack-mini/",
 			"GC_API_BASE_URL":       "http://127.0.0.1:8372",
 		}))
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
-		want := "http://127.0.0.1:8372/v0/city/mycity/svc/slack"
+		want := "http://127.0.0.1:8372/v0/city/mycity/svc/slack-mini"
 		if cfg.internalCallbackURL != want {
 			t.Errorf("internalCallbackURL = %q, want %q", cfg.internalCallbackURL, want)
 		}
@@ -396,7 +398,7 @@ func TestRegisterAdapter(t *testing.T) {
 		cityName:            "mycity",
 		provider:            "slack",
 		workspaceID:         "T123",
-		internalCallbackURL: "http://127.0.0.1:8372/v0/city/mycity/svc/slack",
+		internalCallbackURL: "http://127.0.0.1:8372/v0/city/mycity/svc/slack-mini",
 	}
 	if err := registerAdapter(context.Background(), cfg); err != nil {
 		t.Fatalf("registerAdapter: %v", err)

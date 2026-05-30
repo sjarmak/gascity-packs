@@ -10,7 +10,7 @@
 //   - Outbound: a UDS endpoint (/post-message) that posts plain text to a
 //     Slack channel via chat.postMessage using the workspace bot token.
 //     The pack's commands/post-message.sh wrapper reaches it through gc's
-//     /svc/slack reverse proxy. This is the only outbound verb at Tier 1.
+//     /svc/slack-mini reverse proxy. This is the only outbound verb at Tier 1.
 //
 // Tier 1 keeps NO on-disk registries: no channel bindings, no per-session
 // identity, no apps registry, no rig/room state. Those belong to
@@ -19,11 +19,13 @@
 //
 // Required env:
 //
-//	SLACK_BOT_TOKEN        Bot token (xoxb-...) for chat.postMessage and the
-//	                       inbound POST.
-//	SLACK_SIGNING_SECRET   HMAC secret for verifying Slack request signatures.
-//	                       Required at Tier 1 — there is no apps-registry
-//	                       fallback, so without it every inbound is rejected.
+//	SLACK_BOT_TOKEN        Bot token (xoxb-...) for outbound chat.postMessage.
+//	                       Not used on the inbound path (which only verifies
+//	                       the signing secret and POSTs to gc).
+//	SLACK_SIGNING_SECRET   HMAC secret for verifying Slack request signatures
+//	                       on the inbound bridge. Required at Tier 1 — there is
+//	                       no apps-registry fallback, so without it every
+//	                       inbound is rejected.
 //	SLACK_WORKSPACE_ID     Slack workspace (team) id; the extmsg account id.
 //	GC_CITY_NAME           gc city the adapter bridges into.
 //
@@ -404,8 +406,9 @@ func slackKindFromChannelType(channelType, channelID string) string {
 }
 
 // verifySlackSignature validates Slack's v0 HMAC request signature and
-// rejects stale (replayed) timestamps. Fails closed on any missing field
-// or parse error.
+// rejects timestamps whose absolute age exceeds the replay window — both
+// stale (past) and far-future. Fails closed on any missing field or parse
+// error.
 func verifySlackSignature(secret, ts string, body []byte, sig string) bool {
 	if secret == "" || ts == "" || sig == "" {
 		return false
@@ -414,7 +417,15 @@ func verifySlackSignature(secret, ts string, body []byte, sig string) bool {
 	if err != nil {
 		return false
 	}
-	if time.Since(time.Unix(tsInt, 0)) > slackReplayWindow {
+	// Reject when the absolute age exceeds the replay window — both stale
+	// (past) and far-future timestamps. time.Since yields a negative
+	// duration for future timestamps, so a one-sided ">" check would
+	// silently accept them.
+	age := time.Since(time.Unix(tsInt, 0))
+	if age < 0 {
+		age = -age
+	}
+	if age > slackReplayWindow {
 		return false
 	}
 	mac := hmac.New(sha256.New, []byte(secret))

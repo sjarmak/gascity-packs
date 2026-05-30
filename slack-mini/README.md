@@ -8,7 +8,8 @@ slack-mini is **Tier 1** of the Slack pack family — the smallest surface
 that gets a human talking to gc over Slack. It ships a single-file adapter
 and one outbound verb. No channel bindings, no per-session identity, no
 multi-rig routing — those live in `slack-channel` (Tier 2) and `slack-full`
-(Tier 3). See [`docs/design/slack-pack-tiering.md`](../docs/design/slack-pack-tiering.md).
+(Tier 3). See the [slack-pack tiering design memo](../docs/design/slack-pack-tiering.md)
+(landing separately).
 
 > Pick exactly one Slack tier per city. The tiers are alternatives, not
 > layers you stack.
