@@ -6,3 +6,4 @@ adapter/gc-slack-channel-adapter
 __pycache__/
 .pytest_cache/
 *.pyc
+adapter/*.out
