@@ -1,0 +1,51 @@
+name: CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: Check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+
+      - name: Set up Python
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065
+        with:
+          python-version: "3.12"
+
+      - name: Set up Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff
+        with:
+          go-version-file: slack-pack/adapter/go.mod
+          cache-dependency-path: |
+            slack-pack/adapter/go.sum
+            slack-pack/cli/go.sum
+
+      - name: Install Python test dependencies
+        run: python3 -m pip install PyYAML
+
+      - name: Validate registry
+        run: python3 validate_registry.py
+
+      - name: Run Gas City pack tests
+        run: python3 -m unittest discover -s gascity/tests -q
+
+      - name: Run RLM pack tests
+        run: python3 -m unittest discover -s rlm/tests -q
+
+      - name: Run Slack adapter tests
+        working-directory: slack-pack/adapter
+        run: go test ./...
+
+      - name: Run Slack CLI tests
+        working-directory: slack-pack/cli
+        run: go test ./...
