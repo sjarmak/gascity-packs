@@ -2,11 +2,23 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
 	"strings"
 )
+
+// statusForError maps a server-layer error to an HTTP status. Persistence
+// failures (errPersistence) are operational 500s; everything else is treated
+// as a caller error (400). Decode and required-field checks are handled
+// inline by each handler before reaching the server layer.
+func statusForError(err error) int {
+	if errors.Is(err, errPersistence) {
+		return http.StatusInternalServerError
+	}
+	return http.StatusBadRequest
+}
 
 type bindRequest struct {
 	ChannelID  string   `json:"channel_id"`
@@ -36,7 +48,7 @@ func (s *server) handleBind() http.HandlerFunc {
 		}
 		rec, err := s.upsertBinding(req.ChannelID, req.Kind, req.SessionIDs)
 		if err != nil {
-			writeJSONError(w, http.StatusBadRequest, err.Error())
+			writeJSONError(w, statusForError(err), err.Error())
 			return
 		}
 		log.Printf("bind: channel=%s kind=%s sessions=%s", rec.ChannelID, rec.Kind, strings.Join(rec.SessionIDs, ","))
@@ -54,7 +66,7 @@ func (s *server) handleIdentitySet() http.HandlerFunc {
 		}
 		rec, err := s.upsertIdentity(req.SessionID, req.Username, req.IconURL, req.IconEmoji)
 		if err != nil {
-			writeJSONError(w, http.StatusBadRequest, err.Error())
+			writeJSONError(w, statusForError(err), err.Error())
 			return
 		}
 		log.Printf("identity set: session=%s username=%q", rec.SessionID, rec.Username)
@@ -76,7 +88,7 @@ func (s *server) handleIdentityRemove() http.HandlerFunc {
 		}
 		removed, err := s.removeIdentity(req.SessionID)
 		if err != nil {
-			writeJSONError(w, http.StatusInternalServerError, err.Error())
+			writeJSONError(w, statusForError(err), err.Error())
 			return
 		}
 		log.Printf("identity remove: session=%s removed=%v", req.SessionID, removed)
@@ -94,7 +106,7 @@ func (s *server) handleAliasSet() http.HandlerFunc {
 		}
 		rec, err := s.upsertHandleAlias(req.Handle, req.SessionID)
 		if err != nil {
-			writeJSONError(w, http.StatusBadRequest, err.Error())
+			writeJSONError(w, statusForError(err), err.Error())
 			return
 		}
 		log.Printf("handle-alias set: handle=%s session=%s", rec.Handle, rec.SessionID)
@@ -116,7 +128,7 @@ func (s *server) handleAliasRemove() http.HandlerFunc {
 		}
 		removed, err := s.removeHandleAlias(req.Handle)
 		if err != nil {
-			writeJSONError(w, http.StatusInternalServerError, err.Error())
+			writeJSONError(w, statusForError(err), err.Error())
 			return
 		}
 		log.Printf("handle-alias remove: handle=%s removed=%v", normalizeHandle(req.Handle), removed)

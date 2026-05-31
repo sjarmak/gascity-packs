@@ -133,23 +133,41 @@ func TestHandleAliasRemoveRejectsEmptyHandle(t *testing.T) {
 	}
 }
 
-func TestRemoveSaveErrors(t *testing.T) {
+// TestPersistenceErrorsReturn500 verifies that registry handlers surface
+// on-disk save failures as 500 (operational) rather than 400 (caller error),
+// so operators can distinguish persistence problems from bad requests.
+func TestPersistenceErrorsReturn500(t *testing.T) {
 	srv := newTestServer(t)
+	// Seed records so the remove handlers reach the save path.
 	if _, err := srv.upsertIdentity("s1", "PL", "", ""); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := srv.upsertHandleAlias("mayor", "s1"); err != nil {
 		t.Fatal(err)
 	}
+	// Make the registry dir read-only so every saveJSONAtomic fails.
 	if err := os.Chmod(srv.cfg.registryDir, 0o500); err != nil {
 		t.Skip("chmod unsupported on this platform")
 	}
 	t.Cleanup(func() { _ = os.Chmod(srv.cfg.registryDir, 0o700) })
 
-	if rec := doMethod(http.MethodDelete, srv.handleIdentityRemove(), `{"session_id":"s1"}`); rec.Code != http.StatusInternalServerError {
-		t.Errorf("identity remove save error status=%d, want 500", rec.Code)
+	cases := []struct {
+		name   string
+		method string
+		h      http.HandlerFunc
+		body   string
+	}{
+		{"bind", http.MethodPost, srv.handleBind(), `{"channel_id":"C1","kind":"room","session_ids":["s1"]}`},
+		{"identity-set", http.MethodPost, srv.handleIdentitySet(), `{"session_id":"s2","username":"PL"}`},
+		{"identity-remove", http.MethodDelete, srv.handleIdentityRemove(), `{"session_id":"s1"}`},
+		{"alias-set", http.MethodPost, srv.handleAliasSet(), `{"handle":"ops","session_id":"s1"}`},
+		{"alias-remove", http.MethodDelete, srv.handleAliasRemove(), `{"handle":"mayor"}`},
 	}
-	if rec := doMethod(http.MethodDelete, srv.handleAliasRemove(), `{"handle":"mayor"}`); rec.Code != http.StatusInternalServerError {
-		t.Errorf("alias remove save error status=%d, want 500", rec.Code)
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if rec := doMethod(tc.method, tc.h, tc.body); rec.Code != http.StatusInternalServerError {
+				t.Errorf("save error status=%d, want 500", rec.Code)
+			}
+		})
 	}
 }
