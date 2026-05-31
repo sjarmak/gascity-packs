@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"strings"
@@ -114,6 +115,11 @@ func loadConfigFromEnv(getenv func(string) string) (config, error) {
 			return cfg, errors.New("GC_SERVICE_SOCKET is set but GC_SERVICE_URL_PREFIX is empty — controller-injected env is incomplete")
 		}
 		cfg.internalCallbackURL = cfg.gcAPIBase + urlPrefix
+	} else {
+		// Standalone TCP mode: no controller-injected URL prefix, so derive
+		// the callback base from the internal listener. Leaving it empty would
+		// self-register an empty callback_url and break gc→adapter callbacks.
+		cfg.internalCallbackURL = tcpCallbackURL(cfg.internalListen)
 	}
 
 	var missing []string
@@ -144,4 +150,21 @@ func loadConfigFromEnv(getenv func(string) string) (config, error) {
 		return cfg, fmt.Errorf("GC_CITY_NAME must not contain '/', '?', '#', or '%%': %q", cfg.cityName)
 	}
 	return cfg, nil
+}
+
+// tcpCallbackURL derives the gc→adapter callback base from the internal
+// listener address for standalone (TCP) mode, where there is no
+// proxy_process URL prefix. gc appends the endpoint path itself, so the
+// returned URL carries no trailing path. A wildcard or empty bind host is
+// rewritten to loopback because gc dials a concrete address.
+func tcpCallbackURL(internalListen string) string {
+	host, port, err := net.SplitHostPort(internalListen)
+	if err != nil {
+		return "http://" + internalListen
+	}
+	switch host {
+	case "", "0.0.0.0", "::":
+		host = "127.0.0.1"
+	}
+	return "http://" + net.JoinHostPort(host, port)
 }

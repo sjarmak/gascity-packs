@@ -133,4 +133,27 @@ func TestLoadConfigFromEnv(t *testing.T) {
 			t.Errorf("slackAPIBase = %q, want trimmed", cfg.slackAPIBase)
 		}
 	})
+
+	t.Run("tcp mode derives callback url from internal listener", func(t *testing.T) {
+		// No GC_SERVICE_SOCKET → standalone TCP mode. The callback must not be
+		// empty (an empty callback_url breaks gc→adapter callbacks).
+		cfg, err := loadConfigFromEnv(clone(nil))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		want := "http://" + defaultInternalListen
+		if cfg.internalCallbackURL != want {
+			t.Errorf("internalCallbackURL = %q, want %q", cfg.internalCallbackURL, want)
+		}
+	})
+
+	t.Run("tcp mode normalizes wildcard internal host to loopback", func(t *testing.T) {
+		cfg, err := loadConfigFromEnv(clone(map[string]string{"LISTEN_INTERNAL": "0.0.0.0:9001"}))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if cfg.internalCallbackURL != "http://127.0.0.1:9001" {
+			t.Errorf("internalCallbackURL = %q, want loopback-normalized", cfg.internalCallbackURL)
+		}
+	})
 }
