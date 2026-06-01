@@ -2,7 +2,6 @@ package main
 
 import (
 	"errors"
-	"fmt"
 	"maps"
 	"net/http"
 	"sort"
@@ -126,7 +125,7 @@ func (s *server) upsertBinding(channelID, kind string, sessionIDs []string) (cha
 	s.regMu.Unlock()
 
 	if err := saveJSONAtomic(s.cfg.channelMappingsPath(), snapshot); err != nil {
-		return channelBinding{}, fmt.Errorf("%w: %v", errPersistence, err)
+		return channelBinding{}, errors.Join(errPersistence, err)
 	}
 	return rec, nil
 }
@@ -186,7 +185,7 @@ func (s *server) upsertIdentity(sessionID, username, iconURL, iconEmoji string) 
 	s.regMu.Unlock()
 
 	if err := saveJSONAtomic(s.cfg.identitiesPath(), snapshot); err != nil {
-		return identity{}, fmt.Errorf("%w: %v", errPersistence, err)
+		return identity{}, errors.Join(errPersistence, err)
 	}
 	return rec, nil
 }
@@ -207,7 +206,7 @@ func (s *server) removeIdentity(sessionID string) (bool, error) {
 	s.regMu.Unlock()
 
 	if err := saveJSONAtomic(s.cfg.identitiesPath(), snapshot); err != nil {
-		return false, fmt.Errorf("%w: %v", errPersistence, err)
+		return false, errors.Join(errPersistence, err)
 	}
 	return true, nil
 }
@@ -240,7 +239,7 @@ func (s *server) upsertHandleAlias(handle, sessionID string) (handleAlias, error
 	s.regMu.Unlock()
 
 	if err := saveJSONAtomic(s.cfg.handleAliasesPath(), snapshot); err != nil {
-		return handleAlias{}, fmt.Errorf("%w: %v", errPersistence, err)
+		return handleAlias{}, errors.Join(errPersistence, err)
 	}
 	return rec, nil
 }
@@ -264,7 +263,7 @@ func (s *server) removeHandleAlias(handle string) (bool, error) {
 	s.regMu.Unlock()
 
 	if err := saveJSONAtomic(s.cfg.handleAliasesPath(), snapshot); err != nil {
-		return false, fmt.Errorf("%w: %v", errPersistence, err)
+		return false, errors.Join(errPersistence, err)
 	}
 	return true, nil
 }
