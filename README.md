@@ -68,3 +68,28 @@ rationale.
 
 Issues and pull requests are welcome. When a pack's surface changes, update
 its README in the same PR so the docs stay current with the code.
+
+### Publishing a pack to the registry
+
+`registry.toml` is the public catalog. Each `[[pack.release]]` carries a
+content hash that `validate_registry.py` enforces against the pack tree at the
+pinned `commit`. To register a new pack, commit it on your branch, then mint a
+ready-to-paste entry with the canonical hash:
+
+```bash
+# Print just the content hash for a pack at a given commit (default: HEAD)
+python3 validate_registry.py --compute <pack> --commit <ref>
+
+# Print a full [[pack]] block to paste into registry.toml
+python3 validate_registry.py --emit-entry <pack> \
+  --version 0.1.0 \
+  --pack-description "One-line catalog description." \
+  --release-description "Initial <pack> pack release."
+
+# Validate the catalog (default, no-arg invocation — same as CI)
+python3 validate_registry.py
+```
+
+The hash is derived from a sorted manifest of each tracked file's relative
+path, mode, and blob SHA-256 — so it is deterministic and reproducible. A
+maintainer re-pins releases to a single published commit at release time.
