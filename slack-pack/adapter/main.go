@@ -1430,18 +1430,26 @@ func handlePublishFile(cfg config, reg *identityRegistry) http.HandlerFunc {
 // The returned path is the cleaned absolute form, suitable for passing
 // to os.Stat / os.ReadFile.
 func confineFileUploadPath(root, path string) (string, error) {
+	_, pathAbs, _, err := confinedUploadPath(root, path)
+	return pathAbs, err
+}
+
+// confinedUploadPath is confineFileUploadPath's full-detail form: it
+// additionally returns the canonical root and the root-relative path,
+// which openBeneath needs for its component walk.
+func confinedUploadPath(root, path string) (rootAbs, pathAbs, rel string, err error) {
 	if root == "" {
-		return "", errors.New("FILE_UPLOAD_ROOT is empty")
+		return "", "", "", errors.New("FILE_UPLOAD_ROOT is empty")
 	}
 	if !filepath.IsAbs(root) {
-		return "", fmt.Errorf("FILE_UPLOAD_ROOT %q is not absolute", root)
+		return "", "", "", fmt.Errorf("FILE_UPLOAD_ROOT %q is not absolute", root)
 	}
 	if strings.TrimSpace(path) == "" {
-		return "", errors.New("path is empty")
+		return "", "", "", errors.New("path is empty")
 	}
-	rootAbs, err := filepath.Abs(root)
+	rootAbs, err = filepath.Abs(root)
 	if err != nil {
-		return "", fmt.Errorf("resolving root: %w", err)
+		return "", "", "", fmt.Errorf("resolving root: %w", err)
 	}
 	rootAbs = filepath.Clean(rootAbs)
 	// Best-effort symlink resolution on the root: if the operator
@@ -1450,14 +1458,14 @@ func confineFileUploadPath(root, path string) (string, error) {
 	if resolved, err := filepath.EvalSymlinks(rootAbs); err == nil {
 		rootAbs = resolved
 	}
-	pathAbs, err := filepath.Abs(path)
+	pathAbs, err = filepath.Abs(path)
 	if err != nil {
-		return "", fmt.Errorf("resolving path: %w", err)
+		return "", "", "", fmt.Errorf("resolving path: %w", err)
 	}
 	pathAbs = filepath.Clean(pathAbs)
-	rel, err := filepath.Rel(rootAbs, pathAbs)
+	rel, err = filepath.Rel(rootAbs, pathAbs)
 	if err != nil {
-		return "", fmt.Errorf("computing relative path: %w", err)
+		return "", "", "", fmt.Errorf("computing relative path: %w", err)
 	}
 	// Reject the root itself: the helper's contract is "file inside
 	// root", and any caller that later treats the returned path as a
@@ -1465,31 +1473,28 @@ func confineFileUploadPath(root, path string) (string, error) {
 	// directory-typed paths. Anything starting with ".." has escaped.
 	// An absolute rel (Windows volume crossing) is also out of bounds.
 	if rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
-		return "", fmt.Errorf("path %q is outside root %q", pathAbs, rootAbs)
+		return "", "", "", fmt.Errorf("path %q is outside root %q", pathAbs, rootAbs)
 	}
-	return pathAbs, nil
+	return rootAbs, pathAbs, rel, nil
 }
 
 // readConfinedFile reads realPath after re-asserting that it lies under
-// root, then opens with O_NOFOLLOW so a symlink that appears at the
-// leaf inode in the TOCTOU window between the caller's EvalSymlinks
-// resolution and the read causes the open to fail with ELOOP rather
-// than silently disclosing an arbitrary host file (gc-cby.10).
+// root, then opens it with openBeneath's component-wise walk so neither
+// a leaf symlink nor a parent directory swapped for a symlink in the
+// TOCTOU window between the caller's EvalSymlinks resolution and the
+// read can redirect the open outside root (gc-cby.10; the parent-swap
+// residual race was gpk-1ta4).
 //
 // realPath should be the filepath.EvalSymlinks-resolved canonical path
 // the caller has already verified with confineFileUploadPath; the
 // internal re-check makes the safe path the only path so a future call
 // site cannot regress arbitrary-read safety by skipping confinement.
-//
-// O_NOFOLLOW is leaf-only — a parent-directory component being swapped
-// to a symlink mid-flight is still followed by the kernel. Closing
-// that residual race requires openat2(2) with RESOLVE_BENEATH
-// (Linux ≥5.6) and is tracked separately.
 func readConfinedFile(root, realPath string) ([]byte, error) {
-	if _, err := confineFileUploadPath(root, realPath); err != nil {
+	rootAbs, _, rel, err := confinedUploadPath(root, realPath)
+	if err != nil {
 		return nil, err
 	}
-	f, err := os.OpenFile(realPath, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	f, err := openBeneath(rootAbs, rel)
 	if err != nil {
 		return nil, err
 	}
