@@ -112,7 +112,7 @@ func TestThreadContext_FirstMentionPrependsPreamble(t *testing.T) {
 		slackBotToken:           "xoxb-fake",
 		slackThreadContextLimit: 20,
 		threadContextCache:      newThreadContextCache(),
-		dispatchSem: defaultTestDispatchSem,
+		dispatchSem:             defaultTestDispatchSem,
 	}
 	rawMsg, _ := json.Marshal(slackMessageEvent{
 		Type:     "message",
@@ -198,7 +198,7 @@ func TestThreadContext_SecondMentionWithoutNewActivityNoPreamble(t *testing.T) {
 		slackBotToken:           "xoxb-fake",
 		slackThreadContextLimit: 20,
 		threadContextCache:      newThreadContextCache(),
-		dispatchSem: defaultTestDispatchSem,
+		dispatchSem:             defaultTestDispatchSem,
 	}
 
 	first, _ := json.Marshal(slackMessageEvent{
@@ -258,7 +258,7 @@ func TestThreadContext_NonThreadInboundSkipsFetch(t *testing.T) {
 		slackBotToken:           "xoxb-fake",
 		slackThreadContextLimit: 20,
 		threadContextCache:      newThreadContextCache(),
-		dispatchSem: defaultTestDispatchSem,
+		dispatchSem:             defaultTestDispatchSem,
 	}
 	// thread_ts empty: not a reply; no preamble path.
 	rawMsg, _ := json.Marshal(slackMessageEvent{
@@ -301,7 +301,7 @@ func TestThreadContext_ThreadParentSkipsFetch(t *testing.T) {
 		slackBotToken:           "xoxb-fake",
 		slackThreadContextLimit: 20,
 		threadContextCache:      newThreadContextCache(),
-		dispatchSem: defaultTestDispatchSem,
+		dispatchSem:             defaultTestDispatchSem,
 	}
 	rawMsg, _ := json.Marshal(slackMessageEvent{
 		Type:     "message",
@@ -355,7 +355,7 @@ func TestThreadContext_NoPriorsAfterFilteringEmitsNoPreamble(t *testing.T) {
 		slackBotToken:           "xoxb-fake",
 		slackThreadContextLimit: 20,
 		threadContextCache:      newThreadContextCache(),
-		dispatchSem: defaultTestDispatchSem,
+		dispatchSem:             defaultTestDispatchSem,
 	}
 	rawMsg, _ := json.Marshal(slackMessageEvent{
 		Type:     "message",
@@ -412,7 +412,7 @@ func TestThreadContext_FetchFailureRetriesNextInbound(t *testing.T) {
 		slackBotToken:           "xoxb-fake",
 		slackThreadContextLimit: 20,
 		threadContextCache:      newThreadContextCache(),
-		dispatchSem: defaultTestDispatchSem,
+		dispatchSem:             defaultTestDispatchSem,
 	}
 	mk := func(ts string) []byte {
 		raw, _ := json.Marshal(slackMessageEvent{
@@ -493,7 +493,7 @@ func TestThreadContext_CrossAgentDeltaVisibility(t *testing.T) {
 		slackBotToken:           "xoxb-fake",
 		slackThreadContextLimit: 20,
 		threadContextCache:      newThreadContextCache(),
-		dispatchSem: defaultTestDispatchSem,
+		dispatchSem:             defaultTestDispatchSem,
 	}
 	aliasReg := newTestHandleAliasRegistry(t)
 
@@ -602,7 +602,7 @@ func TestThreadContext_IsolationAcrossThreads(t *testing.T) {
 		slackBotToken:           "xoxb-fake",
 		slackThreadContextLimit: 20,
 		threadContextCache:      newThreadContextCache(),
-		dispatchSem: defaultTestDispatchSem,
+		dispatchSem:             defaultTestDispatchSem,
 	}
 
 	// Mayor is mentioned in thread A → cache pulls the prior.
@@ -864,9 +864,9 @@ func TestFormatThreadContextPreamble_FiltersAndFormats(t *testing.T) {
 // it overwrites the package-level slackAPIBase var.
 func TestFetchThreadReplies_QueryAndAuth(t *testing.T) {
 	var (
-		mu             sync.Mutex
-		capturedAuth   string
-		capturedQuery  string
+		mu            sync.Mutex
+		capturedAuth  string
+		capturedQuery string
 	)
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		mu.Lock()
