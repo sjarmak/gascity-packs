@@ -221,6 +221,25 @@ gc slack bind-dm --help
 gc slack reply-current --help
 ```
 
+## Doctor checks
+
+`doctor/` ships preflight checks for everything the pack assumes of
+the host, in the same shape as the sibling intake packs
+(`doctor/<name>/doctor.toml` + `doctor/check-<name>.sh`):
+
+| Check      | Verifies                                                                  |
+| ---------- | ------------------------------------------------------------------------- |
+| `binaries` | `adapter/gc-slack-adapter` and `cli/gc-slack-cli` are built in place      |
+| `env`      | The four must-set adapter vars are exported or present in the env file    |
+| `funnel`   | A Tailscale Funnel rule reaches the public listener (`LISTEN_PUBLIC` port; skipped with a note when tailscale isn't installed) |
+| `gc`       | The `gc` CLI is on PATH                                                   |
+| `python`   | python3 3.11+ is available for the helper commands                        |
+
+Each script prints a remediation hint and exits 2 on failure, so they
+can be run directly: `sh doctor/check-env.sh`. Adapter liveness is
+deliberately not a doctor check — gc already health-checks the
+proxy_process service via `health_path = "/healthz"`.
+
 ## Verify
 
 Assuming the adapter is up and the four must-set vars
