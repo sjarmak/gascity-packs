@@ -463,7 +463,12 @@ gc reload   # or: gc supervisor reload
 # 5. Verify the service is ready
 gc service list                            # expect: slack proxy_process ready
 curl --unix-socket "$(gc service show slack --json | jq -r .socket)" \
-     http://x/healthz                      # expect: 200 ok
+     http://x/healthz                      # expect: 200, first line "ok",
+                                           # then dispatch_dropped_total=N
+                                           # (inbound events dropped because
+                                           # the dispatch pool was saturated;
+                                           # a growing N means raise
+                                           # SLACK_DISPATCH_CONCURRENCY)
 
 # 6. Verify outbound publish through gc (replace the placeholders).
 #    GC_API_BASE_URL defaults to http://127.0.0.1:8372 on a single-host
