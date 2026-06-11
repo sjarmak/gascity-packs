@@ -19,7 +19,7 @@ this is the shortest path. Each step is copy-pasteable; swap names to taste.
 1. **Install Gas City and start a city** (skip steps you have already done):
 
    ```sh
-   brew install gastownhall/gascity/gascity
+   brew install gascity
    gc init ~/my-city
    cd ~/my-city
    gc start
@@ -33,30 +33,33 @@ this is the shortest path. Each step is copy-pasteable; swap names to taste.
    gc rig add .
    ```
 
-3. **Get the packs.** Clone this repo next to your city, or import straight
-   from git:
+3. **Import the base pack.** From the city directory:
 
    ```sh
-   git clone https://github.com/gastownhall/gascity-packs ~/gascity-packs
+   gc import add --name gc https://github.com/gastownhall/gascity-packs.git//gascity
    ```
 
-4. **Import the base pack and rig roles** in your city's `city.toml`:
+   This writes the import, fetches the latest release, and pins it in
+   `packs.lock` — no clone needed. (`gc import upgrade gc` moves the pin
+   later; contributors hacking on the packs themselves can point `source`
+   at a local clone instead.)
+
+4. **Import the rig roles** in your city's `city.toml`. Rig-scoped imports
+   are declared on the rig entry:
 
    ```toml
-   [imports.gc]
-   source = "/home/you/gascity-packs/gascity"
-
    [[rigs]]
    name = "your-project"
 
    [rigs.imports.gc]
-   source = "/home/you/gascity-packs/gascity/roles"
+   source = "https://github.com/gastownhall/gascity-packs.git//gascity/roles"
    ```
 
    The city-level import provides the workflow formulas and the `gc.mayor`
    coordinator skill; the rig-level `roles` import provides the worker agents
    (`gc.implementation-worker`, `gc.requirements-planner`, and friends) that
-   the formulas route work to.
+   the formulas route work to. Run `gc import install` after editing to
+   fetch anything newly referenced.
 
 5. **Run your first build.** Create a bead describing the goal, then launch
    the starter factory against it:
@@ -75,8 +78,13 @@ this is the shortest path. Each step is copy-pasteable; swap names to taste.
 6. **Pick a methodology when you want more opinion.** The four methodology
    packs below replace `build-basic`'s stages with vendored, battle-tested
    processes while keeping the same launch shape — import one at city scope
-   and sling its build formula instead (for example `--on bmad-build`). Each
-   pack's README has its own quick start.
+   and sling its build formula instead (for example `--on bmad-build`):
+
+   ```sh
+   gc import add https://github.com/gastownhall/gascity-packs.git//bmad
+   ```
+
+   Each pack's README has its own quick start.
 
 ## Which build pack should I use?
 
@@ -94,29 +102,27 @@ change to the formula name.
 
 ## Using a pack
 
-Packs live next to the consuming workspace. A typical layout:
+The canonical path is the import CLI — it writes the import, fetches the
+latest release, and pins the commit in `packs.lock`:
 
-```text
-your-city/
-  city.toml
-gascity-packs/
-  gascity/
-  bmad/
-  ...
+```sh
+gc import add https://github.com/gastownhall/gascity-packs.git//bmad
 ```
 
-Inside `city.toml` (or any pack's `pack.toml`):
-
-```toml
-[imports.bmad]
-source = "../gascity-packs/bmad"
-```
-
-Imports also accept git sources, fetched and pinned by `gc import install`:
+Which is equivalent to this in `city.toml` (or any pack's `pack.toml`),
+followed by `gc import install`:
 
 ```toml
 [imports.bmad]
 source = "https://github.com/gastownhall/gascity-packs.git//bmad"
+```
+
+Contributors working on the packs themselves can clone this repo and point
+`source` at a local path instead:
+
+```toml
+[imports.bmad]
+source = "../gascity-packs/bmad"
 ```
 
 Each pack documents its own prerequisites, import snippet, and usage.

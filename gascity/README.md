@@ -21,19 +21,26 @@ Prerequisites: Gas City installed and a city running (`gc init`, `gc start`),
 and your project added as a rig (`gc rig add .` inside the repo). See the
 [repository README](../README.md) for the from-scratch path.
 
-1. Import the pack twice in `city.toml` — once at city scope for formulas and
-   the mayor skill, once per rig for the worker role agents:
+1. Import the pack twice — once at city scope for formulas and the mayor
+   skill, once per rig for the worker role agents. From the city directory:
+
+   ```sh
+   gc import add --name gc https://github.com/gastownhall/gascity-packs.git//gascity
+   ```
+
+   Then add the rig-scoped roles import in `city.toml` and run
+   `gc import install`:
 
    ```toml
-   [imports.gc]
-   source = "../gascity-packs/gascity"
-
    [[rigs]]
    name = "your-project"
 
    [rigs.imports.gc]
-   source = "../gascity-packs/gascity/roles"
+   source = "https://github.com/gastownhall/gascity-packs.git//gascity/roles"
    ```
+
+   (Contributors hacking on the pack itself can point either `source` at a
+   local clone, for example `../gascity-packs/gascity`.)
 
 2. Create a bead describing what you want built, and sling the starter
    factory at it:

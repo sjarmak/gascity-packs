@@ -33,7 +33,7 @@ Prerequisites: git, and a repository you want agents to work on.
    done):
 
    ```sh
-   brew install gastownhall/gascity/gascity
+   brew install gascity
    gc init ~/my-city
    cd ~/my-city
    gc start
@@ -47,42 +47,33 @@ Prerequisites: git, and a repository you want agents to work on.
    gc rig add .
    ```
 
-3. **Get the packs.** Clone this repository next to your city:
+3. **Import the pack.** From the city directory, add `compound-engineering`
+   at city scope. This writes the import, fetches the latest release, and
+   pins it in `packs.lock` — no clone needed. The pack imports the Gas City
+   base pack internally as `gc`, so the `build-base` contract and `gc.*`
+   formulas come along transitively:
 
    ```sh
-   git clone https://github.com/gastownhall/gascity-packs ~/gascity-packs
+   gc import add https://github.com/gastownhall/gascity-packs.git//compound-engineering
    ```
 
-4. **Import the pack in your city's `city.toml`.** Import
-   `compound-engineering` at city scope; it imports the Gas City base pack
-   internally as `gc`, so the `build-base` contract and `gc.*` formulas come
-   along transitively. Each rig that should run work also needs the
-   `gascity/roles` import, which provides the worker role agents
-   (`gc.run-operator`, `gc.implementation-worker`, and friends) that formulas
-   route to:
+4. **Import the rig roles in `city.toml`.** Each rig that should run work
+   also needs the `gascity/roles` import, which provides the worker role
+   agents (`gc.run-operator`, `gc.implementation-worker`, and friends) that
+   formulas route to; run `gc import install` after editing:
 
    ```toml
-   [imports.compound-engineering]
-   source = "../gascity-packs/compound-engineering"
-
    [[rigs]]
    name = "your-project"
 
    [rigs.imports.gc]
-   source = "../gascity-packs/gascity/roles"
+   source = "https://github.com/gastownhall/gascity-packs.git//gascity/roles"
    ```
 
-   To pull the pack straight from git instead of a local clone, use a git
-   source and install it:
-
-   ```toml
-   [imports.compound-engineering]
-   source = "https://github.com/gastownhall/gascity-packs.git//compound-engineering"
-   ```
-
-   ```sh
-   gc import install
-   ```
+   Contributors working on the packs themselves can clone
+   `https://github.com/gastownhall/gascity-packs` and point either `source`
+   at the local path (for example `../gascity-packs/compound-engineering`)
+   instead.
 
 5. **Verify the formula is visible** from the rig context:
 

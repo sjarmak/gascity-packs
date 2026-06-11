@@ -41,7 +41,7 @@ These steps go from a fresh machine to a completed gstack sprint.
 1. Install Gas City and create a city:
 
    ```sh
-   brew install gastownhall/gascity/gascity
+   brew install gascity
    gc init ~/my-city && cd ~/my-city && gc start
    ```
 
@@ -51,33 +51,31 @@ These steps go from a fresh machine to a completed gstack sprint.
    mkdir proj && cd proj && git init && gc rig add .
    ```
 
-3. Import this pack at city scope, and import the Gas City roles pack on the
-   rig. Two imports are required: the methodology pack supplies the formulas
-   and `gstack.*` agents, and the rig-level `gascity/roles` import supplies the
-   `gc.*` role agents (run operator, publisher, implementation workers) that
-   the formulas route to. In your `city.toml`:
+3. Import this pack at city scope. From the city directory — this writes the
+   import, fetches the latest release, and pins it in `packs.lock`, no clone
+   needed:
+
+   ```sh
+   gc import add https://github.com/gastownhall/gascity-packs.git//gstack
+   ```
+
+   Then import the Gas City roles pack on the rig: the methodology pack
+   supplies the formulas and `gstack.*` agents, and the rig-level
+   `gascity/roles` import supplies the `gc.*` role agents (run operator,
+   publisher, implementation workers) that the formulas route to. In your
+   `city.toml`, then `gc import install`:
 
    ```toml
-   [imports.gstack]
-   source = "../gascity-packs/gstack"
-
    [[rigs]]
    name = "proj"
 
    [rigs.imports.gc]
-   source = "../gascity-packs/gascity/roles"
+   source = "https://github.com/gastownhall/gascity-packs.git//gascity/roles"
    ```
 
-   Imports also accept git sources, fetched and pinned by `gc import install`:
-
-   ```toml
-   [imports.gstack]
-   source = "https://github.com/gastownhall/gascity-packs.git//gstack"
-   ```
-
-   ```sh
-   gc import install
-   ```
+   Contributors working on the packs themselves can clone
+   `https://github.com/gastownhall/gascity-packs` and point either `source`
+   at the local path (for example `../gascity-packs/gstack`) instead.
 
 4. Create a bead for the goal and sling it onto `gstack-build`. The formula
    declares `target_required = true`, so it is launched against a bead (or

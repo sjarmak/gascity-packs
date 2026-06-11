@@ -28,7 +28,7 @@ Prerequisites: Gas City installed and a city running, plus a git repository
 registered as a rig. If you have not done that yet:
 
 ```sh
-brew install gastownhall/gascity/gascity
+brew install gascity
 gc init ~/my-city
 cd ~/my-city
 gc start
@@ -39,35 +39,32 @@ mkdir proj && cd proj && git init
 gc rig add .
 ```
 
-1. **Get the packs.** Clone this repository next to your city:
+1. **Import the pack.** From the city directory, add bmad at city scope. This
+   writes the import, fetches the latest release, and pins it in `packs.lock`
+   — no clone needed. The pack imports the Gas City base pack internally as
+   `gc`, so `build-base` and the `gc.*` formula surface are available
+   transitively:
 
    ```sh
-   git clone https://github.com/gastownhall/gascity-packs ~/gascity-packs
+   gc import add https://github.com/gastownhall/gascity-packs.git//bmad
    ```
 
-2. **Import the pack in `city.toml`.** Import bmad at city scope. The pack
-   imports the Gas City base pack internally as `gc`, so `build-base` and the
-   `gc.*` formula surface are available transitively. The rig additionally
-   needs the `gascity/roles` import so the `gc.*` role agents (operator,
-   publisher, and friends) can run work inside the target repository:
+2. **Import the rig roles in `city.toml`.** The rig additionally needs the
+   `gascity/roles` import so the `gc.*` role agents (operator, publisher,
+   and friends) can run work inside the target repository; run
+   `gc import install` after editing:
 
    ```toml
-   [imports.bmad]
-   source = "../gascity-packs/bmad"
-
    [[rigs]]
    name = "proj"
 
    [rigs.imports.gc]
-   source = "../gascity-packs/gascity/roles"
+   source = "https://github.com/gastownhall/gascity-packs.git//gascity/roles"
    ```
 
-   Imports also accept git sources, fetched and pinned by `gc import install`:
-
-   ```toml
-   [imports.bmad]
-   source = "https://github.com/gastownhall/gascity-packs.git//bmad"
-   ```
+   Contributors working on the packs themselves can clone
+   `https://github.com/gastownhall/gascity-packs` and point either `source`
+   at the local path (for example `../gascity-packs/bmad`) instead.
 
 3. **Launch your first build.** `bmad-build` is targeted
    (`target_required = true`), so create a bead describing the goal first,

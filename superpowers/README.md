@@ -37,7 +37,7 @@ run.
 1. **Install Gas City and start a city** (skip what you already have):
 
    ```sh
-   brew install gastownhall/gascity/gascity
+   brew install gascity
    gc init ~/my-city
    cd ~/my-city
    gc start
@@ -51,36 +51,32 @@ run.
    gc rig add .
    ```
 
-3. **Get the packs.** Clone this repo next to your city:
+3. **Import the pack.** From the city directory, add `superpowers` at city
+   scope. This writes the import, fetches the latest release, and pins it in
+   `packs.lock` — no clone needed. The pack imports the Gas City pack
+   internally as `gc`, so `build-base` and the shared `gc.*` formula surface
+   come along transitively:
 
    ```sh
-   git clone https://github.com/gastownhall/gascity-packs ~/gascity-packs
+   gc import add https://github.com/gastownhall/gascity-packs.git//superpowers
    ```
 
-4. **Import the pack and the rig roles** in your city's `city.toml`. Import
-   `superpowers` at city scope — it imports the Gas City pack internally as
-   `gc`, so `build-base` and the shared `gc.*` formula surface come along
-   transitively. Each rig that should run work also needs the `gascity/roles`
-   import, which provides the worker agents (`gc.run-operator`,
-   `gc.task-decomposer`, and friends) that formula steps route to:
+4. **Import the rig roles** in your city's `city.toml`. Each rig that should
+   run work also needs the `gascity/roles` import, which provides the worker
+   agents (`gc.run-operator`, `gc.task-decomposer`, and friends) that formula
+   steps route to; run `gc import install` after editing:
 
    ```toml
-   [imports.superpowers]
-   source = "../gascity-packs/superpowers"
-
    [[rigs]]
    name = "your-project"
 
    [rigs.imports.gc]
-   source = "../gascity-packs/gascity/roles"
+   source = "https://github.com/gastownhall/gascity-packs.git//gascity/roles"
    ```
 
-   Imports also accept git sources, fetched and pinned by `gc import install`:
-
-   ```toml
-   [imports.superpowers]
-   source = "https://github.com/gastownhall/gascity-packs.git//superpowers"
-   ```
+   Contributors working on the packs themselves can clone
+   `https://github.com/gastownhall/gascity-packs` and point either `source`
+   at the local path (for example `../gascity-packs/superpowers`) instead.
 
 5. **Run your first build.** `superpowers-build` is a targeted formula
    (`target_required = true`): create a bead describing the goal, then sling
