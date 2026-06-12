@@ -8,7 +8,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"log"
 	"net"
@@ -627,7 +626,7 @@ func TestHandlePublishInjectsIdentity(t *testing.T) {
 			cfg := config{slackBotToken: "xoxb-test"}
 			req := httptest.NewRequest(http.MethodPost, "/publish", strings.NewReader(tc.publishBody))
 			rec := httptest.NewRecorder()
-			handlePublish(cfg, reg, nil)(rec, req)
+			handlePublish(cfg, reg, nil, newPublishDedupCache(publishDedupTTL))(rec, req)
 
 			if rec.Code != http.StatusOK {
 				t.Fatalf("status = %d, want 200 (body=%q)", rec.Code, rec.Body.String())
@@ -695,7 +694,7 @@ func TestHandlePublishIdentityFallsBackToMetadataSourceSessionID(t *testing.T) {
 			cfg := config{slackBotToken: "xoxb-test"}
 			req := httptest.NewRequest(http.MethodPost, "/publish", strings.NewReader(tc.body))
 			rec := httptest.NewRecorder()
-			handlePublish(cfg, reg, nil)(rec, req)
+			handlePublish(cfg, reg, nil, newPublishDedupCache(publishDedupTTL))(rec, req)
 
 			if rec.Code != http.StatusOK {
 				t.Fatalf("status = %d, want 200 (body=%q)", rec.Code, rec.Body.String())
@@ -751,7 +750,7 @@ func TestHandlePublishRejectsEmptySession(t *testing.T) {
 			cfg := config{slackBotToken: "xoxb-test"}
 			req := httptest.NewRequest(http.MethodPost, "/publish", strings.NewReader(tc.body))
 			rec := httptest.NewRecorder()
-			handlePublish(cfg, reg, nil)(rec, req)
+			handlePublish(cfg, reg, nil, newPublishDedupCache(publishDedupTTL))(rec, req)
 
 			if rec.Code != http.StatusBadRequest {
 				t.Fatalf("status = %d, want 400 (body=%q)", rec.Code, rec.Body.String())
@@ -768,6 +767,126 @@ func TestHandlePublishRejectsEmptySession(t *testing.T) {
 				t.Errorf("error = %q, want %q", got["error"], want)
 			}
 		})
+	}
+}
+
+func TestHandlePublishDedupesOnIdempotencyKey(t *testing.T) {
+	// gpk-lbhl: a retry carrying the same idempotency key (the shape of an
+	// agent re-publishing after a delivered-but-timed-out POST) must return
+	// the original receipt WITHOUT posting a second Slack message.
+	reg, err := newIdentityRegistry(filepath.Join(t.TempDir(), "id.json"))
+	if err != nil {
+		t.Fatalf("newIdentityRegistry: %v", err)
+	}
+
+	origBase := slackAPIBase
+	t.Cleanup(func() { slackAPIBase = origBase })
+	var posts int
+	ts := "1700000000.000100"
+	fakeSlack := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		posts++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true,"ts":"` + ts + `"}`))
+	}))
+	t.Cleanup(fakeSlack.Close)
+	slackAPIBase = fakeSlack.URL
+
+	cfg := config{slackBotToken: "xoxb-test"}
+	dedup := newPublishDedupCache(publishDedupTTL)
+	handler := handlePublish(cfg, reg, nil, dedup)
+	body := `{"session_id":"gc-1","conversation":{"conversation_id":"C1","kind":"room"},"text":"hello","idempotency_key":"k-1"}`
+
+	publish := func() *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/publish", strings.NewReader(body))
+		rec := httptest.NewRecorder()
+		handler(rec, req)
+		return rec
+	}
+
+	first := publish()
+	if first.Code != http.StatusOK {
+		t.Fatalf("first publish status = %d, want 200 (body=%q)", first.Code, first.Body.String())
+	}
+	second := publish()
+	if second.Code != http.StatusOK {
+		t.Fatalf("retry status = %d, want 200 (body=%q)", second.Code, second.Body.String())
+	}
+
+	if posts != 1 {
+		t.Fatalf("Slack chat.postMessage called %d times, want 1 (retry must not re-post)", posts)
+	}
+	// Both responses must carry the same delivered receipt + message id.
+	for _, rec := range []*httptest.ResponseRecorder{first, second} {
+		var got publishReceipt
+		if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+			t.Fatalf("decode receipt %q: %v", rec.Body.String(), err)
+		}
+		if !got.Delivered || got.MessageID != ts {
+			t.Errorf("receipt = %+v, want delivered with message_id %q", got, ts)
+		}
+	}
+}
+
+func TestHandlePublishNoDedupWithoutKey(t *testing.T) {
+	// Without an idempotency key, every call is a fresh post — dedup must
+	// not collapse independent messages that merely share text.
+	reg, err := newIdentityRegistry(filepath.Join(t.TempDir(), "id.json"))
+	if err != nil {
+		t.Fatalf("newIdentityRegistry: %v", err)
+	}
+	origBase := slackAPIBase
+	t.Cleanup(func() { slackAPIBase = origBase })
+	var posts int
+	fakeSlack := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		posts++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true,"ts":"1.2"}`))
+	}))
+	t.Cleanup(fakeSlack.Close)
+	slackAPIBase = fakeSlack.URL
+
+	cfg := config{slackBotToken: "xoxb-test"}
+	handler := handlePublish(cfg, reg, nil, newPublishDedupCache(publishDedupTTL))
+	body := `{"session_id":"gc-1","conversation":{"conversation_id":"C1","kind":"room"},"text":"hi"}`
+	for i := 0; i < 2; i++ {
+		req := httptest.NewRequest(http.MethodPost, "/publish", strings.NewReader(body))
+		handler(httptest.NewRecorder(), req)
+	}
+	if posts != 2 {
+		t.Fatalf("Slack posts = %d, want 2 (no key => no dedup)", posts)
+	}
+}
+
+func TestPublishDedupCache(t *testing.T) {
+	clock := time.Unix(1_700_000_000, 0)
+	c := newPublishDedupCache(2 * time.Minute)
+	c.now = func() time.Time { return clock }
+
+	delivered := publishReceipt{Delivered: true, MessageID: "1.1"}
+
+	// Empty key is never stored or matched.
+	c.Put("", delivered)
+	if _, ok := c.Get(""); ok {
+		t.Error("empty key should never hit the cache")
+	}
+
+	// Non-delivered receipts are not cached: a retry must re-attempt.
+	c.Put("fail", publishReceipt{Delivered: false, FailureKind: "transient"})
+	if _, ok := c.Get("fail"); ok {
+		t.Error("non-delivered receipt must not be cached")
+	}
+
+	// Delivered receipt is replayed within the TTL window.
+	c.Put("k", delivered)
+	got, ok := c.Get("k")
+	if !ok || got.MessageID != "1.1" {
+		t.Fatalf("Get(k) = %+v, %v; want cached delivered receipt", got, ok)
+	}
+
+	// Past the TTL the entry is gone (and lazily evicted).
+	clock = clock.Add(2*time.Minute + time.Second)
+	if _, ok := c.Get("k"); ok {
+		t.Error("entry should have expired past its TTL")
 	}
 }
 
@@ -1009,129 +1128,10 @@ func TestDispatchToAliasedSession(t *testing.T) {
 		"--conversation-id C0B1NSK4N3T",
 		"--thread-ts 1234.5678",
 		"gc slack publish-to-channel",
-		"writing_hand",
 	} {
 		if !strings.Contains(gotBody.Message, want) {
 			t.Errorf("body missing %q\n--- body ---\n%s", want, gotBody.Message)
 		}
-	}
-}
-
-// TestDispatchToAliasedSessionPostsWarningReactOnFailure verifies that when
-// the gc session-messages endpoint returns a 4xx error, the adapter fires a
-// ⚠️ (warning) reaction on the originating Slack message so the drop is
-// visible in-channel rather than silently lost.
-func TestDispatchToAliasedSessionPostsWarningReactOnFailure(t *testing.T) {
-	// gc stub returns 404 (session closed / unknown).
-	gcStub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = io.ReadAll(r.Body)
-		w.WriteHeader(http.StatusNotFound)
-	}))
-	t.Cleanup(gcStub.Close)
-
-	// Slack stub captures the reactions.add call.
-	var gotChannel, gotName, gotTimestamp string
-	reactCh := make(chan struct{}, 1)
-	fakeSlack := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/reactions.add" {
-			w.WriteHeader(http.StatusOK)
-			return
-		}
-		var body struct {
-			Channel   string `json:"channel"`
-			Name      string `json:"name"`
-			Timestamp string `json:"timestamp"`
-		}
-		_ = json.NewDecoder(r.Body).Decode(&body)
-		gotChannel, gotName, gotTimestamp = body.Channel, body.Name, body.Timestamp
-		select {
-		case reactCh <- struct{}{}:
-		default:
-		}
-		_, _ = fmt.Fprint(w, `{"ok":true}`)
-	}))
-	t.Cleanup(fakeSlack.Close)
-
-	origBase := slackAPIBase
-	t.Cleanup(func() { slackAPIBase = origBase })
-	slackAPIBase = fakeSlack.URL
-
-	cfg := config{
-		gcAPIBase:     gcStub.URL,
-		cityName:      "ds-research",
-		slackBotToken: "xoxb-test",
-	}
-	inbound := externalInboundMessage{
-		ProviderMessageID: "9999.0001",
-		Conversation: conversationRef{
-			ConversationID: "C0B25SS12CD",
-		},
-		Actor: externalActor{ID: "U0B1N5KD6HF"},
-		Text:  "hello, are you there?",
-	}
-	if !dispatchToAliasedSession(cfg, "gc-dead-session", inbound, "dashboard") {
-		reactAliasDispatchFailure(cfg.slackBotToken,
-			inbound.Conversation.ConversationID, inbound.ProviderMessageID)
-	}
-
-	select {
-	case <-reactCh:
-		if gotName != "warning" {
-			t.Errorf("reaction name = %q, want %q", gotName, "warning")
-		}
-		if gotChannel != "C0B25SS12CD" {
-			t.Errorf("reaction channel = %q, want %q", gotChannel, "C0B25SS12CD")
-		}
-		if gotTimestamp != "9999.0001" {
-			t.Errorf("reaction timestamp = %q, want %q", gotTimestamp, "9999.0001")
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatal("warning reaction was not posted to Slack within 2s")
-	}
-}
-
-// TestDispatchToAliasedSessionNoReactWithoutToken verifies that when
-// slackBotToken is empty the failure reaction is skipped (no token → no
-// Slack API call possible).
-func TestDispatchToAliasedSessionNoReactWithoutToken(t *testing.T) {
-	gcStub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		_, _ = io.ReadAll(r.Body)
-		w.WriteHeader(http.StatusServiceUnavailable)
-	}))
-	t.Cleanup(gcStub.Close)
-
-	reactCh := make(chan struct{}, 1)
-	fakeSlack := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		select {
-		case reactCh <- struct{}{}:
-		default:
-		}
-		_, _ = fmt.Fprint(w, `{"ok":true}`)
-	}))
-	t.Cleanup(fakeSlack.Close)
-
-	origBase := slackAPIBase
-	t.Cleanup(func() { slackAPIBase = origBase })
-	slackAPIBase = fakeSlack.URL
-
-	// slackBotToken intentionally empty.
-	cfg := config{gcAPIBase: gcStub.URL, cityName: "ds-research"}
-	inbound := externalInboundMessage{
-		ProviderMessageID: "1.0",
-		Conversation:      conversationRef{ConversationID: "C1"},
-		Actor:             externalActor{ID: "U1"},
-		Text:              "ping",
-	}
-	if !dispatchToAliasedSession(cfg, "gc-dead", inbound, "bot") {
-		reactAliasDispatchFailure(cfg.slackBotToken,
-			inbound.Conversation.ConversationID, inbound.ProviderMessageID)
-	}
-
-	select {
-	case <-reactCh:
-		t.Fatal("Slack API was called despite empty slackBotToken")
-	case <-time.After(200 * time.Millisecond):
-		// expected: no call
 	}
 }
 
@@ -3517,15 +3517,11 @@ func TestHandleSlackEventsDropsWhenSemaphoreFull(t *testing.T) {
 	req.Header.Set("X-Slack-Signature", sig)
 	w := httptest.NewRecorder()
 
-	droppedBefore := dispatchDroppedTotal.Load()
 	handleSlackEvents(cfg, aliasReg, nil, nil, nil, nil)(w, req)
 
 	// Slack always sees 200 (we ack quickly to suppress retries).
 	if w.Result().StatusCode != http.StatusOK {
 		t.Errorf("status = %d, want 200", w.Result().StatusCode)
-	}
-	if got := dispatchDroppedTotal.Load(); got != droppedBefore+1 {
-		t.Errorf("dispatchDroppedTotal = %d, want %d (one drop counted)", got, droppedBefore+1)
 	}
 	// Sem was full: processSlackEvent never ran → no inbound POST hit
 	// the gc stub.
