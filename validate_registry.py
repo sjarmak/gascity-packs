@@ -238,7 +238,23 @@ def resolve_commit(root: Path, ref: str) -> str:
 
 def _toml_escape(value: str) -> str:
     """Escape a string for embedding in a TOML basic (double-quoted) string."""
-    return value.replace("\\", "\\\\").replace('"', '\\"')
+    result = []
+    for ch in value:
+        if ch == "\\":
+            result.append("\\\\")
+        elif ch == '"':
+            result.append('\\"')
+        elif ch == "\n":
+            result.append("\\n")
+        elif ch == "\r":
+            result.append("\\r")
+        elif ch == "\t":
+            result.append("\\t")
+        elif ord(ch) < 0x20 or ord(ch) == 0x7F:
+            raise ValueError(f"control character U+{ord(ch):04X} in field value")
+        else:
+            result.append(ch)
+    return "".join(result)
 
 
 def compute_pack_hash(root: Path, pack_path: str, commit: str) -> str:
@@ -283,6 +299,8 @@ def render_pack_entry(
 
 
 def _pack_toml_name(root: Path, pack: str) -> str:
+    if not PACK_NAME_RE.fullmatch(pack):
+        raise ValueError(f"invalid pack name {pack!r}")
     pack_toml = root / pack / "pack.toml"
     if not pack_toml.exists():
         raise ValueError(f"{pack}/pack.toml not found in working tree")
@@ -313,6 +331,12 @@ def main() -> int:
         help="commit-ish whose pack content is hashed/pinned (default: HEAD)",
     )
     parser.add_argument(
+        "--ref",
+        default="main",
+        metavar="REF",
+        help="git ref label for the source URL and release ref field (default: main)",
+    )
+    parser.add_argument(
         "--repo-url",
         default="https://github.com/gastownhall/gascity-packs",
         help="repository base URL for the source field of --emit-entry",
@@ -333,6 +357,9 @@ def main() -> int:
         return 2
 
     if args.compute:
+        if not PACK_NAME_RE.fullmatch(args.compute):
+            print(f"compute failed: invalid pack name {args.compute!r}", file=sys.stderr)
+            return 1
         try:
             commit = resolve_commit(root, args.commit)
             print(compute_pack_hash(root, args.compute, commit))
@@ -362,22 +389,20 @@ def main() -> int:
                 )
             commit = resolve_commit(root, args.commit)
             content_hash = compute_pack_hash(root, pack, commit)
-        except (ValueError, subprocess.CalledProcessError) as exc:
-            print(f"emit-entry failed: {exc}", file=sys.stderr)
-            return 1
-        print(
-            render_pack_entry(
+            entry = render_pack_entry(
                 name=pack,
                 description=args.pack_description,
-                source=f"{args.repo_url.rstrip('/')}/tree/main/{pack}",
+                source=f"{args.repo_url.rstrip('/')}/tree/{args.ref}/{pack}",
                 version=args.version,
-                ref="main",
+                ref=args.ref,
                 commit=commit,
                 content_hash=content_hash,
                 release_description=args.release_description,
-            ),
-            end="",
-        )
+            )
+        except (ValueError, subprocess.CalledProcessError) as exc:
+            print(f"emit-entry failed: {exc}", file=sys.stderr)
+            return 1
+        print(entry, end="")
         return 0
 
     errors = validate(Path(args.registry))
