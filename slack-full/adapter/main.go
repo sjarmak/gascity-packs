@@ -1714,7 +1714,16 @@ func slackPutFileBytes(uploadURL string, filename string, body []byte) error {
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
 		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return fmt.Errorf("upload POST %s: %s — %s", uploadURL, resp.Status, string(respBody))
+		// Redact the pre-signed upload URL — its query string carries a
+		// short-lived auth token; strip RawQuery so it does not reach adapter
+		// logs verbatim. url.Redacted() alone only handles userinfo passwords
+		// and would leave query-string tokens intact.
+		safeURL := uploadURL
+		if u, perr := url.Parse(uploadURL); perr == nil {
+			u.RawQuery = ""
+			safeURL = u.String()
+		}
+		return fmt.Errorf("upload POST %s: %s — %s", safeURL, resp.Status, string(respBody))
 	}
 	_, _ = io.Copy(io.Discard, resp.Body)
 	return nil

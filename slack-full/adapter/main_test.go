@@ -2974,6 +2974,35 @@ func TestSlackDownloadToFileRedactsUserinfoInError(t *testing.T) {
 	}
 }
 
+func TestSlackPutFileBytesRedactsTokenInError(t *testing.T) {
+	// Pre-signed Slack upload URLs carry auth tokens in query parameters
+	// (e.g. ?token=xoxe-...). A non-2xx response must not echo the raw
+	// URL — and its embedded token — into the error string that reaches
+	// adapter logs. url.URL.Redacted() replaces query values with "xxxxx".
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte("forbidden"))
+	}))
+	defer srv.Close()
+
+	u, _ := url.Parse(srv.URL + "/upload")
+	q := u.Query()
+	q.Set("token", "xoxe-supersecret-upload-token")
+	u.RawQuery = q.Encode()
+	tokenURL := u.String()
+
+	err := slackPutFileBytes(tokenURL, "test.txt", []byte("hello"))
+	if err == nil {
+		t.Fatal("expected error from non-2xx upload server, got nil")
+	}
+	if strings.Contains(err.Error(), "xoxe-supersecret-upload-token") {
+		t.Errorf("pre-signed token leaked in error: %v", err)
+	}
+	if !strings.Contains(err.Error(), "upload POST") {
+		t.Errorf("expected error to contain 'upload POST', got: %v", err)
+	}
+}
+
 func TestSlackDownloadToFileRejectsNonSlackHostHTTPS(t *testing.T) {
 	// Forged url_private pointing at a local TLS server. If the SSRF gate
 	// works, slackDownloadToFile must NOT make the HTTP request — verified
