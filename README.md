@@ -202,11 +202,44 @@ rationale.
 Issues and pull requests are welcome. When a pack's surface changes, update
 its README in the same PR so the docs stay current with the code.
 
+### Publishing registry releases
+
+Registry releases are content-addressed. Use the Make targets so the release
+commit and hash are stamped by `gc` instead of hand-authored:
+
+```sh
+GC=/path/to/gc make registry-publish \
+  PACK=slack-mini \
+  VERSION=0.1.1 \
+  DESCRIPTION="Release summary."
+```
+
+`GC` defaults to `gc`, so local testing can point it at an uninstalled build.
+`REGISTRY_COMMIT` defaults to `HEAD`, and only tracked files at that commit are
+hashed; commit pack content before publishing. For new packs, also pass
+`PACK_DESCRIPTION="..."`. To withdraw a bad consumed release without rewriting
+it:
+
+```sh
+make registry-withdraw \
+  PACK=slack-mini \
+  VERSION=0.1.0 \
+  REASON="Superseded by 0.1.1."
+```
+
+Before opening a PR, run:
+
+```sh
+make registry-format-validate
+GC=/path/to/gc make registry-validate
+```
+
+### Release compatibility and inference gates
+
 Supported pack releases are also gated by the registry-driven compatibility
 smoke in `scripts/pack_release_compat.py` and the
-`Pack Release Compatibility` workflow. The `gascity` pack additionally has a
-model-backed formula gate in `scripts/gascity_pack_inference_gate.py` and the
-`Gascity Pack Inference` workflow. That gate exercises both the `review`
-formula and a `build-basic` code-writing fixture that must pass pytest. See
+`Pack Release Compatibility` workflow. First-class supported packs also have a
+model-backed formula gate in `scripts/gascity_pack_inference_gate.py`, plus a
+scheduled supported-pack nightly workflow. See
 [Release Compatibility Testing](./docs/design/release-compatibility-testing.md)
 for the release-time and nightly test contract.
