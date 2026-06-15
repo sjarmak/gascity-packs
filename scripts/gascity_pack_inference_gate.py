@@ -40,6 +40,19 @@ GASTOWN_PACK = "gastown"
 GASCITY_REMOTE_SOURCE = "https://github.com/gastownhall/gascity.git"
 REVIEW_SUBJECT_PATH = Path(".gc/inference-gate/review-subject.diff")
 REVIEW_REPORT_PATH = Path(".gc/inference-gate/review-report.md")
+REVIEW_REPORT_METADATA_KEYS = (
+    "gc.build.code_review_report_path",
+    "gc.build.review_report_path",
+    "code_review.report_path",
+    "code_review.review_report_path",
+    "gc.var.report_path",
+    "report_path",
+)
+METHODOLOGY_REVIEW_REPORT_FALLBACKS = (
+    Path(".gc/inference-gate/artifacts/review-fix-summary.md"),
+    Path(".gc/inference-gate/artifacts/implementation-review-report.md"),
+    Path(".gc/inference-gate/artifacts/gap-analysis-report.md"),
+)
 REVIEW_FORMULA = "review"
 REVIEW_TITLE = "gascity pack inference gate: review"
 BUILD_BASIC_FORMULA = "build-basic"
@@ -1712,30 +1725,92 @@ def collect_diagnostics(gc_bin: str, workspace: GateWorkspace, *, env: Mapping[s
     return "\n".join(sections)
 
 
-def validate_review_report(gc_bin: str, workspace: GateWorkspace, *, env: Mapping[str, str], validator_source: Path) -> None:
-    report_path = workspace.rig_dir / REVIEW_REPORT_PATH
-    if not report_path.is_file():
-        raise GateError(f"review report was not created: {report_path}")
-    validator = validator_source / "assets" / "scripts" / "validate_build_artifact.py"
-    run_checked(
-        [sys.executable, str(validator), "--schema", "gc.build.review.v1", "--path", str(report_path)],
-        env=env,
-        timeout=parse_duration("1m"),
-        log_output=True,
-    )
-    require_expected_review_signal(report_path)
-    print(f"validated review report: {report_path}", flush=True)
+def validate_review_report(
+    root_bead: Mapping[str, Any],
+    workspace: GateWorkspace,
+    *,
+    env: Mapping[str, str],
+    pack_spec: PackSpec,
+) -> None:
+    validator = pack_spec.validator_source / "assets" / "scripts" / "validate_build_artifact.py"
+    if not validator.is_file():
+        raise GateError(f"review artifact validator was not found: {validator}")
+
+    allow_approved = pack_spec.name != GASCITY_PACK
+    failures: list[str] = []
+    for report_path in review_report_candidates(root_bead, workspace.rig_dir, pack_spec):
+        if not report_path.is_file():
+            failures.append(f"{report_path}: missing")
+            continue
+        try:
+            run_checked(
+                [sys.executable, str(validator), "--schema", "gc.build.review.v1", "--path", str(report_path)],
+                env=env,
+                timeout=parse_duration("1m"),
+                log_output=True,
+            )
+            require_expected_review_signal(report_path, allow_approved=allow_approved)
+        except (GateError, subprocess.CalledProcessError) as exc:
+            failures.append(f"{report_path}: {exc}")
+            continue
+        print(f"validated review report: {report_path}", flush=True)
+        return
+
+    detail = "\n".join(f"- {failure}" for failure in failures) if failures else "no candidate report paths"
+    raise GateError(f"review gate did not produce a valid expected review artifact:\n{detail}")
 
 
-def require_expected_review_signal(report_path: Path) -> None:
+def review_report_candidates(root_bead: Mapping[str, Any], rig_dir: Path, pack_spec: PackSpec) -> list[Path]:
+    candidates: list[Path] = []
+    for key in REVIEW_REPORT_METADATA_KEYS:
+        raw_path = metadata_value(root_bead, key)
+        if raw_path:
+            candidates.append(resolve_artifact_path(raw_path, base=rig_dir))
+
+    candidates.append(resolve_artifact_path(REVIEW_REPORT_PATH, base=rig_dir))
+    if pack_spec.name != GASCITY_PACK:
+        candidates.extend(resolve_artifact_path(path, base=rig_dir) for path in METHODOLOGY_REVIEW_REPORT_FALLBACKS)
+        artifacts_dir = rig_dir / ".gc" / "inference-gate" / "artifacts"
+        if artifacts_dir.is_dir():
+            candidates.extend(sorted(artifacts_dir.glob("*.md")))
+
+    unique: list[Path] = []
+    seen: set[Path] = set()
+    for candidate in candidates:
+        try:
+            resolved = candidate.resolve()
+        except OSError:
+            resolved = candidate
+        if resolved in seen:
+            continue
+        seen.add(resolved)
+        unique.append(resolved)
+    return unique
+
+
+def require_expected_review_signal(report_path: Path, *, allow_approved: bool = False) -> None:
     text = report_path.read_text(encoding="utf-8", errors="replace")
     lower = text.lower()
     has_risk = "shell" in lower and "injection" in lower and "subprocess" in lower
-    has_status = re.search(r"(?m)^status:\s*(changes_required|blocked)\s*$", text) is not None
+    has_blocking_status = re.search(r"(?m)^status:\s*(changes_required|blocked)\s*$", text) is not None
+    has_approved_status = re.search(r"(?m)^status:\s*approved\s*$", text) is not None
+    has_resolution = any(
+        marker in lower
+        for marker in (
+            "shell=false",
+            "argument-vector",
+            "argument vector",
+            "argument list",
+            "resolved",
+            "covered",
+            "fixed",
+        )
+    )
+    has_status = has_blocking_status or (allow_approved and has_approved_status and has_resolution)
     if not has_status or not has_risk:
         raise GateError(
-            "review report did not identify the expected shell-injection risk with a blocking status. "
-            f"status_ok={has_status} risk_ok={has_risk} report={report_path}"
+            "review report did not identify and handle the expected shell-injection risk. "
+            f"status_ok={has_status} risk_ok={has_risk} resolution_ok={has_resolution} report={report_path}"
         )
 
 
@@ -2504,7 +2579,7 @@ def run_review_gate(
     poll_interval: float,
 ) -> None:
     root_id = launch_review_formula(gc_bin, workspace, env=env, pack_spec=pack_spec)
-    wait_for_workflow_pass(
+    root_bead = wait_for_workflow_pass(
         gc_bin,
         workspace,
         root_id,
@@ -2512,7 +2587,7 @@ def run_review_gate(
         timeout=timeout,
         poll_interval=poll_interval,
     )
-    validate_review_report(gc_bin, workspace, env=env, validator_source=pack_spec.validator_source)
+    validate_review_report(root_bead, workspace, env=env, pack_spec=pack_spec)
     validate_required_routes(
         list_beads(gc_bin, workspace, env=env),
         pack_spec.required_review_routes,

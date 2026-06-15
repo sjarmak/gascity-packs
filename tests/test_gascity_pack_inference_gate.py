@@ -13,6 +13,22 @@ import pytest
 from scripts import gascity_pack_inference_gate
 
 
+def gate_workspace(root: Path) -> gascity_pack_inference_gate.GateWorkspace:
+    workspace = gascity_pack_inference_gate.GateWorkspace(
+        root=root,
+        city_dir=root / "city",
+        rig_dir=root / "fixture",
+        gc_home=root / "gc-home",
+        runtime_dir=root / "runtime",
+        claude_config_dir=root / "gc-home" / ".claude",
+        city_name="inference-city",
+        rig_name="fixture",
+    )
+    workspace.city_dir.mkdir()
+    workspace.rig_dir.mkdir()
+    return workspace
+
+
 def test_write_gate_workspace_uses_city_and_rig_scope_imports(tmp_path) -> None:
     pack_source = tmp_path / "repo" / "gascity"
     roles_source = pack_source / "roles"
@@ -548,6 +564,53 @@ esac
     assert "bd show fi-root --json" in args_path.read_text(encoding="utf-8")
 
 
+def test_validate_review_report_requires_blocking_base_gascity_report(tmp_path) -> None:
+    workspace = gate_workspace(tmp_path)
+    report_path = workspace.rig_dir / gascity_pack_inference_gate.REVIEW_REPORT_PATH
+    report_path.parent.mkdir(parents=True)
+    report_path.write_text(valid_review_artifact(status="changes_required"), encoding="utf-8")
+
+    gascity_pack_inference_gate.validate_review_report(
+        {"metadata": {}},
+        workspace,
+        env={},
+        pack_spec=gascity_pack_inference_gate.PACK_SPECS["gascity"],
+    )
+
+
+def test_validate_review_report_accepts_methodology_fix_summary_from_metadata(tmp_path) -> None:
+    workspace = gate_workspace(tmp_path)
+    report_path = workspace.rig_dir / ".gc" / "inference-gate" / "artifacts" / "review-fix-summary.md"
+    report_path.parent.mkdir(parents=True)
+    report_path.write_text(valid_review_artifact(status="approved"), encoding="utf-8")
+    pack_spec = replace(
+        gascity_pack_inference_gate.PACK_SPECS["superpowers"],
+        validator_source=gascity_pack_inference_gate.REPO_ROOT / "gascity",
+    )
+
+    gascity_pack_inference_gate.validate_review_report(
+        {"metadata": {"gc.build.code_review_report_path": str(report_path.relative_to(workspace.rig_dir))}},
+        workspace,
+        env={},
+        pack_spec=pack_spec,
+    )
+
+
+def test_validate_review_report_rejects_approved_base_gascity_report(tmp_path) -> None:
+    workspace = gate_workspace(tmp_path)
+    report_path = workspace.rig_dir / gascity_pack_inference_gate.REVIEW_REPORT_PATH
+    report_path.parent.mkdir(parents=True)
+    report_path.write_text(valid_review_artifact(status="approved"), encoding="utf-8")
+
+    with pytest.raises(gascity_pack_inference_gate.GateError, match="valid expected review artifact"):
+        gascity_pack_inference_gate.validate_review_report(
+            {"metadata": {}},
+            workspace,
+            env={},
+            pack_spec=gascity_pack_inference_gate.PACK_SPECS["gascity"],
+        )
+
+
 def test_expand_gate_selection_supports_build_basic_and_all() -> None:
     assert gascity_pack_inference_gate.expand_gate_selection("review") == ["review"]
     assert gascity_pack_inference_gate.expand_gate_selection("build") == ["build-basic"]
@@ -861,6 +924,24 @@ def test_validate_build_basic_artifacts_rejects_json_artifacts(tmp_path) -> None
             env={},
             validator_source=gascity_pack_inference_gate.REPO_ROOT / "gascity",
         )
+
+
+def valid_review_artifact(status: str) -> str:
+    artifact = valid_build_artifact("gc.build.review.v1").replace("status: approved", f"status: {status}", 1)
+    return (
+        artifact
+        + """
+## Security Finding
+
+The reviewed diff uses `subprocess.run(..., shell=True)` with user-controlled
+paths, which creates a shell injection risk.
+
+## Remediation
+
+The terminal report verifies the fix: use an argument vector / argument list
+with `shell=False`, and mark SEC-001 covered after tests pass.
+"""
+    )
 
 
 def valid_build_artifact(schema: str) -> str:
