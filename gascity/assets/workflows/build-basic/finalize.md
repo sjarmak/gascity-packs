@@ -69,6 +69,11 @@ Trace front matter must use the validator shape exactly:
 - Coverage statuses are not artifact statuses. Use `covered` for satisfied
   requirements; do not use `approved` in `trace.coverage[].status` or the
   Markdown coverage table.
+- Do not create any additional Markdown table with both an `ID` column and a
+  `Status` column unless it repeats the exact same coverage ID/status pairs.
+  For requirement or artifact summaries, use different column names such as
+  `Requirement` and `Result`, or use `covered` as the status for every covered
+  requirement.
 
 Keep it short and useful for a first-time factory user. Include the required
 schema sections:

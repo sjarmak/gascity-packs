@@ -141,6 +141,8 @@ def test_write_gate_workspace_imports_selected_pack_and_shared_validator(tmp_pat
     assert f'source = "{pack_source}"' in pack_toml
     assert "[rigs.imports.gc]" in city_toml
     assert f'source = "{roles_source}"' in city_toml
+    assert "[rigs.imports.superpowers]" in city_toml
+    assert f'source = "{pack_source}"' in city_toml
     assert (
         workspace.rig_dir / ".gc" / "scripts" / "validate_build_artifact.py"
     ).read_text(encoding="utf-8") == "print('shared-validator')\n"

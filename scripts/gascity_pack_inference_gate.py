@@ -800,6 +800,14 @@ def write_gate_workspace(
                 f"source = {toml_string(roles_source)}",
             ]
         )
+        if pack_binding != "gc":
+            city_lines.extend(
+                [
+                    "",
+                    f"[rigs.imports.{pack_binding}]",
+                    f"source = {toml_string(pack_source)}",
+                ]
+            )
     city_lines.append("")
     (city_dir / "city.toml").write_text("\n".join(city_lines), encoding="utf-8")
     (city_dir / ".gc" / "site.toml").write_text(

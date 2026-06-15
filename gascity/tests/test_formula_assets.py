@@ -1558,6 +1558,16 @@ class FormulaAssetTests(unittest.TestCase):
                     self.assertIn(fragment, text)
 
         for relative_path in (
+            "assets/workflows/build-basic/finalize.md",
+            "assets/workflows/build-basic-review/{target}.md",
+        ):
+            text = (root / relative_path).read_text(encoding="utf-8")
+            self.assertIn(
+                "Do not create any additional Markdown table with both an `ID` column and a",
+                text,
+            )
+
+        for relative_path in (
             "assets/workflows/do-work/implement.md",
             "assets/workflows/do-work-item/implement-item.md",
             "assets/workflows/implement/summarize.md",
