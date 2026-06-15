@@ -425,6 +425,13 @@ class DerivedPackCompatibilityTests(unittest.TestCase):
             "finalize": base_contract.FINAL_REPORT_GATE,
         }
         for pack_name, expected in DERIVED_PACKS.items():
+            review_report_gate = base_contract.REVIEW_REPORT_GATE
+            if pack_name == "superpowers":
+                review_report_gate = (
+                    base_contract.REVIEW_REPORT_GATE[0],
+                    "gc.build.code_review_report_path,"
+                    + base_contract.REVIEW_REPORT_GATE[1],
+                )
             formula_gates = {
                 expected["formula"]: build_gates,
                 expected["planning_formula"]: {
@@ -435,7 +442,7 @@ class DerivedPackCompatibilityTests(unittest.TestCase):
                     "decompose": base_contract.DECOMPOSITION_GATE,
                 },
                 expected["code_review_entry_formula"]: {
-                    "write-report": base_contract.REVIEW_REPORT_GATE,
+                    "write-report": review_report_gate,
                 },
             }
             if pack_name != "bmad":
