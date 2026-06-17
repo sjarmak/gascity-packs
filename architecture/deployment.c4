@@ -1,0 +1,77 @@
+// Deployment model — where each piece runs at review time.
+//
+// The packs are configuration that runs INSIDE a gascity city on a host. The
+// Slack pack's two binaries deploy differently: the adapter is a long-running
+// proxy_process the gc supervisor owns (public TCP for webhooks + a supervised
+// UDS for /publish), while the operator CLI is a one-shot the human runs.
+// Public webhooks reach the host through Tailscale Funnel; Slack, the model
+// backend, and the VCS providers are external substrates.
+
+deployment {
+
+  cityHost = host 'City host' {
+    description 'Where the gascity city + its imported packs run'
+
+    gcProc = proc 'gc orchestrator + supervisor' {
+      description 'Owns sessions/beads/extmsg; supervises pack proxy_process services and reverse-proxies /svc/<name>/*'
+      instanceOf gascity
+    }
+    adapterProc = proc 'gc-slack-adapter (proxy_process)' {
+      description 'Long-running. Public TCP :8775 for /slack/events; UDS for /publish + /healthz under gc supervision'
+      instanceOf packs.slackPack.adapter
+    }
+    cliProc = proc 'gc-slack-cli (one-shot)' {
+      description 'Operator-invoked per `gc slack <verb>`; writes registry JSON under <city>/.gc/slack/, not supervised'
+      instanceOf packs.slackPack.cli
+    }
+    discordProc = proc 'discord / github intake services' {
+      description 'Python proxy_process intake services for the other providers'
+      instanceOf packs.discordPack
+      instanceOf packs.githubIntake
+    }
+    rlmProc = proc 'rlm runtime' {
+      description 'Docker or local OpenAI-compatible runtime for long-context synthesis'
+      instanceOf packs.rlm
+    }
+    regStore = proc 'slack registries — <city>/.gc/slack/*.json' {
+      description 'Generated, SIGHUP-reloaded. CLI writes; adapter reads (apps, channel/rig/room-launch mappings, subteam-aliases)'
+    }
+  }
+
+  funnelHost = host 'Tailscale Funnel' {
+    instanceOf funnel
+  }
+
+  slackHost = host 'Slack' {
+    instanceOf slackApp
+  }
+
+  providerHost = host 'Discord / GitHub' {
+    instanceOf discordApp
+    instanceOf github
+  }
+
+  inferenceHost = host 'LLM backend' {
+    instanceOf inference
+  }
+
+  // Runtime data & control flow between processes/hosts.
+  funnelHost -> adapterProc ':443 → :8775 /slack/events + /slack/interactions'
+  slackHost -> funnelHost 'inbound events / interactions (HMAC-signed)'
+  adapterProc -> slackHost 'chat.postMessage / files / oauth (Web API)'
+  adapterProc -> gcProc 'extmsg.inbound + self-register (UDS via supervisor)'
+  gcProc -> adapterProc 'spawn + health-check + /publish'
+  cliProc -> regStore 'writes registry JSON'
+  regStore -> adapterProc 'SIGHUP reload (read-only)'
+  discordProc -> providerHost 'webhooks / gateway'
+  discordProc -> gcProc 'extmsg.inbound / bead create'
+  rlmProc -> inferenceHost 'long-context synthesis'
+}
+
+views {
+
+  deployment view deployment {
+    title 'Deployment — where each piece runs'
+    include *
+  }
+}

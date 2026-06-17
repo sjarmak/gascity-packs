@@ -1,0 +1,192 @@
+// Views over the gascity-packs model. Planned (#planned) and research
+// (#research) elements/relationships are dimmed + dashed so the "what ships vs
+// what is still a stub" split is readable at a glance.
+
+views {
+
+  // Landscape — the whole catalog in context: gascity + the chat/VCS surfaces.
+  view index {
+    title 'gascity-packs — system landscape'
+    include *
+
+    style * {
+      opacity 25%
+    }
+    style element.tag == #built, element.tag == #evolving {
+      opacity 100%
+    }
+    style element.tag == #planned {
+      color muted
+      border dashed
+    }
+    style element.tag == #research {
+      color indigo
+      border dashed
+    }
+  }
+
+  // The gascity-packs system, decomposed into its packs.
+  view packsSystem of packs {
+    title 'gascity-packs — the pack catalog (built vs planned)'
+    include *
+
+    style element.tag == #planned {
+      color muted
+      border dashed
+    }
+    style element.tag == #research {
+      color indigo
+      border dashed
+    }
+  }
+
+  // The Slack pack — the heavyweight provider extension, its components.
+  view slackPackContainer of packs.slackPack {
+    title 'slack-pack — adapter + CLI + helpers'
+    include *
+
+    style element.tag == #planned {
+      color muted
+      border dashed
+    }
+    style element.tag == #evolving {
+      color amber
+    }
+  }
+
+  // The Slack adapter Go binary — the component internals.
+  view adapterContainer of packs.slackPack.adapter {
+    title 'Slack adapter (gc-slack-adapter) — components'
+    include *
+
+    style element.tag == #planned {
+      color muted
+      border dashed
+    }
+    style element.tag == #evolving {
+      color amber
+    }
+  }
+
+  // The inbound event-dispatch fan-out (where the one stub lives).
+  view eventDispatchView of packs.slackPack.adapter.eventDispatch {
+    title 'Inbound event dispatch — routing fan-out'
+    include *
+
+    style element.tag == #planned {
+      color muted
+      border dashed
+    }
+  }
+
+  // The operator CLI internals.
+  view cliContainer of packs.slackPack.cli {
+    title 'Operator CLI (gc-slack-cli) — verbs + registry writers'
+    include *
+  }
+
+  // Risks & open questions — every #risk box with its question stated in-box.
+  view risks {
+    title 'Risks & open questions'
+    include
+      packs,
+      packs.slackPack,
+      packs.slackPack.adapter,
+      packs.slackPack.adapter.eventDispatch,
+      element.tag == #risk
+
+    style * {
+      opacity 30%
+    }
+    style element.tag == #risk {
+      opacity 100%
+      color red
+    }
+  }
+
+  // ───────────────────────────────────────────────────────────────────────
+  // Walkthrough flows (dynamic views) — the narrative spine of the review.
+  // ───────────────────────────────────────────────────────────────────────
+
+  // Flow 1 — a Slack message arrives and reaches a bound session.
+  dynamic view inboundFlow {
+    title 'Walkthrough — Slack message → bound session'
+    description 'Public webhook terminates at the adapter over Funnel; HMAC + dispatch gate admit it; the dispatcher routes it (alias / subteam / thread-context) and posts inbound to gc, which fans it out to the bound session(s).'
+
+    slackApp -> funnel 'event (HMAC-signed)'
+    funnel -> packs.slackPack.adapter.adapterHttp ':443 → :8775 /slack/events'
+    packs.slackPack.adapter.adapterHttp -> packs.slackPack.adapter.hmac 'verify + admit dispatch'
+    packs.slackPack.adapter.hmac -> packs.slackPack.adapter.eventDispatch 'admitted'
+    packs.slackPack.adapter.eventDispatch -> packs.slackPack.adapter.registries 'resolve channel / subteam → target'
+    packs.slackPack.adapter.eventDispatch.threadContext -> slackApp 'conversations.replies (unseen delta)'
+    packs.slackPack.adapter.eventDispatch -> gascity.extmsg 'extmsg.inbound + system-reminder'
+  }
+
+  // Flow 2 — an agent replies, peer fanout fires.
+  dynamic view outboundFlow {
+    title 'Walkthrough — agent reply → Slack (with peer fanout)'
+    description 'reply-current rides gc /extmsg/outbound so the publish is transcript-recorded and peer fanout reaches other bound sessions; gc calls the supervised adapter /publish, which fails closed without session attribution.'
+
+    packs.slackPack.pyHelpers -> gascity.extmsg 'gc slack reply-current --via gc'
+    gascity.extmsg -> packs.slackPack.adapter.publish '/publish over supervised UDS'
+    packs.slackPack.adapter.publish -> packs.slackPack.adapter.identityReg 'per-session identity override'
+    packs.slackPack.adapter.publish -> slackApp 'chat.postMessage (as the session persona)'
+    gascity.extmsg -> packs.slackPack.pyHelpers 'peer-publication reminder to other bound sessions'
+  }
+
+  // Flow 3 — slash command in a rig channel spawns work.
+  dynamic view slashToWorkFlow {
+    title 'Walkthrough — slash command → rig work (bead + sling)'
+    description 'A slash command in a rig-mapped channel opens a fix modal; on submit the adapter creates a bead and slings it in the rig workdir, then reminds the resolved session.'
+
+    slackApp -> funnel 'slash command'
+    funnel -> packs.slackPack.adapter.adapterHttp '/slack/interactions'
+    packs.slackPack.adapter.adapterHttp -> packs.slackPack.adapter.interactions 'workspace-gated dispatch'
+    packs.slackPack.adapter.interactions -> packs.slackPack.adapter.registries 'channel/rig → target'
+    packs.slackPack.adapter.interactions -> packs.slackPack.adapter.rigDispatch 'open fix modal → submit'
+    packs.slackPack.adapter.rigDispatch -> gascity.beads 'bd create + gc sling (rig workdir)'
+    packs.slackPack.adapter.rigDispatch -> gascity.extmsg 'system-reminder to the rig session'
+  }
+
+  // Flow 4 — operator setup: CLI writes a registry, SIGHUP reloads it.
+  dynamic view setupFlow {
+    title 'Walkthrough — operator setup (map-channel → SIGHUP reload)'
+    description 'The one-shot CLI writes a registry JSON under <city>/.gc/slack/; SIGHUP triggers an all-or-nothing reload so the adapter routes by the new mapping without a restart.'
+
+    human -> packs.slackPack.cli.cliVerbs 'gc slack map-channel C0… --session …'
+    packs.slackPack.cli.cliVerbs -> packs.slackPack.cli.cliState 'validate + build record'
+    packs.slackPack.cli.cliState -> packs.slackPack.adapter.registries 'write channel_mappings.json'
+    human -> packs.slackPack.adapter.adapterHttp 'pkill -HUP gc-slack-adapter'
+    packs.slackPack.adapter.adapterHttp -> packs.slackPack.adapter.registries 'all-or-nothing reload'
+    packs.slackPack.adapter.registries -> packs.slackPack.adapter.eventDispatch 'new routing live'
+  }
+
+  // Planned / research lens — the @@launcher stub and the shared-lib direction.
+  view planned {
+    title 'Planned & research work'
+    include
+      packs,
+      packs.slackPack,
+      packs.slackPack.adapter,
+      packs.slackPack.adapter.eventDispatch,
+      packs.slackPack.adapter.eventDispatch.doubleHandle,
+      packs.slackPack.adapter.oauth,
+      packs.discordIntake,
+      packs.extmsgLib,
+      packs.discordPack
+
+    style * {
+      opacity 30%
+    }
+    style element.tag == #planned {
+      opacity 100%
+      color muted
+      border dashed
+    }
+    style element.tag == #research {
+      opacity 100%
+      color indigo
+      border dashed
+    }
+  }
+}

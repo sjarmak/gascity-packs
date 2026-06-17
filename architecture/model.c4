@@ -1,0 +1,395 @@
+// The `gascity-packs` catalog — opt-in configuration packs for Gas City.
+//
+// The repo's reason to exist: keep a catalog of configuration-pure packs
+// (Slack/Discord/GitHub adapters, PR-discipline formulas, skill overlays,
+// long-context sidecar, session theming) that turn a generic gascity city
+// into something opinionated WITHOUT forking the orchestrator. Packs stay
+// ZFC-clean: plumbing only, no hardcoded roles, no private SDK leakage.
+//
+// The Slack pack is the heavyweight: two Go binaries (a long-running webhook
+// adapter gc supervises as a proxy_process, and a one-shot operator CLI) plus
+// Python helpers. It is modelled at component granularity; the sibling packs
+// are modelled as containers since they are configuration bundles.
+//
+// Planned and scaffold work is tagged (see spec.c4) so it renders distinctly
+// from what already ships. Elements `link` to their real source so any box is
+// one click from the code.
+
+model {
+
+  human = actor 'Human operator' {
+    description 'Maintainer / teammate who chats from Slack, runs `gc slack` verbs, and opts packs into a city'
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // External systems — the orchestrator the packs configure, and the chat /
+  // VCS surfaces the adapter packs bridge into it.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  gascity = externalSystem 'Gas City orchestrator' {
+    description 'The multi-agent orchestration SDK packs plug into. Supervises pack services, runs formulas/agents, owns sessions, beads, and the extmsg bridge. Packs are config-pure against its stable contract'
+    link https://github.com/gastownhall/gascity 'gastownhall/gascity'
+
+    extmsg = externalSystem 'extmsg bridge (gc HTTP API)' {
+      description 'gc /extmsg/{inbound,outbound,adapters,bind,retry} + /v0/session/.../messages — the typed surface every chat adapter pack registers against. Owns transcript recording + peer fanout'
+    }
+    supervisor = externalSystem 'service supervisor' {
+      description 'Starts/health-checks proxy_process services declared in pack.toml; injects GC_SERVICE_SOCKET/URL_PREFIX and reverse-proxies /svc/<name>/*'
+    }
+    beads = datastore 'beads (bd) work store' {
+      description 'The work spine pack formulas + rig dispatch create against (`bd create`, `gc sling`)'
+    }
+  }
+
+  slackApp = externalSystem 'Slack' {
+    description 'Slack workspace + app: Events API, slash commands, interactions (block_actions / view_submission), Web API (chat.postMessage, files, usergroups), OAuth'
+  }
+
+  discordApp = externalSystem 'Discord' {
+    description 'Discord guild + app: gateway, slash commands, DMs/rooms — bridged by the discord intake packs'
+  }
+
+  github = externalSystem 'GitHub' {
+    description 'GitHub app + webhooks — issue `/gc fix` intake, branch push, PR creation via github-intake'
+  }
+
+  funnel = externalSystem 'Tailscale Funnel' {
+    description 'Public TLS ingress (:443 → adapter LISTEN_PUBLIC) terminating Slack/Discord/GitHub webhooks to the host'
+  }
+
+  inference = externalSystem 'LLM / OpenAI-compatible backend' {
+    description 'The model endpoint the rlm long-context sidecar calls; also the substrate every formula ultimately delegates reasoning to (ZFC)'
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // The gascity-packs catalog.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  packs = system 'gascity-packs' {
+    description 'Opt-in pack catalog: chat/VCS adapters, PR-discipline formulas, skill overlays, runtime sidecars — config-pure extensions a city path-imports'
+    link ../README.md 'README'
+    link ../AGENTS.md 'Pack invariants (Do / Don\'t)'
+    link ../registry.toml 'release registry'
+    link ../.gc/project-brief.md 'Maintainer intent'
+
+    // ── Slack pack — the heavyweight provider extension (two Go binaries) ───
+    slackPack = container 'slack-pack' {
+      #evolving
+      description 'Slack provider for gc: Go webhook adapter (proxy_process) + Go operator CLI + Python helpers. Feature-by-feature port of the discord pack; not yet at parity'
+      technology 'Go + Python'
+      link ../slack-pack 'slack-pack/'
+      link ../slack-pack/README.md 'pack README'
+      link ../slack-pack/pack.toml 'pack.toml (schema 2)'
+
+      adapter = component 'Slack adapter (gc-slack-adapter)' {
+        #built
+        description 'Long-running webhook receiver + outbound publisher. gc supervises it as a proxy_process; public TCP :8775 for /slack/events, UDS for /publish + /healthz'
+        technology 'Go'
+        link ../slack-pack/adapter 'adapter/'
+        link ../slack-pack/adapter/main.go 'main.go'
+
+        adapterHttp = component 'HTTP server + listeners' {
+          #built
+          description 'Boots public TCP + internal-UDS/TCP muxes, SIGHUP reload loop, graceful shutdown; routes /slack/events, /slack/interactions, /publish, /publish-file, /react, /identity, /handle-alias, /healthz, /slack/oauth/*'
+          link ../slack-pack/adapter/main.go 'main.go'
+        }
+        hmac = component 'HMAC verify + dispatch pool' {
+          #built
+          description 'Trial-verifies Slack signatures against per-app secrets (apps registry) with env fallback; bounds inbound-dispatch goroutines (SLACK_DISPATCH_CONCURRENCY) and counts drops on saturation'
+          link ../slack-pack/adapter/dispatch_drops.go 'dispatch_drops.go'
+        }
+        eventDispatch = component 'inbound event dispatch' {
+          #built
+          description 'Routes a Slack event to single-@ alias / double-@@ launcher / subteam-mention / thread-context / default-channel fanout'
+          link ../slack-pack/adapter/main.go 'main.go'
+
+          doubleHandle = component '@@launcher dispatch' {
+            #planned
+            #risk
+            description 'Parses `@@<handle>` and recognizes free-vs-claimed handles, but the new-session spawn is a placeholder ephemeral. RISK: README lists this as the one Not-Yet-Implemented surface — adapter-side AcquireOrCreate spawn is deferred to the gc-cby epic'
+            link ../slack-pack/adapter/double_handle_prefix.go 'double_handle_prefix.go'
+            link ../slack-pack/adapter/double_handle_dispatch.go 'double_handle_dispatch.go'
+          }
+          subteam = component 'subteam mention routing' {
+            #built
+            description 'Routes labeled `<!subteam^S..|@handle>` via the handle-alias registry and unlabeled `<!subteam^S..>` via the operator-edited subteam-alias map'
+            link ../slack-pack/adapter/subteam_mention_prefix.go 'subteam_mention_prefix.go'
+            link ../slack-pack/adapter/subteam_alias_map.go 'subteam_alias_map.go'
+          }
+          threadContext = component 'thread context preamble' {
+            #built
+            description 'Per-target (target,channel,thread)→last-seen cache; fetches conversations.replies and prepends the unseen delta as a system-reminder for cross-agent thread visibility'
+            link ../slack-pack/adapter/thread_context.go 'thread_context.go'
+          }
+        }
+
+        interactions = component 'interactions endpoint' {
+          #built
+          description 'POST /slack/interactions: slash commands, block_actions (button/select), and view_submission (modal) — workspace-gated by team.id; forwards response_url to the session'
+          link ../slack-pack/adapter/interactions.go 'interactions.go'
+          link ../slack-pack/adapter/interactions_modal.go 'interactions_modal.go'
+        }
+
+        rigDispatch = component 'rig / room dispatch' {
+          #built
+          description 'Slash command in a rig-mapped channel opens a fix modal, then `bd create` + `gc sling` in the rig workdir; thread-bound room-launch resolves a thread root and registers the handle alias'
+          link ../slack-pack/adapter/rig_dispatch.go 'rig_dispatch.go'
+          link ../slack-pack/adapter/room_launch_dispatch.go 'room_launch_dispatch.go'
+          link ../slack-pack/adapter/thread_session_registry.go 'thread_session_registry.go'
+        }
+
+        registries = datastore 'reload registries (JSON, SIGHUP)' {
+          #built
+          description 'apps / channel_mappings / rig_mappings / room_launch_mappings / subteam-aliases. All-or-nothing reload on SIGHUP; generation-stamped to survive an OAuth-write race'
+          link ../slack-pack/adapter/registry_reload.go 'registry_reload.go'
+          link ../slack-pack/adapter/apps_registry.go 'apps_registry.go'
+        }
+
+        publish = component 'outbound publish + self-register' {
+          #built
+          description '/publish → Slack chat.postMessage (fails closed without session attribution); /publish-file symlink-confined upload; registers with gc /extmsg/adapters at start'
+          link ../slack-pack/adapter/main.go 'main.go'
+          link ../slack-pack/adapter/confined_open.go 'confined_open.go'
+        }
+
+        oauth = component 'OAuth install flow' {
+          #evolving
+          #risk
+          description '/slack/oauth/{start,callback} exchanges the code and persists token+secret to the apps registry. RISK: single-tenant by design (gc-cby.9); writes install.env that the operator must still re-source — not a full installer'
+          link ../slack-pack/adapter/oauth.go 'oauth.go'
+        }
+
+        inboundFiles = component 'inbound file store + janitor' {
+          #built
+          description 'Downloads inbound Slack attachments into INBOUND_FILE_STORE/<channel>/<ts>-<name> (0o600); background TTL sweep + orphan-tmp cleanup'
+          link ../slack-pack/adapter/tmp_sweep.go 'tmp_sweep.go'
+        }
+
+        identityReg = datastore 'identity + handle-alias stores' {
+          #built
+          description 'Adapter-owned JSON: per-session chat:write.customize identity overrides, and cross-channel @handle→session aliases. Written in-process via /identity + /handle-alias (not SIGHUP)'
+          link ../slack-pack/adapter/main.go 'main.go'
+        }
+      }
+
+      cli = component 'Operator CLI (gc-slack-cli)' {
+        #built
+        description 'One-shot Cobra binary backing `gc slack <verb>`; writes the SIGHUP-reloaded registries under <city>/.gc/slack/. Wrapped by commands/<verb>.sh'
+        technology 'Go'
+        link ../slack-pack/cli 'cli/'
+        link ../slack-pack/cli/main.go 'main.go'
+
+        cliVerbs = component 'verbs: import-app / map-* / sync-* / post-message / enable-room-launch' {
+          #built
+          description 'import-app, map-channel, map-rig, sync-commands, sync-subteam-aliases, post-message (chat.postMessage/update), enable-room-launch (writes room_launch_mappings.json)'
+          link ../slack-pack/cli/cmd 'cli/cmd/'
+        }
+        cliState = component 'registry state writers' {
+          #built
+          description 'Wire-compatible CRUD for apps / channels / rigs / rooms / blockkit / workspace records; RuntimePath resolves <city>/.gc/slack/ without importing gc internals'
+          link ../slack-pack/cli/internal 'cli/internal/'
+          link ../slack-pack/cli/runtime_path.go 'runtime_path.go'
+        }
+      }
+
+      pyHelpers = component 'Python chat helpers' {
+        #built
+        description 'bind / reply-current / publish / publish-to-channel / react / identity / handle-alias / upload / retry-peer-fanout / status — talk to gc /extmsg or the adapter directly (--via)'
+        technology 'Python'
+        link ../slack-pack/scripts 'scripts/'
+        link ../slack-pack/commands 'commands/'
+      }
+
+      slackService = component 'pack.toml service + doctor' {
+        #built
+        description '[[service]] proxy_process declaration gc supervises; doctor/check-*.sh preflights (binaries, env, funnel, gc, python); template-fragments/slack-v0 prompt fragment'
+        link ../slack-pack/pack.toml 'pack.toml'
+        link ../slack-pack/doctor 'doctor/'
+      }
+    }
+
+    // ── Slack tier 1 / tier 2 — smaller adapters in the same family ────────
+    slackMini = container 'slack-mini' {
+      #built
+      description 'Tier 1 Slack bridge: single-file Go adapter, @-mention → one session, one outbound verb (post-message)'
+      technology 'Go'
+      link ../slack-mini 'slack-mini/'
+      link ../slack-mini/pack.toml 'pack.toml'
+    }
+    slackChannel = container 'slack-channel' {
+      #built
+      description 'Tier 2 Slack adapter: channel↔multi-session graph, per-session identity, @handle routing, reply/publish/react. Multi-file Go, JSON schemas'
+      technology 'Go'
+      link ../slack-channel 'slack-channel/'
+      link ../slack-channel/pack.toml 'pack.toml'
+    }
+
+    // ── Sibling intake packs (Discord / GitHub) ────────────────────────────
+    discordPack = container 'discord' {
+      #built
+      description 'Discord provider: interactions/gateway/admin [[service]]s (Python), `gc discord` verbs, mol-discord-fix-issue formula. Supersedes discord-intake'
+      technology 'Python'
+      link ../discord 'discord/'
+      link ../discord/pack.toml 'pack.toml'
+    }
+    discordIntake = container 'discord-intake (legacy)' {
+      #planned
+      description 'Earlier Discord slash-command intake; kept for back-compat, superseded by the discord pack'
+      technology 'Python'
+      link ../discord-intake 'discord-intake/'
+    }
+    githubIntake = container 'github-intake' {
+      #built
+      description 'GitHub webhook intake + admin [[service]]s (Python): issue `/gc fix` parse, signature verify, bead creation, branch push / PR create; mol-github-fix-issue formula'
+      technology 'Python'
+      link ../github-intake 'github-intake/'
+      link ../github-intake/pack.toml 'pack.toml'
+    }
+
+    // ── Workflow / formula packs (configuration only) ───────────────────────
+    gascityPack = container 'gascity (planning pack)' {
+      #built
+      description 'Planning workflow: plan/design/decompose skills + implement formula + create-beads-from-tasks helper'
+      link ../gascity 'gascity/'
+      link ../gascity/pack.toml 'pack.toml'
+    }
+    gastownPack = container 'gastown (coding pack)' {
+      #built
+      description 'Default coding workflow: named-session agent roles, patrol formulas, template fragments, session-live theme/keybinding hooks'
+      link ../gastown 'gastown/'
+      link ../gastown/pack.toml 'pack.toml'
+    }
+    prPipeline = container 'pr-pipeline' {
+      #built
+      description 'Author-side PR discipline formulas: mol-pr-start / blast-radius / review / ship / triage'
+      link ../pr-pipeline 'pr-pipeline/'
+      link ../pr-pipeline/pack.toml 'pack.toml'
+    }
+    prReview = container 'pr-review' {
+      #built
+      description 'Maintainer-side incoming-PR formulas: mol-adopt-pr / pr-from-issue / pr-iterate / ci-diagnose / merge-only / revert. Ships no agent (consuming city supplies it)'
+      link ../pr-review 'pr-review/'
+      link ../pr-review/pack.toml 'pack.toml'
+    }
+
+    // ── Runtime / UX / skill-overlay packs ─────────────────────────────────
+    rlm = container 'rlm (long-context sidecar)' {
+      #built
+      description '`gc rlm` ask/install/status/uninstall CLI over a Docker or local OpenAI-compatible runtime; Python scripts + pinned reqs + prompt fragment'
+      technology 'Python + Docker'
+      link ../rlm 'rlm/'
+      link ../rlm/pack.toml 'pack.toml'
+    }
+    tmuxTheme = container 'tmux-theme' {
+      #built
+      description '[global] session_live hooks: per-agent tmux status colors, mail/hook indicators, prefix keybindings'
+      link ../tmux-theme 'tmux-theme/'
+      link ../tmux-theme/pack.toml 'pack.toml'
+    }
+    jeffrey = container 'jeffrey (skill overlays)' {
+      #built
+      description 'Skill-overlay subpacks (code-review, de-slopify, idea-wizard, planning-workflow, readme-revise, robot-mode, ui-polish) + an all/ rollup'
+      link ../jeffrey 'jeffrey/'
+      link ../jeffrey/README.md 'README'
+    }
+    flywheel = container 'flywheel (skill overlays)' {
+      #built
+      description 'Agent-enhancement subpacks (cass search, cm memory, mcp-agent-mail, ubs bug-scan) + an all/ rollup; deep-merge settings'
+      link ../flywheel 'flywheel/'
+      link ../flywheel/README.md 'README'
+    }
+
+    // ── Catalog plumbing ───────────────────────────────────────────────────
+    registry = component 'release registry + validator' {
+      #built
+      description 'registry.toml (name/source/commit/sha256 per release) gated by validate_registry.py (kebab names, semver, HTTPS git, integrity hashes, required wave-1 set)'
+      link ../registry.toml 'registry.toml'
+      link ../validate_registry.py 'validate_registry.py'
+    }
+
+    // ── Research / future direction ────────────────────────────────────────
+    extmsgLib = container 'shared extmsg-pack-lib' {
+      #research
+      description 'README "Where the work that\'s still missing comes from": the provider-agnostic state-machine logic (peer fanout, launcher, status projection) the discord pack carries should become a shared lib so slack/discord/teams stop reimplementing it'
+      link ../slack-pack/README.md 'README — shared-lib note'
+    }
+  }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Relationships.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  human -> slackApp 'chats / @mentions / runs slash commands'
+  human -> packs.slackPack.cli 'gc slack <verb> (operator setup)'
+  human -> gascity 'opts packs into city.toml, gc reload'
+
+  // Slack inbound: public webhook → adapter → gc
+  funnel -> packs.slackPack.adapter.adapterHttp ':443 → :8775 /slack/events + /slack/interactions'
+  slackApp -> funnel 'Events API + interactions (HMAC-signed)'
+  packs.slackPack.adapter.adapterHttp -> packs.slackPack.adapter.hmac 'verify signature, admit dispatch'
+  packs.slackPack.adapter.hmac -> packs.slackPack.adapter.eventDispatch 'admitted event'
+  packs.slackPack.adapter.adapterHttp -> packs.slackPack.adapter.interactions 'slash / block_actions / view_submission'
+  packs.slackPack.adapter.eventDispatch -> gascity.extmsg 'extmsg.inbound + session-message + thread-context preamble'
+  packs.slackPack.adapter.eventDispatch.threadContext -> slackApp 'conversations.replies (fetch unseen delta)'
+  packs.slackPack.adapter.interactions -> gascity.extmsg 'system-reminder to bound session (callback_id + values)'
+  packs.slackPack.adapter.rigDispatch -> gascity.beads 'bd create + gc sling in rig workdir'
+
+  // Slack outbound: gc → adapter → Slack
+  gascity.extmsg -> packs.slackPack.adapter.publish '/publish (over supervised UDS)'
+  packs.slackPack.adapter.publish -> slackApp 'chat.postMessage / files upload (session-attributed)'
+  packs.slackPack.adapter.publish -> gascity.extmsg 'self-register via /extmsg/adapters'
+  packs.slackPack.adapter.oauth -> slackApp 'oauth.v2.access (install)'
+  packs.slackPack.adapter.inboundFiles -> slackApp 'download inbound attachments'
+
+  // CLI writes registries the adapter reloads on SIGHUP
+  packs.slackPack.cli.cliVerbs -> packs.slackPack.cli.cliState 'write registry records'
+  packs.slackPack.cli.cliState -> packs.slackPack.adapter.registries 'writes JSON under <city>/.gc/slack/'
+  packs.slackPack.cli.cliVerbs -> slackApp 'sync-commands / sync-subteam-aliases / post-message (Web API)'
+  packs.slackPack.adapter.registries -> packs.slackPack.adapter.eventDispatch 'channel/rig/subteam routing (in-memory)'
+  packs.slackPack.adapter.registries -> packs.slackPack.adapter.interactions 'channel→target resolution'
+
+  // Adapter-internal stores
+  packs.slackPack.adapter.publish -> packs.slackPack.adapter.identityReg 'per-session identity override lookup'
+  packs.slackPack.adapter.eventDispatch.subteam -> packs.slackPack.adapter.registries 'subteam-alias + handle-alias lookup'
+
+  // Python helpers ride the gc extmsg bridge (peer fanout fires)
+  packs.slackPack.pyHelpers -> gascity.extmsg 'reply-current / publish via /extmsg/outbound'
+  packs.slackPack.pyHelpers -> packs.slackPack.adapter.publish '--via adapter (diagnostics, bypass gc)'
+
+  // The pack registers as a supervised service
+  packs.slackPack.slackService -> gascity.supervisor '[[service]] proxy_process'
+  gascity.supervisor -> packs.slackPack.adapter 'spawns + health-checks (/healthz on UDS)'
+
+  // Sibling adapter packs bridge their providers into the same extmsg surface
+  packs.slackMini -> gascity.extmsg 'inbound/outbound (tier-1 bridge)'
+  packs.slackMini -> slackApp 'app_mention + post-message'
+  packs.slackChannel -> gascity.extmsg 'inbound/outbound (tier-2 bridge)'
+  packs.slackChannel -> slackApp 'events + Web API'
+  packs.discordPack -> gascity.extmsg 'inbound/outbound + fix-issue'
+  packs.discordPack -> discordApp 'gateway + interactions'
+  packs.discordPack -> gascity.beads 'mol-discord-fix-issue → bead'
+  packs.githubIntake -> gascity.beads 'issue /gc fix → bead + dispatch'
+  packs.githubIntake -> github 'webhook + branch push / PR create'
+  packs.githubIntake -> funnel 'public webhook ingress'
+
+  // Workflow / overlay packs configure gc behaviour (no external system)
+  packs.gascityPack -> gascity 'plan/design/decompose skills + implement formula'
+  packs.gastownPack -> gascity 'agent roles + patrol formulas + session-live hooks'
+  packs.prPipeline -> gascity 'author-side PR formulas'
+  packs.prReview -> gascity 'maintainer-side adopt/iterate formulas'
+  packs.jeffrey -> gascity 'skill overlays'
+  packs.flywheel -> gascity 'skill overlays + settings deep-merge'
+  packs.tmuxTheme -> gascity 'session_live hooks'
+
+  // Runtime sidecar
+  packs.rlm -> inference 'gc rlm ask → long-context synthesis'
+
+  // Catalog plumbing + research direction
+  packs.registry -> packs.slackPack 'pins releases (commit + sha256)'
+  packs.extmsgLib -> packs.slackPack 'would absorb the provider-agnostic state machine' {
+    #research
+  }
+  packs.extmsgLib -> packs.discordPack 'shared by discord too' {
+    #research
+  }
+}
