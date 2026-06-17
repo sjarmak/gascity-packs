@@ -1,77 +1,66 @@
-// Deployment model — where each piece runs at review time.
+// Deployment model — where the five authored packs actually run.
 //
 // The packs are configuration that runs INSIDE a gascity city on a host. The
-// Slack pack's two binaries deploy differently: the adapter is a long-running
-// proxy_process the gc supervisor owns (public TCP for webhooks + a supervised
-// UDS for /publish), while the operator CLI is a one-shot the human runs.
-// Public webhooks reach the host through Tailscale Funnel; Slack, the model
-// backend, and the VCS providers are external substrates.
+// three Slack adapters deploy the same way: each is a long-running proxy_process
+// the gc supervisor owns (public TCP for webhooks + a supervised socket for the
+// session-attributed callbacks). The PR-discipline packs ship no daemon — their
+// formulas are slung onto a rig/agent on demand and run to completion. Slack,
+// GitHub, and the review models are external.
 
 deployment {
 
-  cityHost = host 'City host' {
-    description 'Where the gascity city + its imported packs run'
+  cityHost = host 'gascity city host' {
+    description 'A gascity city on a host — gc supervises the adapters and runs the formula sessions'
 
-    gcProc = proc 'gc orchestrator + supervisor' {
-      description 'Owns sessions/beads/extmsg; supervises pack proxy_process services and reverse-proxies /svc/<name>/*'
-      instanceOf gascity
+    slackPackProc = proc 'gc-slack-adapter (proxy_process)' {
+      description 'Long-running Go service: public TCP for /slack/events + /slack/interactions, UDS for /publish; SIGHUP-reloads its registries'
+      instanceOf packs.slackPack
     }
-    adapterProc = proc 'gc-slack-adapter (proxy_process)' {
-      description 'Long-running. Public TCP :8775 for /slack/events; UDS for /publish + /healthz under gc supervision'
-      instanceOf packs.slackPack.adapter
+    slackChannelProc = proc 'gc-slack-channel-adapter (proxy_process)' {
+      description 'Long-running stdlib-only Go service; three 0600 JSON registries under .gc/slack-channel/. Use exactly one Slack adapter per city'
+      instanceOf packs.slackChannel
     }
-    cliProc = proc 'gc-slack-cli (one-shot)' {
-      description 'Operator-invoked per `gc slack <verb>`; writes registry JSON under <city>/.gc/slack/, not supervised'
-      instanceOf packs.slackPack.cli
+    slackMiniProc = proc 'gc-slack-mini-adapter (proxy_process)' {
+      description 'Long-running single-file Go service; stateless (no registries). The Tier-1 choice when one Slack adapter per city is enough'
+      instanceOf packs.slackMini
     }
-    discordProc = proc 'discord / github intake services' {
-      description 'Python proxy_process intake services for the other providers'
-      instanceOf packs.discordPack
-      instanceOf packs.githubIntake
+    prFormulaSession = proc 'PR formula session (on-demand)' {
+      description 'No daemon: the pr-pipeline / pr-review formulas are slung onto a rig/agent, run their steps with the root bead as control state, and exit'
+      instanceOf packs.prPipeline
+      instanceOf packs.prReview
     }
-    rlmProc = proc 'rlm runtime' {
-      description 'Docker or local OpenAI-compatible runtime for long-context synthesis'
-      instanceOf packs.rlm
-    }
-    regStore = proc 'slack registries — <city>/.gc/slack/*.json' {
-      description 'Generated, SIGHUP-reloaded. CLI writes; adapter reads (apps, channel/rig/room-launch mappings, subteam-aliases)'
-    }
-  }
-
-  funnelHost = host 'Tailscale Funnel' {
-    instanceOf funnel
   }
 
   slackHost = host 'Slack' {
-    instanceOf slackApp
+    description 'Slack platform — delivers HMAC-signed webhooks to the public adapter port, serves the Web API'
+    instanceOf slack
   }
 
-  providerHost = host 'Discord / GitHub' {
-    instanceOf discordApp
+  githubHost = host 'GitHub' {
+    description 'Issues / PRs / diffs / checks, reached via gh from the PR-formula session'
     instanceOf github
   }
 
-  inferenceHost = host 'LLM backend' {
-    instanceOf inference
+  modelHost = host 'Review model providers' {
+    description 'Claude / Codex / Gemini endpoints the review-pr skill fans out to'
+    instanceOf reviewModels
   }
 
   // Runtime data & control flow between processes/hosts.
-  funnelHost -> adapterProc ':443 → :8775 /slack/events + /slack/interactions'
-  slackHost -> funnelHost 'inbound events / interactions (HMAC-signed)'
-  adapterProc -> slackHost 'chat.postMessage / files / oauth (Web API)'
-  adapterProc -> gcProc 'extmsg.inbound + self-register (UDS via supervisor)'
-  gcProc -> adapterProc 'spawn + health-check + /publish'
-  cliProc -> regStore 'writes registry JSON'
-  regStore -> adapterProc 'SIGHUP reload (read-only)'
-  discordProc -> providerHost 'webhooks / gateway'
-  discordProc -> gcProc 'extmsg.inbound / bead create'
-  rlmProc -> inferenceHost 'long-context synthesis'
+  slackHost -> slackPackProc 'webhooks → public TCP (HMAC-verified)'
+  slackHost -> slackChannelProc 'webhooks → public TCP (HMAC-verified)'
+  slackHost -> slackMiniProc 'webhooks → public TCP (HMAC-verified)'
+  slackPackProc -> slackHost 'Web API (chat.postMessage, OAuth, files)'
+  slackChannelProc -> slackHost 'Web API (chat.postMessage, reactions)'
+  slackMiniProc -> slackHost 'Web API (chat.postMessage)'
+  prFormulaSession -> githubHost 'gh: read issues/PRs, comment, merge'
+  prFormulaSession -> modelHost 'multi-model review fan-out'
 }
 
 views {
 
   deployment view deployment {
-    title 'Deployment — where each piece runs'
+    title 'Deployment — where each pack runs'
     include *
   }
 }

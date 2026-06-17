@@ -1,12 +1,13 @@
-// Views over the gascity-packs model. Planned (#planned) and research
-// (#research) elements/relationships are dimmed + dashed so the "what ships vs
-// what is still a stub" split is readable at a glance.
+// Views over the authored-packs model. Planned (#planned) elements and
+// relationships are dimmed + dashed so the "what ships vs what is still a stub"
+// split is readable at a glance.
 
 views {
 
-  // Landscape — the whole catalog in context: gascity + the chat/VCS surfaces.
+  // Landscape — the five authored packs in context of gascity, Slack, GitHub,
+  // and the review models.
   view index {
-    title 'gascity-packs — system landscape'
+    title 'Authored gascity packs — system landscape'
     include *
 
     style * {
@@ -19,58 +20,11 @@ views {
       color muted
       border dashed
     }
-    style element.tag == #research {
-      color indigo
-      border dashed
-    }
   }
 
-  // The gascity-packs system, decomposed into its packs.
+  // The system, decomposed into its five pack containers.
   view packsSystem of packs {
-    title 'gascity-packs — the pack catalog (built vs planned)'
-    include *
-
-    style element.tag == #planned {
-      color muted
-      border dashed
-    }
-    style element.tag == #research {
-      color indigo
-      border dashed
-    }
-  }
-
-  // The Slack pack — the heavyweight provider extension, its components.
-  view slackPackContainer of packs.slackPack {
-    title 'slack-pack — adapter + CLI + helpers'
-    include *
-
-    style element.tag == #planned {
-      color muted
-      border dashed
-    }
-    style element.tag == #evolving {
-      color amber
-    }
-  }
-
-  // The Slack adapter Go binary — the component internals.
-  view adapterContainer of packs.slackPack.adapter {
-    title 'Slack adapter (gc-slack-adapter) — components'
-    include *
-
-    style element.tag == #planned {
-      color muted
-      border dashed
-    }
-    style element.tag == #evolving {
-      color amber
-    }
-  }
-
-  // The inbound event-dispatch fan-out (where the one stub lives).
-  view eventDispatchView of packs.slackPack.adapter.eventDispatch {
-    title 'Inbound event dispatch — routing fan-out'
+    title 'Authored packs — the five containers'
     include *
 
     style element.tag == #planned {
@@ -79,21 +33,57 @@ views {
     }
   }
 
-  // The operator CLI internals.
-  view cliContainer of packs.slackPack.cli {
-    title 'Operator CLI (gc-slack-cli) — verbs + registry writers'
+  // ── Per-pack component views ─────────────────────────────────────────────
+
+  view slackPackView of packs.slackPack {
+    title 'slack-pack — the rich Slack provider (components)'
+    include *
+
+    style element.tag == #planned {
+      color muted
+      border dashed
+    }
+  }
+
+  view slackChannelView of packs.slackChannel {
+    title 'slack-channel — Tier-2 channel bridge (components)'
+    include *
+
+    style element.tag == #planned {
+      color muted
+      border dashed
+    }
+  }
+
+  view slackMiniView of packs.slackMini {
+    title 'slack-mini — Tier-1 minimal bridge (components)'
     include *
   }
 
-  // Risks & open questions — every #risk box with its question stated in-box.
+  view prPipelineView of packs.prPipeline {
+    title 'pr-pipeline — author-side PR discipline (components)'
+    include *
+  }
+
+  view prReviewView of packs.prReview {
+    title 'pr-review — maintainer-side PR discipline (components)'
+    include *
+
+    style element.tag == #planned {
+      color muted
+      border dashed
+    }
+  }
+
+  // Risks & open questions — the elements carrying a #risk flag, with each open
+  // question stated in-box. What a reviewer should probe, surfaced up front.
   view risks {
     title 'Risks & open questions'
     include
       packs,
+      element.tag == #risk,
       packs.slackPack,
-      packs.slackPack.adapter,
-      packs.slackPack.adapter.eventDispatch,
-      element.tag == #risk
+      packs.prReview
 
     style * {
       opacity 30%
@@ -108,72 +98,74 @@ views {
   // Walkthrough flows (dynamic views) — the narrative spine of the review.
   // ───────────────────────────────────────────────────────────────────────
 
-  // Flow 1 — a Slack message arrives and reaches a bound session.
-  dynamic view inboundFlow {
-    title 'Walkthrough — Slack message → bound session'
-    description 'Public webhook terminates at the adapter over Funnel; HMAC + dispatch gate admit it; the dispatcher routes it (alias / subteam / thread-context) and posts inbound to gc, which fans it out to the bound session(s).'
+  // Flow 1 — a Slack message arrives and reaches a gc session (slack-pack).
+  dynamic view slackInbound {
+    title 'Walkthrough — Slack inbound to a gc session'
+    description 'Every inbound is HMAC-verified against the per-app signing secret before any dispatch; the adapter normalises and hands off to the extmsg bridge, which routes to the bound session.'
 
-    slackApp -> funnel 'event (HMAC-signed)'
-    funnel -> packs.slackPack.adapter.adapterHttp ':443 → :8775 /slack/events'
-    packs.slackPack.adapter.adapterHttp -> packs.slackPack.adapter.hmac 'verify + admit dispatch'
-    packs.slackPack.adapter.hmac -> packs.slackPack.adapter.eventDispatch 'admitted'
-    packs.slackPack.adapter.eventDispatch -> packs.slackPack.adapter.registries 'resolve channel / subteam → target'
-    packs.slackPack.adapter.eventDispatch.threadContext -> slackApp 'conversations.replies (unseen delta)'
-    packs.slackPack.adapter.eventDispatch -> gascity.extmsg 'extmsg.inbound + system-reminder'
+    slack -> packs.slackPack.spAdapter 'POST /slack/events'
+    packs.slackPack.spAdapter -> packs.slackPack.spHmac 'verify v0:ts:body HMAC'
+    packs.slackPack.spHmac -> packs.slackPack.spThreadRouting 'resolve (channel, thread_ts) → session'
+    packs.slackPack.spThreadRouting -> gascity.extmsg 'POST /extmsg/inbound (session-attributed)'
+    gascity.extmsg -> gascity.sessions 'deliver to the bound session'
   }
 
-  // Flow 2 — an agent replies, peer fanout fires.
-  dynamic view outboundFlow {
-    title 'Walkthrough — agent reply → Slack (with peer fanout)'
-    description 'reply-current rides gc /extmsg/outbound so the publish is transcript-recorded and peer fanout reaches other bound sessions; gc calls the supervised adapter /publish, which fails closed without session attribution.'
+  // Flow 2 — a rig slash-command spawns work (slack-pack).
+  dynamic view slackRigDispatch {
+    title 'Walkthrough — rig slash-command to a spawned bead'
+    description 'Slash commands answer within Slack 3-second budget: the modal captures summary + context, then dispatch spawns a bead and slings it to the rig target.'
 
-    packs.slackPack.pyHelpers -> gascity.extmsg 'gc slack reply-current --via gc'
-    gascity.extmsg -> packs.slackPack.adapter.publish '/publish over supervised UDS'
-    packs.slackPack.adapter.publish -> packs.slackPack.adapter.identityReg 'per-session identity override'
-    packs.slackPack.adapter.publish -> slackApp 'chat.postMessage (as the session persona)'
-    gascity.extmsg -> packs.slackPack.pyHelpers 'peer-publication reminder to other bound sessions'
+    slack -> packs.slackPack.spInteractions 'POST /slack/interactions (slash command)'
+    packs.slackPack.spInteractions -> packs.slackPack.spRigDispatch 'modal context → dispatch'
+    packs.slackPack.spRigDispatch -> gascity.beads 'bd create'
+    packs.slackPack.spRigDispatch -> gascity.sessions 'gc sling to rig target'
+    packs.slackPack.spAdapter -> slack 'chat.postMessage (ack + result)'
   }
 
-  // Flow 3 — slash command in a rig channel spawns work.
-  dynamic view slashToWorkFlow {
-    title 'Walkthrough — slash command → rig work (bead + sling)'
-    description 'A slash command in a rig-mapped channel opens a fix modal; on submit the adapter creates a bead and slings it in the rig workdir, then reminds the resolved session.'
+  // Flow 3 — author-side: issue → plan → ship gate (pr-pipeline).
+  dynamic view prShipFlow {
+    title 'Walkthrough — author-side PR pipeline (plan to ship gate)'
+    description 'The ship gate is the firewall: simplify, iterate against the reviewer panel, run mechanical gates, then STOP at a readiness report — the formula never pushes or opens a PR.'
 
-    slackApp -> funnel 'slash command'
-    funnel -> packs.slackPack.adapter.adapterHttp '/slack/interactions'
-    packs.slackPack.adapter.adapterHttp -> packs.slackPack.adapter.interactions 'workspace-gated dispatch'
-    packs.slackPack.adapter.interactions -> packs.slackPack.adapter.registries 'channel/rig → target'
-    packs.slackPack.adapter.interactions -> packs.slackPack.adapter.rigDispatch 'open fix modal → submit'
-    packs.slackPack.adapter.rigDispatch -> gascity.beads 'bd create + gc sling (rig workdir)'
-    packs.slackPack.adapter.rigDispatch -> gascity.extmsg 'system-reminder to the rig session'
+    operator -> packs.prPipeline.ppCommands 'gc pr-pipeline pr plan <issue>'
+    packs.prPipeline.ppCommands -> gascity.sessions 'gc sling mol-pr-start'
+    packs.prPipeline.ppStart -> github 'read issue + competing PRs'
+    packs.prPipeline.ppStart -> packs.prPipeline.ppBlast 'map impact surface'
+    packs.prPipeline.ppStart -> gascity.beads 'plan path + gate state on root bead'
+    operator -> packs.prPipeline.ppShip 'gc pr-pipeline pr ship'
+    packs.prPipeline.ppShip -> reviewModels 'multi-reviewer iterate (<=3)'
+    packs.prPipeline.ppShip -> operator 'readiness report (stops — no push)'
   }
 
-  // Flow 4 — operator setup: CLI writes a registry, SIGHUP reloads it.
-  dynamic view setupFlow {
-    title 'Walkthrough — operator setup (map-channel → SIGHUP reload)'
-    description 'The one-shot CLI writes a registry JSON under <city>/.gc/slack/; SIGHUP triggers an all-or-nothing reload so the adapter routes by the new mapping without a restart.'
+  // Flow 4 — maintainer-side: adopt an incoming PR (pr-review).
+  dynamic view prAdoptFlow {
+    title 'Walkthrough — maintainer-side incoming-PR adoption'
+    description 'The /review-pr skill fans out three independent models and synthesises adversarially; the maintainer human-gate decides which of the four merge paths runs.'
 
-    human -> packs.slackPack.cli.cliVerbs 'gc slack map-channel C0… --session …'
-    packs.slackPack.cli.cliVerbs -> packs.slackPack.cli.cliState 'validate + build record'
-    packs.slackPack.cli.cliState -> packs.slackPack.adapter.registries 'write channel_mappings.json'
-    human -> packs.slackPack.adapter.adapterHttp 'pkill -HUP gc-slack-adapter'
-    packs.slackPack.adapter.adapterHttp -> packs.slackPack.adapter.registries 'all-or-nothing reload'
-    packs.slackPack.adapter.registries -> packs.slackPack.adapter.eventDispatch 'new routing live'
+    contributor -> github 'opens a PR'
+    operator -> packs.prReview.prAdopt 'gc sling mol-adopt-pr <pr>'
+    packs.prReview.prAdopt -> github 'checkout + auto-rebase'
+    packs.prReview.prAdopt -> packs.prReview.prReviewSkill 'run /review-pr'
+    packs.prReview.prReviewSkill -> reviewModels 'Claude + Codex + Gemini in parallel'
+    packs.prReview.prReviewSkill -> packs.prReview.prAdopt 'synthesised findings'
+    packs.prReview.prAdopt -> operator 'human-gate: pick merge path'
+    packs.prReview.prAdopt -> github 'comment / merge per path'
   }
 
-  // Planned / research lens — the @@launcher stub and the shared-lib direction.
+  // Planned-only lens: the stubs + vapor formulas in context of what they need.
   view planned {
-    title 'Planned & research work'
+    title 'Planned & stubbed work'
     include
       packs,
       packs.slackPack,
-      packs.slackPack.adapter,
-      packs.slackPack.adapter.eventDispatch,
-      packs.slackPack.adapter.eventDispatch.doubleHandle,
-      packs.slackPack.adapter.oauth,
-      packs.discordIntake,
-      packs.extmsgLib,
-      packs.discordPack
+      packs.slackPack.spRoomLaunch,
+      packs.slackPack.spSyncCommands,
+      packs.slackChannel.scInteractions,
+      packs.prReview,
+      packs.prReview.prFromIssue,
+      packs.prReview.prIterate,
+      packs.prPipeline.ppShip,
+      gascity.sessions
 
     style * {
       opacity 30%
@@ -181,11 +173,6 @@ views {
     style element.tag == #planned {
       opacity 100%
       color muted
-      border dashed
-    }
-    style element.tag == #research {
-      opacity 100%
-      color indigo
       border dashed
     }
   }

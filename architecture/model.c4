@@ -1,317 +1,330 @@
-// The `gascity-packs` catalog — opt-in configuration packs for Gas City.
+// Stephanie Jarmak's authored gascity packs — the Slack intake family and the
+// PR-discipline family, layered on the gascity multi-agent orchestrator.
 //
-// The repo's reason to exist: keep a catalog of configuration-pure packs
-// (Slack/Discord/GitHub adapters, PR-discipline formulas, skill overlays,
-// long-context sidecar, session theming) that turn a generic gascity city
-// into something opinionated WITHOUT forking the orchestrator. Packs stay
-// ZFC-clean: plumbing only, no hardcoded roles, no private SDK leakage.
+// Five packs, modelled as one system → one container per pack → components:
+//   slack-pack      — the rich Slack provider (webhook adapter, HMAC verify,
+//                     OAuth, event/interaction dispatch, rig + room launch,
+//                     thread→session routing, CLI, extmsg scripts)
+//   slack-channel   — the Tier-2 channel-bridge variant (bindings + identities)
+//   slack-mini      — the Tier-1 minimal variant (@-mention → mayor, one verb)
+//   pr-pipeline     — author-side PR discipline (plan → blast-radius → self-
+//                     review → pre-push ship gate), as gc formulas + commands
+//   pr-review       — maintainer-side PR discipline (adopt → multi-model review
+//                     → merge), as gc formulas + a /review-pr skill overlay
 //
-// The Slack pack is the heavyweight: two Go binaries (a long-running webhook
-// adapter gc supervises as a proxy_process, and a one-shot operator CLI) plus
-// Python helpers. It is modelled at component granularity; the sibling packs
-// are modelled as containers since they are configuration bundles.
-//
-// Planned and scaffold work is tagged (see spec.c4) so it renders distinctly
-// from what already ships. Elements `link` to their real source so any box is
-// one click from the code.
+// Delivery state is tagged so stubs / experimental work renders distinctly from
+// what ships (see spec.c4 for the legend). Every element links to its real
+// source path, relative to architecture/.
 
 model {
 
-  human = actor 'Human operator' {
-    description 'Maintainer / teammate who chats from Slack, runs `gc slack` verbs, and opts packs into a city'
+  operator = actor 'Operator / maintainer' {
+    description 'Stephanie — talks to gc sessions over Slack and drives the PR-discipline workflows'
+  }
+
+  contributor = actor 'Contributor' {
+    description 'Opens issues and PRs on the upstream repo that the PR-discipline packs triage and review'
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  // External systems — the orchestrator the packs configure, and the chat /
-  // VCS surfaces the adapter packs bridge into it.
+  // External systems — only those needed to explain the five authored packs.
+  // gascity is the host orchestrator; Slack and GitHub are the platforms the
+  // packs bridge to; the review models back pr-review's /review-pr skill.
   // ─────────────────────────────────────────────────────────────────────────
 
-  gascity = externalSystem 'Gas City orchestrator' {
-    description 'The multi-agent orchestration SDK packs plug into. Supervises pack services, runs formulas/agents, owns sessions, beads, and the extmsg bridge. Packs are config-pure against its stable contract'
-    link https://github.com/gastownhall/gascity 'gastownhall/gascity'
+  gascity = externalSystem 'gascity orchestrator' {
+    description 'The multi-agent orchestrator that supervises these packs — sessions, rigs, beads, formulas'
 
-    extmsg = externalSystem 'extmsg bridge (gc HTTP API)' {
-      description 'gc /extmsg/{inbound,outbound,adapters,bind,retry} + /v0/session/.../messages — the typed surface every chat adapter pack registers against. Owns transcript recording + peer fanout'
+    supervisor = externalSystem 'gc supervisor' {
+      description 'Supervises each pack adapter as a proxy_process service; reverse-proxies /svc/<pack>/* to its socket'
     }
-    supervisor = externalSystem 'service supervisor' {
-      description 'Starts/health-checks proxy_process services declared in pack.toml; injects GC_SERVICE_SOCKET/URL_PREFIX and reverse-proxies /svc/<name>/*'
+    extmsg = externalSystem 'extmsg bridge' {
+      description 'External-messaging bridge: adapters register, POST inbound to /extmsg/inbound, and receive session-attributed outbound callbacks'
     }
-    beads = datastore 'beads (bd) work store' {
-      description 'The work spine pack formulas + rig dispatch create against (`bd create`, `gc sling`)'
+    beads = datastore 'beads work store' {
+      description 'Work-item spine (bd). Slack rig-dispatch spawns beads; every PR formula uses its root bead as the crash-safe control bead'
+    }
+    sessions = externalSystem 'sessions + sling + formulas' {
+      description 'Session lifecycle (/v0/sessions, /event-stream), gc sling, and the formula runner that executes the PR molecules step-by-step'
     }
   }
 
-  slackApp = externalSystem 'Slack' {
-    description 'Slack workspace + app: Events API, slash commands, interactions (block_actions / view_submission), Web API (chat.postMessage, files, usergroups), OAuth'
-  }
-
-  discordApp = externalSystem 'Discord' {
-    description 'Discord guild + app: gateway, slash commands, DMs/rooms — bridged by the discord intake packs'
+  slack = externalSystem 'Slack' {
+    description 'Slack platform — inbound Events API (HMAC-signed webhooks) and outbound Web API (chat.postMessage, reactions, files, views, OAuth)'
   }
 
   github = externalSystem 'GitHub' {
-    description 'GitHub app + webhooks — issue `/gc fix` intake, branch push, PR creation via github-intake'
+    description 'Issues, PRs, diffs, checks — read via gh; the PR-discipline packs author/triage/review against it'
   }
 
-  funnel = externalSystem 'Tailscale Funnel' {
-    description 'Public TLS ingress (:443 → adapter LISTEN_PUBLIC) terminating Slack/Discord/GitHub webhooks to the host'
-  }
-
-  inference = externalSystem 'LLM / OpenAI-compatible backend' {
-    description 'The model endpoint the rlm long-context sidecar calls; also the substrate every formula ultimately delegates reasoning to (ZFC)'
+  reviewModels = externalSystem 'Review models (Claude / Codex / Gemini)' {
+    description 'Independent reviewer models the /review-pr skill fans out to in parallel, then synthesises'
   }
 
   // ─────────────────────────────────────────────────────────────────────────
-  // The gascity-packs catalog.
+  // The authored-packs system.
   // ─────────────────────────────────────────────────────────────────────────
 
-  packs = system 'gascity-packs' {
-    description 'Opt-in pack catalog: chat/VCS adapters, PR-discipline formulas, skill overlays, runtime sidecars — config-pure extensions a city path-imports'
-    link ../README.md 'README'
-    link ../AGENTS.md 'Pack invariants (Do / Don\'t)'
-    link ../registry.toml 'release registry'
-    link ../.gc/project-brief.md 'Maintainer intent'
+  packs = system 'Authored gascity packs' {
+    description 'Slack intake family + PR-discipline family, distributed as gascity packs and supervised / slung by gc'
+    link ../README.md 'gascity-packs README'
 
-    // ── Slack pack — the heavyweight provider extension (two Go binaries) ───
+    // ── slack-pack — the rich Slack provider ───────────────────────────────
     slackPack = container 'slack-pack' {
       #evolving
-      description 'Slack provider for gc: Go webhook adapter (proxy_process) + Go operator CLI + Python helpers. Feature-by-feature port of the discord pack; not yet at parity'
-      technology 'Go + Python'
+      description 'Full Slack provider for gc oversight: webhook adapter + OAuth + rig/room dispatch + CLI + extmsg scripts. Feature-by-feature port of the discord pack'
+      technology 'Go adapter + Go CLI + Python scripts'
       link ../slack-pack 'slack-pack/'
-      link ../slack-pack/README.md 'pack README'
-      link ../slack-pack/pack.toml 'pack.toml (schema 2)'
+      link ../slack-pack/README.md 'slack-pack README'
 
-      adapter = component 'Slack adapter (gc-slack-adapter)' {
+      spAdapter = component 'adapter (gc-slack-adapter)' {
         #built
-        description 'Long-running webhook receiver + outbound publisher. gc supervises it as a proxy_process; public TCP :8775 for /slack/events, UDS for /publish + /healthz'
-        technology 'Go'
-        link ../slack-pack/adapter 'adapter/'
-        link ../slack-pack/adapter/main.go 'main.go'
-
-        adapterHttp = component 'HTTP server + listeners' {
-          #built
-          description 'Boots public TCP + internal-UDS/TCP muxes, SIGHUP reload loop, graceful shutdown; routes /slack/events, /slack/interactions, /publish, /publish-file, /react, /identity, /handle-alias, /healthz, /slack/oauth/*'
-          link ../slack-pack/adapter/main.go 'main.go'
-        }
-        hmac = component 'HMAC verify + dispatch pool' {
-          #built
-          description 'Trial-verifies Slack signatures against per-app secrets (apps registry) with env fallback; bounds inbound-dispatch goroutines (SLACK_DISPATCH_CONCURRENCY) and counts drops on saturation'
-          link ../slack-pack/adapter/dispatch_drops.go 'dispatch_drops.go'
-        }
-        eventDispatch = component 'inbound event dispatch' {
-          #built
-          description 'Routes a Slack event to single-@ alias / double-@@ launcher / subteam-mention / thread-context / default-channel fanout'
-          link ../slack-pack/adapter/main.go 'main.go'
-
-          doubleHandle = component '@@launcher dispatch' {
-            #planned
-            #risk
-            description 'Parses `@@<handle>` and recognizes free-vs-claimed handles, but the new-session spawn is a placeholder ephemeral. RISK: README lists this as the one Not-Yet-Implemented surface — adapter-side AcquireOrCreate spawn is deferred to the gc-cby epic'
-            link ../slack-pack/adapter/double_handle_prefix.go 'double_handle_prefix.go'
-            link ../slack-pack/adapter/double_handle_dispatch.go 'double_handle_dispatch.go'
-          }
-          subteam = component 'subteam mention routing' {
-            #built
-            description 'Routes labeled `<!subteam^S..|@handle>` via the handle-alias registry and unlabeled `<!subteam^S..>` via the operator-edited subteam-alias map'
-            link ../slack-pack/adapter/subteam_mention_prefix.go 'subteam_mention_prefix.go'
-            link ../slack-pack/adapter/subteam_alias_map.go 'subteam_alias_map.go'
-          }
-          threadContext = component 'thread context preamble' {
-            #built
-            description 'Per-target (target,channel,thread)→last-seen cache; fetches conversations.replies and prepends the unseen delta as a system-reminder for cross-agent thread visibility'
-            link ../slack-pack/adapter/thread_context.go 'thread_context.go'
-          }
-        }
-
-        interactions = component 'interactions endpoint' {
-          #built
-          description 'POST /slack/interactions: slash commands, block_actions (button/select), and view_submission (modal) — workspace-gated by team.id; forwards response_url to the session'
-          link ../slack-pack/adapter/interactions.go 'interactions.go'
-          link ../slack-pack/adapter/interactions_modal.go 'interactions_modal.go'
-        }
-
-        rigDispatch = component 'rig / room dispatch' {
-          #built
-          description 'Slash command in a rig-mapped channel opens a fix modal, then `bd create` + `gc sling` in the rig workdir; thread-bound room-launch resolves a thread root and registers the handle alias'
-          link ../slack-pack/adapter/rig_dispatch.go 'rig_dispatch.go'
-          link ../slack-pack/adapter/room_launch_dispatch.go 'room_launch_dispatch.go'
-          link ../slack-pack/adapter/thread_session_registry.go 'thread_session_registry.go'
-        }
-
-        registries = datastore 'reload registries (JSON, SIGHUP)' {
-          #built
-          description 'apps / channel_mappings / rig_mappings / room_launch_mappings / subteam-aliases. All-or-nothing reload on SIGHUP; generation-stamped to survive an OAuth-write race'
-          link ../slack-pack/adapter/registry_reload.go 'registry_reload.go'
-          link ../slack-pack/adapter/apps_registry.go 'apps_registry.go'
-        }
-
-        publish = component 'outbound publish + self-register' {
-          #built
-          description '/publish → Slack chat.postMessage (fails closed without session attribution); /publish-file symlink-confined upload; registers with gc /extmsg/adapters at start'
-          link ../slack-pack/adapter/main.go 'main.go'
-          link ../slack-pack/adapter/confined_open.go 'confined_open.go'
-        }
-
-        oauth = component 'OAuth install flow' {
-          #evolving
-          #risk
-          description '/slack/oauth/{start,callback} exchanges the code and persists token+secret to the apps registry. RISK: single-tenant by design (gc-cby.9); writes install.env that the operator must still re-source — not a full installer'
-          link ../slack-pack/adapter/oauth.go 'oauth.go'
-        }
-
-        inboundFiles = component 'inbound file store + janitor' {
-          #built
-          description 'Downloads inbound Slack attachments into INBOUND_FILE_STORE/<channel>/<ts>-<name> (0o600); background TTL sweep + orphan-tmp cleanup'
-          link ../slack-pack/adapter/tmp_sweep.go 'tmp_sweep.go'
-        }
-
-        identityReg = datastore 'identity + handle-alias stores' {
-          #built
-          description 'Adapter-owned JSON: per-session chat:write.customize identity overrides, and cross-channel @handle→session aliases. Written in-process via /identity + /handle-alias (not SIGHUP)'
-          link ../slack-pack/adapter/main.go 'main.go'
-        }
+        description 'HTTP mux: config load, gc service registration, /publish (session-attributed) and /slack/events (HMAC-verified) handlers'
+        link ../slack-pack/adapter/main.go 'adapter/main.go'
       }
-
-      cli = component 'Operator CLI (gc-slack-cli)' {
+      spHmac = component 'app registry + HMAC verify' {
         #built
-        description 'One-shot Cobra binary backing `gc slack <verb>`; writes the SIGHUP-reloaded registries under <city>/.gc/slack/. Wrapped by commands/<verb>.sh'
-        technology 'Go'
-        link ../slack-pack/cli 'cli/'
-        link ../slack-pack/cli/main.go 'main.go'
-
-        cliVerbs = component 'verbs: import-app / map-* / sync-* / post-message / enable-room-launch' {
-          #built
-          description 'import-app, map-channel, map-rig, sync-commands, sync-subteam-aliases, post-message (chat.postMessage/update), enable-room-launch (writes room_launch_mappings.json)'
-          link ../slack-pack/cli/cmd 'cli/cmd/'
-        }
-        cliState = component 'registry state writers' {
-          #built
-          description 'Wire-compatible CRUD for apps / channels / rigs / rooms / blockkit / workspace records; RuntimePath resolves <city>/.gc/slack/ without importing gc internals'
-          link ../slack-pack/cli/internal 'cli/internal/'
-          link ../slack-pack/cli/runtime_path.go 'runtime_path.go'
-        }
+        description 'Per-app signing-secret lookup (team_id → secret) with trial-verify over candidates; HMAC-SHA256 over v0:ts:body, env fallback for single-app installs'
+        link ../slack-pack/adapter/apps_registry.go 'adapter/apps_registry.go'
       }
-
-      pyHelpers = component 'Python chat helpers' {
+      spOauth = component 'OAuth install flow' {
         #built
-        description 'bind / reply-current / publish / publish-to-channel / react / identity / handle-alias / upload / retry-peer-fanout / status — talk to gc /extmsg or the adapter directly (--via)'
-        technology 'Python'
-        link ../slack-pack/scripts 'scripts/'
-        link ../slack-pack/commands 'commands/'
+        description '/slack/oauth/start + /callback — state-nonce CSRF, code-to-token exchange, bot token into apps registry'
+        link ../slack-pack/adapter/oauth.go 'adapter/oauth.go'
       }
-
-      slackService = component 'pack.toml service + doctor' {
+      spInteractions = component 'interaction dispatch' {
         #built
-        description '[[service]] proxy_process declaration gc supervises; doctor/check-*.sh preflights (binaries, env, funnel, gc, python); template-fragments/slack-v0 prompt fragment'
-        link ../slack-pack/pack.toml 'pack.toml'
-        link ../slack-pack/doctor 'doctor/'
+        description '/slack/interactions — slash commands, block_actions, view_submissions dispatcher under Slack 3s budget; modal intake captures summary + context before bead spawn'
+        link ../slack-pack/adapter/interactions.go 'adapter/interactions.go'
+        link ../slack-pack/adapter/interactions_modal.go 'adapter/interactions_modal.go'
+      }
+      spRigDispatch = component 'rig dispatch' {
+        #built
+        description 'Slash-command dispatch for rig-bound channels — spawns beads (bd create) + gc sling, reads rig workdir from .beads/routes.jsonl'
+        link ../slack-pack/adapter/rig_dispatch.go 'adapter/rig_dispatch.go'
+      }
+      spRoomLaunch = component 'room launcher (@@<handle>)' {
+        #planned
+        description 'PLANNED: @@<handle> thread-spawned sessions via /v0/sessions. Parser + dispatcher wired, but adapter currently returns an ephemeral "not yet available" (gc-cby.5)'
+        link ../slack-pack/adapter/room_launch_dispatch.go 'adapter/room_launch_dispatch.go'
+        link ../slack-pack/adapter/double_handle_prefix.go 'adapter/double_handle_prefix.go'
+      }
+      spThreadRouting = component 'thread to session routing' {
+        #built
+        description '(channel, thread_ts) → session registry + thread-root context cache + handle stickiness, invalidated by an SSE listener on gc /event-stream'
+        link ../slack-pack/adapter/thread_session_registry.go 'adapter/thread_session_registry.go'
+        link ../slack-pack/adapter/thread_context.go 'adapter/thread_context.go'
+        link ../slack-pack/adapter/thread_teardown_subscriber.go 'adapter/thread_teardown_subscriber.go'
+      }
+      spMappings = component 'rig + subteam mappings (SIGHUP reload)' {
+        #built
+        description 'In-memory rig-routing table + subteam (@User-Group) to handle map; all four registries SIGHUP-reloaded all-or-nothing with O_NOFOLLOW symlink defense'
+        link ../slack-pack/adapter/rig_mapping.go 'adapter/rig_mapping.go'
+        link ../slack-pack/adapter/subteam_alias_map.go 'adapter/subteam_alias_map.go'
+        link ../slack-pack/adapter/registry_reload.go 'adapter/registry_reload.go'
+      }
+      spHardening = component 'dispatch cap + file confinement + janitor' {
+        #built
+        #risk
+        description 'Dispatch concurrency cap with a drop counter on /healthz (sec-S-04), O_NOFOLLOW path walker, and an inbound-file TTL janitor. RISK: saturated dispatch silently drops inbound — the counter is the only signal, so the /healthz drop metric must be alerted on'
+        link ../slack-pack/adapter/dispatch_drops.go 'adapter/dispatch_drops.go'
+        link ../slack-pack/adapter/confined_open.go 'adapter/confined_open.go'
+        link ../slack-pack/adapter/tmp_sweep.go 'adapter/tmp_sweep.go'
+      }
+      spCli = component 'gc-slack-cli (operator verbs)' {
+        #built
+        description 'import-app, map-channel, map-rig, enable-room-launch, sync-subteam-aliases, post-message — writes the registries the adapter reads'
+        link ../slack-pack/cli/main.go 'cli/main.go'
+        link ../slack-pack/cli/cmd/import_app.go 'cli/cmd/import_app.go'
+        link ../slack-pack/cli/cmd/map_rig.go 'cli/cmd/map_rig.go'
+      }
+      spSyncCommands = component 'sync-commands' {
+        #planned
+        description 'PLANNED: reconcile on-disk slash commands against the live Slack app. CLI scaffolded; Slack commands.list/update path stubbed, so slash commands are registered manually today (gc-cby.2)'
+        link ../slack-pack/cli/cmd/sync_subteam_aliases.go 'cli/cmd/ (sync verbs)'
+      }
+      spScripts = component 'extmsg scripts (reply / publish / status)' {
+        #built
+        description 'Python helpers behind the command wrappers — gc HTTP client, find-latest-inbound, /extmsg/outbound publish, identity/handle-alias/react/upload, status dump'
+        link ../slack-pack/scripts/slack_intake_common.py 'scripts/slack_intake_common.py'
+        link ../slack-pack/scripts/slack_chat_reply_current.py 'scripts/slack_chat_reply_current.py'
+        link ../slack-pack/scripts/slack_chat_status.py 'scripts/slack_chat_status.py'
+      }
+      spManifest = component 'app manifest + registry schemas' {
+        #built
+        description 'Slack app manifest (scopes, event subscriptions) + JSON-schema contracts for the apps / channel / rig registries shared between CLI writer and adapter reader'
+        link ../slack-pack/manifest/app.json 'manifest/app.json'
+        link ../slack-pack/schema 'schema/'
       }
     }
 
-    // ── Slack tier 1 / tier 2 — smaller adapters in the same family ────────
-    slackMini = container 'slack-mini' {
-      #built
-      description 'Tier 1 Slack bridge: single-file Go adapter, @-mention → one session, one outbound verb (post-message)'
-      technology 'Go'
-      link ../slack-mini 'slack-mini/'
-      link ../slack-mini/pack.toml 'pack.toml'
-    }
+    // ── slack-channel — Tier-2 channel-bridge variant ──────────────────────
     slackChannel = container 'slack-channel' {
       #built
-      description 'Tier 2 Slack adapter: channel↔multi-session graph, per-session identity, @handle routing, reply/publish/react. Multi-file Go, JSON schemas'
-      technology 'Go'
+      description 'Tier-2 Slack channel bridge: bind a channel/DM to one-or-many sessions, per-session identity overrides, @handle addressing. Stdlib-only Go adapter, three on-disk registries'
+      technology 'Go adapter (stdlib) + shell verbs'
       link ../slack-channel 'slack-channel/'
-      link ../slack-channel/pack.toml 'pack.toml'
+      link ../slack-channel/README.md 'slack-channel README'
+
+      scAdapter = component 'adapter (gc-slack-channel-adapter)' {
+        #built
+        description 'Entry point: Slack Events + Interactions muxes, gc extmsg registration, config + registry-path resolution'
+        link ../slack-channel/adapter/main.go 'adapter/main.go'
+        link ../slack-channel/adapter/config.go 'adapter/config.go'
+      }
+      scSignature = component 'HMAC verify + replay window' {
+        #built
+        description 'Slack v0 HMAC-SHA256 verification with a 5-minute replay window (rejects both stale and far-future); strips leading @mention / parses @handle'
+        link ../slack-channel/adapter/signature.go 'adapter/signature.go'
+      }
+      scInbound = component 'inbound routing' {
+        #built
+        description 'Routes app_mention + message.* events to bound sessions or aliased @handles; app_mention falls back to the mayor; plain messages with no binding are dropped (no firehose)'
+        link ../slack-channel/adapter/inbound.go 'adapter/inbound.go'
+      }
+      scOutbound = component 'outbound verbs' {
+        #built
+        description 'publish / publish-to-channel / reply-current / react — looks up channel + last-inbound, injects per-session identity, calls chat.postMessage / reactions.add'
+        link ../slack-channel/adapter/outbound.go 'adapter/outbound.go'
+        link ../slack-channel/adapter/slackclient.go 'adapter/slackclient.go'
+      }
+      scRegistries = component 'bindings / identities / aliases' {
+        #built
+        description 'Three RWMutex-guarded registries (channel bindings, session identities, handle aliases), persisted as atomic 0600 JSON; HTTP mutation endpoints'
+        link ../slack-channel/adapter/registries.go 'adapter/registries.go'
+        link ../slack-channel/adapter/registries_http.go 'adapter/registries_http.go'
+        link ../slack-channel/adapter/store.go 'adapter/store.go'
+      }
+      scInteractions = component 'interaction ack (stub)' {
+        #planned
+        description 'PLANNED: signature-verifies interactive payloads and 200-acks only — custom modal/action flows are deferred to the full slack-pack tier'
+        link ../slack-channel/adapter/interactions.go 'adapter/interactions.go'
+      }
+      scGcClient = component 'gc extmsg client' {
+        #built
+        description 'POST normalized inbound to /extmsg/inbound and self-register to /extmsg/adapters'
+        link ../slack-channel/adapter/gcclient.go 'adapter/gcclient.go'
+      }
+      scSchemas = component 'registry schemas + verbs' {
+        #built
+        description 'JSON-schema contracts for the three registries (validated by tests/test_schemas.py) + the shell verb wrappers that POST through the gc reverse proxy'
+        link ../slack-channel/schema/channel_mappings.schema.json 'schema/channel_mappings.schema.json'
+        link ../slack-channel/commands/_lib.sh 'commands/_lib.sh'
+      }
     }
 
-    // ── Sibling intake packs (Discord / GitHub) ────────────────────────────
-    discordPack = container 'discord' {
+    // ── slack-mini — Tier-1 minimal variant ────────────────────────────────
+    slackMini = container 'slack-mini' {
       #built
-      description 'Discord provider: interactions/gateway/admin [[service]]s (Python), `gc discord` verbs, mol-discord-fix-issue formula. Supersedes discord-intake'
-      technology 'Python'
-      link ../discord 'discord/'
-      link ../discord/pack.toml 'pack.toml'
-    }
-    discordIntake = container 'discord-intake (legacy)' {
-      #planned
-      description 'Earlier Discord slash-command intake; kept for back-compat, superseded by the discord pack'
-      technology 'Python'
-      link ../discord-intake 'discord-intake/'
-    }
-    githubIntake = container 'github-intake' {
-      #built
-      description 'GitHub webhook intake + admin [[service]]s (Python): issue `/gc fix` parse, signature verify, bead creation, branch push / PR create; mol-github-fix-issue formula'
-      technology 'Python'
-      link ../github-intake 'github-intake/'
-      link ../github-intake/pack.toml 'pack.toml'
+      description 'Tier-1 minimal Slack bridge: @-mention the bot from any channel and it bridges to your gc mayor; one outbound verb (post-message). Single-file, stateless'
+      technology 'Go adapter (single file, stdlib) + one shell verb'
+      link ../slack-mini 'slack-mini/'
+      link ../slack-mini/README.md 'slack-mini README'
+
+      smAdapter = component 'adapter (gc-slack-mini-adapter)' {
+        #built
+        description 'One file: config, HMAC-SHA256 verify, app_mention → mayor inbound bridge, /post-message → chat.postMessage, gc extmsg registration. No registries, no on-disk state'
+        link ../slack-mini/adapter/main.go 'adapter/main.go'
+      }
+      smManifest = component 'minimal app manifest + verb' {
+        #built
+        description 'Minimal Slack app manifest (app_mentions:read, chat:write) + the single post-message shell verb. Upgrade path to slack-channel preserves the same bot token + signing secret'
+        link ../slack-mini/manifest/app.json 'manifest/app.json'
+        link ../slack-mini/commands/post-message.sh 'commands/post-message.sh'
+      }
     }
 
-    // ── Workflow / formula packs (configuration only) ───────────────────────
-    gascityPack = container 'gascity (planning pack)' {
-      #built
-      description 'Planning workflow: plan/design/decompose skills + implement formula + create-beads-from-tasks helper'
-      link ../gascity 'gascity/'
-      link ../gascity/pack.toml 'pack.toml'
-    }
-    gastownPack = container 'gastown (coding pack)' {
-      #built
-      description 'Default coding workflow: named-session agent roles, patrol formulas, template fragments, session-live theme/keybinding hooks'
-      link ../gastown 'gastown/'
-      link ../gastown/pack.toml 'pack.toml'
-    }
+    // ── pr-pipeline — author-side PR discipline ─────────────────────────────
     prPipeline = container 'pr-pipeline' {
       #built
-      description 'Author-side PR discipline formulas: mol-pr-start / blast-radius / review / ship / triage'
+      description 'Author-side PR discipline as gc formulas + CLI commands: issue → plan → blast-radius → self-review → pre-push ship gate, plus issue triage'
+      technology 'gascity formulas (TOML) + shell commands + markdown templates'
       link ../pr-pipeline 'pr-pipeline/'
-      link ../pr-pipeline/pack.toml 'pack.toml'
+      link ../pr-pipeline/README.md 'pr-pipeline README'
+
+      ppCommands = component 'pr commands (plan / blast-radius / review / ship)' {
+        #built
+        description 'Shell dispatchers that parse args and gc sling the matching formula onto a rig/agent'
+        link ../pr-pipeline/commands/pr/plan/run.sh 'commands/pr/plan/run.sh'
+        link ../pr-pipeline/commands/pr/ship/run.sh 'commands/pr/ship/run.sh'
+      }
+      ppStart = component 'mol-pr-start' {
+        #built
+        description 'Issue → BLOCKING gates (competing PR, arch refactor) → blast-radius → conventions check → structured plan markdown → audit vs recurring themes. Writes a plan only; no code'
+        link ../pr-pipeline/formulas/mol-pr-start.formula.toml 'formulas/mol-pr-start.formula.toml'
+      }
+      ppBlast = component 'mol-pr-blast-radius' {
+        #built
+        description 'Maps the impact surface of a change (callers, config fields, concurrency). Composable — used inline by mol-pr-start or standalone for hotfixes'
+        link ../pr-pipeline/formulas/mol-pr-blast-radius.formula.toml 'formulas/mol-pr-blast-radius.formula.toml'
+      }
+      ppReview = component 'mol-pr-review (self-review)' {
+        #built
+        description 'Outgoing-PR self-review against the 11-category scorecard; pre-flags recurring fixup themes; root bead carries verdict block|request_changes|approve'
+        link ../pr-pipeline/formulas/mol-pr-review.formula.toml 'formulas/mol-pr-review.formula.toml'
+      }
+      ppShip = component 'mol-pr-ship (pre-push gate)' {
+        #built
+        description 'Pre-push gate: simplify → multi-reviewer iterate (<=3) → mechanical gates (build/lint/test/docs) → report. STOPS at report — never pushes or opens a PR'
+        link ../pr-pipeline/formulas/mol-pr-ship.formula.toml 'formulas/mol-pr-ship.formula.toml'
+      }
+      ppTriage = component 'mol-pr-triage' {
+        #built
+        description 'Scans open upstream issues, classifies by contributor-actionability, cross-references open PRs, produces a ranked work queue'
+        link ../pr-pipeline/formulas/mol-pr-triage.formula.toml 'formulas/mol-pr-triage.formula.toml'
+      }
+      ppTemplate = component 'adoption-review-comment template' {
+        #built
+        description 'Canonical shape for the maintainer synthesis comment (no-changes vs fixups forms); consumed by pr-review mol-adopt-pr finalize step'
+        link ../pr-pipeline/templates/adoption-review-comment.md 'templates/adoption-review-comment.md'
+      }
     }
+
+    // ── pr-review — maintainer-side PR discipline ───────────────────────────
     prReview = container 'pr-review' {
-      #built
-      description 'Maintainer-side incoming-PR formulas: mol-adopt-pr / pr-from-issue / pr-iterate / ci-diagnose / merge-only / revert. Ships no agent (consuming city supplies it)'
+      #evolving
+      description 'Maintainer-side PR discipline: adopt an incoming PR → multi-model review → resolve a merge path, as gc formulas + a /review-pr skill overlay'
+      technology 'gascity formulas (TOML) + Claude skill overlay'
       link ../pr-review 'pr-review/'
-      link ../pr-review/pack.toml 'pack.toml'
-    }
+      link ../pr-review/README.md 'pr-review README'
 
-    // ── Runtime / UX / skill-overlay packs ─────────────────────────────────
-    rlm = container 'rlm (long-context sidecar)' {
-      #built
-      description '`gc rlm` ask/install/status/uninstall CLI over a Docker or local OpenAI-compatible runtime; Python scripts + pinned reqs + prompt fragment'
-      technology 'Python + Docker'
-      link ../rlm 'rlm/'
-      link ../rlm/pack.toml 'pack.toml'
-    }
-    tmuxTheme = container 'tmux-theme' {
-      #built
-      description '[global] session_live hooks: per-agent tmux status colors, mail/hook indicators, prefix keybindings'
-      link ../tmux-theme 'tmux-theme/'
-      link ../tmux-theme/pack.toml 'pack.toml'
-    }
-    jeffrey = container 'jeffrey (skill overlays)' {
-      #built
-      description 'Skill-overlay subpacks (code-review, de-slopify, idea-wizard, planning-workflow, readme-revise, robot-mode, ui-polish) + an all/ rollup'
-      link ../jeffrey 'jeffrey/'
-      link ../jeffrey/README.md 'README'
-    }
-    flywheel = container 'flywheel (skill overlays)' {
-      #built
-      description 'Agent-enhancement subpacks (cass search, cm memory, mcp-agent-mail, ubs bug-scan) + an all/ rollup; deep-merge settings'
-      link ../flywheel 'flywheel/'
-      link ../flywheel/README.md 'README'
-    }
-
-    // ── Catalog plumbing ───────────────────────────────────────────────────
-    registry = component 'release registry + validator' {
-      #built
-      description 'registry.toml (name/source/commit/sha256 per release) gated by validate_registry.py (kebab names, semver, HTTPS git, integrity hashes, required wave-1 set)'
-      link ../registry.toml 'registry.toml'
-      link ../validate_registry.py 'validate_registry.py'
-    }
-
-    // ── Research / future direction ────────────────────────────────────────
-    extmsgLib = container 'shared extmsg-pack-lib' {
-      #research
-      description 'README "Where the work that\'s still missing comes from": the provider-agnostic state-machine logic (peer fanout, launcher, status projection) the discord pack carries should become a shared lib so slack/discord/teams stop reimplementing it'
-      link ../slack-pack/README.md 'README — shared-lib note'
+      prAdopt = component 'mol-adopt-pr' {
+        #built
+        description 'Core incoming-PR workflow: checkout → auto-rebase conflicts → run /review-pr → maintainer human-gate → resolve one of four merge paths (squash / merge / new-PR / follow-up)'
+        link ../pr-review/formulas/mol-adopt-pr.formula.toml 'formulas/mol-adopt-pr.formula.toml'
+      }
+      prReviewSkill = component '/review-pr skill (multi-model)' {
+        #built
+        description 'Skill overlay: gather context + worktrees → fan out Claude + Codex + Gemini in parallel → adversarial synthesis → post GitHub comment (PR mode)'
+        link ../pr-review/overlay/.claude/skills/review-pr/SKILL.md 'overlay/.claude/skills/review-pr/SKILL.md'
+      }
+      prMergeOnly = component 'mol-pr-merge-only' {
+        #built
+        description 'Fast path: intake → rebase-check → finalize, skipping review + human-gate when the maintainer has already eyeballed the PR'
+        link ../pr-review/formulas/mol-pr-merge-only.formula.toml 'formulas/mol-pr-merge-only.formula.toml'
+      }
+      prCiDiagnose = component 'mol-pr-ci-diagnose' {
+        #built
+        description 'Read-only: fetch a PR check runs, classify the failures, report why CI is red'
+        link ../pr-review/formulas/mol-pr-ci-diagnose.formula.toml 'formulas/mol-pr-ci-diagnose.formula.toml'
+      }
+      prRevert = component 'mol-pr-revert' {
+        #built
+        description 'Revert / roll back a merged PR'
+        link ../pr-review/formulas/mol-pr-revert.formula.toml 'formulas/mol-pr-revert.formula.toml'
+      }
+      prFromIssue = component 'mol-pr-from-issue' {
+        #planned
+        #risk
+        description 'PLANNED (vapor): outbound issue→branch→implement→ship→open-PR pipeline. RISK: an implementation gap — mol-pr-start emits a plan only, so how this step actually writes the code is unresolved'
+        link ../pr-review/formulas/mol-pr-from-issue.formula.toml 'formulas/mol-pr-from-issue.formula.toml'
+      }
+      prIterate = component 'mol-pr-iterate' {
+        #planned
+        #risk
+        description 'PLANNED (vapor): ingest review feedback → patch → verify clearance (<=2) → report or halt-mail-mayor. RISK: the halt-mail-mayor handoff path is unproven and depends on a mayor role being present'
+        link ../pr-review/formulas/mol-pr-iterate.formula.toml 'formulas/mol-pr-iterate.formula.toml'
+      }
     }
   }
 
@@ -319,77 +332,67 @@ model {
   // Relationships.
   // ─────────────────────────────────────────────────────────────────────────
 
-  human -> slackApp 'chats / @mentions / runs slash commands'
-  human -> packs.slackPack.cli 'gc slack <verb> (operator setup)'
-  human -> gascity 'opts packs into city.toml, gc reload'
+  // Actors
+  operator -> slack 'converses with sessions over Slack'
+  operator -> prPipeline 'gc pr-pipeline pr plan / review / ship'
+  operator -> prReview 'gc sling mol-adopt-pr / merge-only'
+  contributor -> github 'opens issues + PRs'
 
-  // Slack inbound: public webhook → adapter → gc
-  funnel -> packs.slackPack.adapter.adapterHttp ':443 → :8775 /slack/events + /slack/interactions'
-  slackApp -> funnel 'Events API + interactions (HMAC-signed)'
-  packs.slackPack.adapter.adapterHttp -> packs.slackPack.adapter.hmac 'verify signature, admit dispatch'
-  packs.slackPack.adapter.hmac -> packs.slackPack.adapter.eventDispatch 'admitted event'
-  packs.slackPack.adapter.adapterHttp -> packs.slackPack.adapter.interactions 'slash / block_actions / view_submission'
-  packs.slackPack.adapter.eventDispatch -> gascity.extmsg 'extmsg.inbound + session-message + thread-context preamble'
-  packs.slackPack.adapter.eventDispatch.threadContext -> slackApp 'conversations.replies (fetch unseen delta)'
-  packs.slackPack.adapter.interactions -> gascity.extmsg 'system-reminder to bound session (callback_id + values)'
-  packs.slackPack.adapter.rigDispatch -> gascity.beads 'bd create + gc sling in rig workdir'
+  // slack-pack <-> Slack
+  slack -> slackPack.spAdapter 'POST /slack/events (HMAC-signed)'
+  slackPack.spAdapter -> slackPack.spHmac 'verify X-Slack-Signature before dispatch'
+  slack -> slackPack.spInteractions 'POST /slack/interactions'
+  slackPack.spOauth -> slack 'OAuth code-to-token exchange'
+  slackPack.spAdapter -> slack 'chat.postMessage / reactions / files / views'
+  slackPack.spScripts -> slackPack.spAdapter 'publish / reply / react via command wrappers'
 
-  // Slack outbound: gc → adapter → Slack
-  gascity.extmsg -> packs.slackPack.adapter.publish '/publish (over supervised UDS)'
-  packs.slackPack.adapter.publish -> slackApp 'chat.postMessage / files upload (session-attributed)'
-  packs.slackPack.adapter.publish -> gascity.extmsg 'self-register via /extmsg/adapters'
-  packs.slackPack.adapter.oauth -> slackApp 'oauth.v2.access (install)'
-  packs.slackPack.adapter.inboundFiles -> slackApp 'download inbound attachments'
-
-  // CLI writes registries the adapter reloads on SIGHUP
-  packs.slackPack.cli.cliVerbs -> packs.slackPack.cli.cliState 'write registry records'
-  packs.slackPack.cli.cliState -> packs.slackPack.adapter.registries 'writes JSON under <city>/.gc/slack/'
-  packs.slackPack.cli.cliVerbs -> slackApp 'sync-commands / sync-subteam-aliases / post-message (Web API)'
-  packs.slackPack.adapter.registries -> packs.slackPack.adapter.eventDispatch 'channel/rig/subteam routing (in-memory)'
-  packs.slackPack.adapter.registries -> packs.slackPack.adapter.interactions 'channel→target resolution'
-
-  // Adapter-internal stores
-  packs.slackPack.adapter.publish -> packs.slackPack.adapter.identityReg 'per-session identity override lookup'
-  packs.slackPack.adapter.eventDispatch.subteam -> packs.slackPack.adapter.registries 'subteam-alias + handle-alias lookup'
-
-  // Python helpers ride the gc extmsg bridge (peer fanout fires)
-  packs.slackPack.pyHelpers -> gascity.extmsg 'reply-current / publish via /extmsg/outbound'
-  packs.slackPack.pyHelpers -> packs.slackPack.adapter.publish '--via adapter (diagnostics, bypass gc)'
-
-  // The pack registers as a supervised service
-  packs.slackPack.slackService -> gascity.supervisor '[[service]] proxy_process'
-  gascity.supervisor -> packs.slackPack.adapter 'spawns + health-checks (/healthz on UDS)'
-
-  // Sibling adapter packs bridge their providers into the same extmsg surface
-  packs.slackMini -> gascity.extmsg 'inbound/outbound (tier-1 bridge)'
-  packs.slackMini -> slackApp 'app_mention + post-message'
-  packs.slackChannel -> gascity.extmsg 'inbound/outbound (tier-2 bridge)'
-  packs.slackChannel -> slackApp 'events + Web API'
-  packs.discordPack -> gascity.extmsg 'inbound/outbound + fix-issue'
-  packs.discordPack -> discordApp 'gateway + interactions'
-  packs.discordPack -> gascity.beads 'mol-discord-fix-issue → bead'
-  packs.githubIntake -> gascity.beads 'issue /gc fix → bead + dispatch'
-  packs.githubIntake -> github 'webhook + branch push / PR create'
-  packs.githubIntake -> funnel 'public webhook ingress'
-
-  // Workflow / overlay packs configure gc behaviour (no external system)
-  packs.gascityPack -> gascity 'plan/design/decompose skills + implement formula'
-  packs.gastownPack -> gascity 'agent roles + patrol formulas + session-live hooks'
-  packs.prPipeline -> gascity 'author-side PR formulas'
-  packs.prReview -> gascity 'maintainer-side adopt/iterate formulas'
-  packs.jeffrey -> gascity 'skill overlays'
-  packs.flywheel -> gascity 'skill overlays + settings deep-merge'
-  packs.tmuxTheme -> gascity 'session_live hooks'
-
-  // Runtime sidecar
-  packs.rlm -> inference 'gc rlm ask → long-context synthesis'
-
-  // Catalog plumbing + research direction
-  packs.registry -> packs.slackPack 'pins releases (commit + sha256)'
-  packs.extmsgLib -> packs.slackPack 'would absorb the provider-agnostic state machine' {
-    #research
+  // slack-pack <-> gascity
+  slackPack.spAdapter -> gascity.supervisor 'registers as proxy_process service; /svc/slack/* reverse-proxied'
+  slackPack.spAdapter -> gascity.extmsg 'POST inbound; receives session-attributed /publish'
+  slackPack.spRigDispatch -> gascity.beads 'bd create on rig slash-command'
+  slackPack.spRigDispatch -> gascity.sessions 'gc sling to the rig target'
+  slackPack.spRoomLaunch -> gascity.sessions 'POST /v0/sessions (@@ launcher)' {
+    #planned
   }
-  packs.extmsgLib -> packs.discordPack 'shared by discord too' {
-    #research
+  slackPack.spThreadRouting -> gascity.sessions 'subscribes /event-stream for session teardown'
+  slackPack.spScripts -> gascity.extmsg 'find-inbound + /extmsg/outbound'
+
+  // slack-channel <-> Slack + gascity
+  slack -> slackChannel.scAdapter 'POST /slack/events (HMAC-signed)'
+  slackChannel.scAdapter -> slackChannel.scSignature 'verify + replay-window before routing'
+  slackChannel.scInbound -> slackChannel.scRegistries 'channel binding + handle-alias lookup'
+  slackChannel.scOutbound -> slack 'chat.postMessage (identity override) / reactions.add'
+  slackChannel.scGcClient -> gascity.extmsg 'register adapter + POST inbound'
+  slackChannel.scAdapter -> gascity.supervisor 'proxy_process service; /svc/slack-channel/*'
+
+  // slack-mini <-> Slack + gascity
+  slack -> slackMini.smAdapter 'POST /slack/events (app_mention, HMAC-signed)'
+  slackMini.smAdapter -> slack 'chat.postMessage (post-message verb)'
+  slackMini.smAdapter -> gascity.extmsg 'register adapter + POST inbound → mayor'
+  slackMini.smAdapter -> gascity.supervisor 'proxy_process service; /svc/slack-mini/*'
+
+  // pr-pipeline internal + gascity + GitHub
+  prPipeline.ppCommands -> gascity.sessions 'gc sling the formula onto a rig/agent'
+  prPipeline.ppStart -> prPipeline.ppBlast 'invokes blast-radius inline'
+  prPipeline.ppStart -> github 'reads issue + competing PRs (gh)'
+  prPipeline.ppStart -> gascity.beads 'root bead = control bead (plan path, gates)'
+  prPipeline.ppReview -> github 'reads the outgoing PR diff (gh)'
+  prPipeline.ppShip -> reviewModels 'multi-reviewer iterate panel'
+  prPipeline.ppTriage -> github 'scans open issues + PRs (gh)'
+
+  // pr-review internal + gascity + GitHub + models
+  prReview.prAdopt -> github 'checkout, rebase, comment / label / merge (gh)'
+  prReview.prAdopt -> prReview.prReviewSkill 'review step invokes /review-pr'
+  prReview.prAdopt -> prPipeline.ppTemplate 'finalize uses the adoption-review-comment shape'
+  prReview.prAdopt -> gascity.beads 'root bead carries merge path + maintainer edits'
+  prReview.prReviewSkill -> reviewModels 'fan out Claude + Codex + Gemini, then synthesise'
+  prReview.prReviewSkill -> github 'fetch PR head + diff; post synthesis comment (gh)'
+  prReview.prMergeOnly -> github 'rebase-check + merge (gh)'
+  prReview.prCiDiagnose -> github 'fetch check runs (gh)'
+  prReview.prFromIssue -> prPipeline.ppShip 'ships before opening the PR' {
+    #planned
+  }
+  prReview.prIterate -> reviewModels 'patch against incoming review feedback' {
+    #planned
   }
 }

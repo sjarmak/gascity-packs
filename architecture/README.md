@@ -1,50 +1,55 @@
 # Architecture diagram (LikeC4)
 
-Architecture-as-code model of `gascity-packs`, rendered with
-[LikeC4](https://likec4.dev). The model is the source of truth across
-[`spec.c4`](spec.c4) (element kinds, tags, deployment node kinds),
-[`model.c4`](model.c4) (the pack catalog), and [`views.c4`](views.c4)
-(structure, walkthrough, and risk views), with the deployment model in
-[`deployment.c4`](deployment.c4). The narrative companions are the repo-root
-[`README.md`](../README.md), [`AGENTS.md`](../AGENTS.md) (the pack invariants),
-and the maintainer's [`.gc/project-brief.md`](../.gc/project-brief.md).
+Architecture-as-code model of the author's own **gascity packs** — the Slack
+intake family and the PR-discipline family — rendered with
+[LikeC4](https://likec4.dev). This is a focused, authored-packs-only view: it
+covers the five packs Stephanie Jarmak wrote (`slack-pack`, `slack-channel`,
+`slack-mini`, `pr-pipeline`, `pr-review`) and nothing else in the catalog.
 
-`gascity-packs` is an opt-in **pack catalog** for the
-[Gas City](https://github.com/gastownhall/gascity) orchestrator: configuration
-bundles (chat/VCS adapters, PR-discipline formulas, skill overlays, a
-long-context sidecar, session theming) that a city path-imports to become
-opinionated without forking gascity. The heavyweight is **`slack-pack`** — two
-Go binaries (a long-running webhook adapter gc supervises as a `proxy_process`,
-and a one-shot operator CLI) plus Python helpers — modelled here at component
-granularity. The smaller packs are modelled as containers, since each is a
-configuration bundle rather than a code module.
+All of it layers on **gascity**, the multi-agent orchestrator: the Slack
+adapters are `proxy_process` services gc supervises and bridges to sessions over
+its extmsg bridge; the PR-discipline packs are gc formulas (and one skill
+overlay) slung onto a rig on demand.
 
-Every element `link`s to its real source (`slack-pack/…`, `discord/…`,
-`registry.toml`, …) so any box in the explorer is one click from the code.
+The model is the source of truth across [`spec.c4`](spec.c4) (element kinds,
+tags, deployment node kinds), [`model.c4`](model.c4) (the system),
+[`views.c4`](views.c4) (structure, walkthrough, and risk views), with the
+deployment model in [`deployment.c4`](deployment.c4).
+
+Every element `link`s to its real source path, relative to `architecture/`
+(e.g. `../slack-pack/adapter/main.go`) — so any box in the explorer is one click
+from the code behind it.
 
 ## Delivery state is tagged, not guessed
 
-Every element carries a tag so **planned and scaffold work renders distinctly
-from what already ships** (legend in `spec.c4`):
+Every element carries a tag so **stubbed / experimental work renders distinctly
+from what ships** (legend in `spec.c4`):
 
 | Tag | Meaning | Render |
 |---|---|---|
-| `#built` | code path exists, is exercised, and ships in a release | solid |
-| `#evolving` | built, but the surface/contract is still moving (feature-by-feature port) | solid (amber) |
-| `#planned` | designed; CLI side written, but the runtime path is still a stub | **dashed, dimmed** |
-| `#research` | speculative future track | **dashed, indigo** |
+| `#built` | code path exists, is exercised, and ships | solid |
+| `#evolving` | built, but the surface/contract is still moving | solid |
+| `#planned` | designed; runtime path is still a stub | **dashed, dimmed** |
+| `#research` | speculative track | **dashed, indigo** |
 
-The evidence is in the tree, not invented: `slack-pack` is `#evolving` because
-its own README states it is "not yet at parity with the discord pack" and is a
-feature-by-feature port. The `@@launcher` dispatch is `#planned`/`#risk`
-because `double_handle_prefix.go` emits a "placeholder ephemeral" and the
-README's *Not yet implemented* section lists the adapter-side `@@<handle>`
-session spawn as the one remaining stub (deferred to the gc-cby epic). The
-OAuth flow is `#evolving`/`#risk` (single-tenant by design, writes an
-`install.env` the operator must still re-source). `discord-intake` is
-`#planned`-styled as the superseded legacy of the `discord` pack. The shared
-`extmsg-pack-lib` is `#research` — the README's "where the work that's still
-missing comes from" note about extracting the provider-agnostic state machine.
+Planned / stubbed items in the model: slack-pack's room launcher (`@@<handle>`,
+returns "not yet available") and `sync-commands` (slash-command registration is
+manual today); slack-channel's interaction handler (signature-verify + ack
+only); and pr-review's two vapor formulas (`mol-pr-from-issue`,
+`mol-pr-iterate`).
+
+## The five packs
+
+| Container | Family | What it is |
+|---|---|---|
+| `slack-pack` | Slack | The rich provider — webhook adapter, HMAC verify, OAuth, event/interaction dispatch, rig + room launch, thread→session routing, Go CLI, extmsg scripts |
+| `slack-channel` | Slack | Tier-2 channel bridge — bind a channel/DM to one-or-many sessions, per-session identities, `@handle` addressing; stdlib-only Go, three on-disk registries |
+| `slack-mini` | Slack | Tier-1 minimal bridge — `@`-mention → mayor, one outbound verb; single-file, stateless |
+| `pr-pipeline` | PR discipline | Author-side: issue → plan → blast-radius → self-review → pre-push ship gate, plus triage; gc formulas + commands |
+| `pr-review` | PR discipline | Maintainer-side: adopt → multi-model review (`/review-pr`) → resolve a merge path; gc formulas + a skill overlay |
+
+The three Slack packs are **tiered alternatives** — pick exactly one per city;
+the upgrade path preserves the same bot token + signing secret.
 
 ## Views
 
@@ -52,40 +57,38 @@ missing comes from" note about extracting the provider-agnostic state machine.
 
 | View | Scope |
 |---|---|
-| `index` | system landscape — the catalog in context of gascity, Slack, Discord, GitHub, Funnel, the LLM backend |
-| `packsSystem` | the `gascity-packs` system decomposed into its packs (built vs planned) |
-| `slackPackContainer` | the Slack pack — adapter + CLI + Python helpers + service/doctor |
-| `adapterContainer` | the `gc-slack-adapter` Go binary — HTTP/HMAC, dispatch, interactions, rig/room dispatch, registries, publish, OAuth, file store |
-| `eventDispatchView` | the inbound event-dispatch fan-out (where the one `@@launcher` stub lives) |
-| `cliContainer` | the `gc-slack-cli` operator binary — verbs + registry-state writers |
-| `planned` | the `@@launcher` stub, OAuth, legacy discord-intake, and the research shared-lib, with built deps dimmed |
-| `deployment` | where each piece runs — process & ingress boundaries (supervised adapter + UDS, one-shot CLI, Funnel, Slack, LLM) |
+| `index` | system landscape — the five packs in context of gascity, Slack, GitHub, review models |
+| `packsSystem` | the system decomposed into its five pack containers |
+| `slackPackView` | slack-pack components (adapter, HMAC, OAuth, dispatch, routing, CLI, scripts) |
+| `slackChannelView` | slack-channel components (signature, inbound/outbound, registries) |
+| `slackMiniView` | slack-mini components (single-file adapter, minimal manifest) |
+| `prPipelineView` | pr-pipeline components (commands + the five formulas + template) |
+| `prReviewView` | pr-review components (mol-adopt-pr, /review-pr skill, merge/diagnose/revert, vapor formulas) |
+| `planned` | the stubbed + vapor work, with built dependencies dimmed |
+| `deployment` | where each pack runs — three supervised adapters + on-demand formula sessions |
 
-**Walkthrough flows** (dynamic / numbered-step views) — the narrative spine for
-a design-review walkthrough:
+**Walkthrough flows** (dynamic / numbered-step views) — the narrative spine:
 
 | View | Flow |
 |---|---|
-| `inboundFlow` | a Slack message → bound session (Funnel → HMAC/dispatch → route → gc inbound) |
-| `outboundFlow` | an agent reply → Slack with peer fanout (via gc `/extmsg/outbound` → supervised `/publish`) |
-| `slashToWorkFlow` | a slash command in a rig channel → fix modal → `bd create` + `gc sling` |
-| `setupFlow` | operator setup — CLI writes a registry JSON, SIGHUP reloads it live |
+| `slackInbound` | a Slack message arrives → HMAC verify → thread→session resolve → extmsg → session |
+| `slackRigDispatch` | a rig slash-command → modal context → bead spawn → gc sling |
+| `prShipFlow` | author-side: issue → plan → blast-radius → ship gate (stops at a readiness report) |
+| `prAdoptFlow` | maintainer-side: incoming PR → /review-pr fan-out → human-gate → merge path |
 
 **Risk lens:**
 
 | View | Scope |
 |---|---|
-| `risks` | the `#risk`-flagged elements with each open question stated in-box (`@@launcher` spawn still a stub; OAuth single-tenant + manual `install.env` re-source) |
+| `risks` | the `#risk`-flagged elements with each open question stated in-box (dispatch-drop silent loss, the two pr-review vapor formulas) |
 
 ### Running the walkthrough
 
-For a design review, present in this order: `index` → `packsSystem` (orient on
-the catalog) → `slackPackContainer` → `adapterContainer` (the heavyweight) →
-the four walkthrough flows in sequence (what actually happens) → `deployment`
-(where it runs) → `risks` (what to probe) → `planned` (what's next). In
-`npx likec4 start`, the dynamic views animate step-by-step and each view's
-notes panel carries the gotchas (the fail-closed publish guard, the
-all-or-nothing SIGHUP reload, the Funnel-out-of-band foot-gun).
+For a review, present in this order: `index` → `packsSystem` (orient on
+structure) → the per-pack component views → the four walkthrough flows (what
+actually happens) → `deployment` (where it runs) → `risks` (what to probe) →
+`planned` (what's still a stub). In `npx likec4 start`, the dynamic views animate
+step-by-step.
 
 ## Viewing & regenerating
 
@@ -93,33 +96,6 @@ all-or-nothing SIGHUP reload, the Funnel-out-of-band foot-gun).
 # Interactive, hot-reloading explorer (recommended)
 npx likec4 start architecture
 
-# Re-export the static PNGs in exports/ (needs a one-time browser download:
-#   npx playwright install chromium-headless-shell)
-npx likec4 export png architecture -o architecture/exports
-
 # Validate the model (strict — the source of truth for correctness)
 npx likec4 validate architecture
 ```
-
-### Viewing the interactive explorer over SSH (headless remote)
-
-`likec4 start` serves a Vite dev server on `localhost:5173`. From a headless
-remote, forward that port to your laptop and open it locally — three options,
-easiest first:
-
-1. **VS Code / Cursor Remote-SSH** — run `npx likec4 start architecture` in the
-   integrated terminal; the editor auto-forwards 5173 and offers "Open in
-   Browser". Nothing else to configure.
-2. **SSH local port-forward** — on your laptop:
-   ```bash
-   ssh -N -L 5173:localhost:5173 user@remote   # leave running
-   ```
-   then on the remote `npx likec4 start architecture` and open
-   <http://localhost:5173> locally. (Already in an SSH session? Add the tunnel
-   without reconnecting: press `~C` then type `-L 5173:localhost:5173`.)
-3. **Bind + reach directly** — `npx likec4 start architecture --listen 0.0.0.0`
-   and browse to `http://<remote-ip>:5173` (only if that port is reachable /
-   firewall-open; the tunnel in option 2 is safer).
-
-No browser at all? Export the PNGs with `npx likec4 export png` (needs no
-display) — `scp` them down, or view inline if your terminal supports images.
