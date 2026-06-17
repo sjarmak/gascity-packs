@@ -3318,12 +3318,36 @@ func dispatchToAliasedSession(cfg config, sessionID string, msg externalInboundM
 	// boundaries inside the dispatched body and injecting arbitrary
 	// system instructions into the receiving aliased session (cby.33,
 	// extends cby.17 sanitization to the alias dispatch path).
+	//
+	// Surface any downloaded attachments (file:// local paths) so the aliased
+	// session can Read them — vision works on local files. downloadSlackFiles
+	// already wrote each file to local disk and set URL="file://"+localpath
+	// and MIMEType; before this the dispatch interpolated only msg.Text and
+	// dropped the images entirely. Each field is neutralized like the text
+	// path (cby.33) so a forged </system-reminder> in a filename cannot break
+	// out of the reminder envelope. Empty string when there are no
+	// attachments, leaving the body byte-identical to the text-only form.
+	attachmentsBlock := ""
+	if len(msg.Attachments) > 0 {
+		var ab strings.Builder
+		fmt.Fprintf(&ab, "\nAttachments (%d) — saved to local disk; Read the file:// path to view:\n", len(msg.Attachments))
+		for i, att := range msg.Attachments {
+			name := filepath.Base(strings.TrimPrefix(att.URL, "file://"))
+			fmt.Fprintf(&ab, "  %d. %s (%s): %s\n",
+				i+1,
+				neutralizeMarkupBoundaries(name),
+				neutralizeMarkupBoundaries(att.MIMEType),
+				neutralizeMarkupBoundaries(att.URL))
+		}
+		attachmentsBlock = ab.String()
+	}
 	body := fmt.Sprintf(
 		"<system-reminder>\n"+
 			"Slack address-by-handle: @%s addressed you from channel %s (Slack ts %s) by user %s.\n"+
 			"\n"+
 			"Message text:\n"+
 			"%s\n"+
+			"%s"+
 			"\n"+
 			"To reply in that channel (threaded under their message), write your reply to a tmpfile and run:\n"+
 			"  gc slack publish-to-channel \\\n"+
@@ -3338,6 +3362,7 @@ func dispatchToAliasedSession(cfg config, sessionID string, msg externalInboundM
 		neutralizeMarkupBoundaries(msg.ProviderMessageID),
 		neutralizeMarkupBoundaries(msg.Actor.ID),
 		neutralizeMarkupBoundaries(msg.Text),
+		attachmentsBlock, // already per-field neutralized; pass raw
 		neutralizeMarkupBoundaries(msg.Conversation.ConversationID),
 		neutralizeMarkupBoundaries(msg.ProviderMessageID),
 	)
