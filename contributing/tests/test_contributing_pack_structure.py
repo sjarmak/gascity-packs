@@ -8,12 +8,36 @@ import unittest
 ROOT = pathlib.Path(__file__).resolve().parents[1]
 
 
+EXPECTED_SKILLS = {
+    "blast-radius",
+    "check",
+    "contributing",
+    "find-work",
+    "plan-pr",
+    "ship",
+    "write-issue",
+}
+
+
 class PackStructureTests(unittest.TestCase):
-    def test_pack_declares_pr_pipeline_import(self) -> None:
-        """The contributing pack composes pr-pipeline; the pairing must be declared."""
+    def test_pack_is_self_contained(self) -> None:
+        """0.2.0 is END-TO-END self-contained: it must declare no imports."""
         text = (ROOT / "pack.toml").read_text(encoding="utf-8")
-        self.assertRegex(text, r"(?m)^\[imports\.pr-pipeline\]")
-        self.assertRegex(text, r"(?m)^\s*source\s*=")
+        # Only `[pack]` tables are allowed; any `[imports.*]` table breaks the
+        # self-contained contract the 0.2.0 directive requires.
+        self.assertNotRegex(
+            text,
+            r"(?m)^\[imports\.",
+            "contributing 0.2.0 must not import any pack — it bakes the standards in",
+        )
+
+    def test_expected_skills_present(self) -> None:
+        skills = {p.parent.name for p in ROOT.glob("skills/*/SKILL.md")}
+        self.assertEqual(
+            skills,
+            EXPECTED_SKILLS,
+            "the self-contained lifecycle requires exactly these seven skills",
+        )
 
     def test_skill_name_matches_directory(self) -> None:
         for skill in sorted(ROOT.glob("skills/*/SKILL.md")):

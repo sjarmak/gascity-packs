@@ -1,6 +1,6 @@
 ---
 name: contributing
-description: The full external-contributor lifecycle for gastownhall/gascity — write a good issue, find priority work, open a PR, and self-review before pushing. Use when someone wants to contribute to Gas City and needs to know which step they're on and which command runs it. Routes each step to the right tool (this pack's write-issue skill for filing; the pr-pipeline pack's pr commands for triage, planning, review, and the pre-push gate).
+description: The full external-contributor lifecycle for gastownhall/gascity — write a good issue, find priority work, plan a PR, map its blast radius, run the codebase audit, and self-review before pushing. Use when someone wants to contribute to Gas City and needs to know which step they're on and which skill runs it. Self-contained: every step is a skill in this pack with Gas City's actual standards baked in — no internal tooling, no sibling pack.
 ---
 
 # Contributing to Gas City
@@ -8,143 +8,107 @@ description: The full external-contributor lifecycle for gastownhall/gascity —
 You are an external contributor to
 [gastownhall/gascity](https://github.com/gastownhall/gascity). This skill is the
 map of the whole journey — from "I noticed something" to "my PR is ready to
-push" — and which command runs each step.
+push" — and which skill runs each step.
 
-It stitches together two packs:
+Everything lives in this one pack. Each step carries Gas City's **actual**
+standards (the adoption-review audit, the blast-radius dimensions, the
+design-capture rule, the test tiers) baked into the skill text, so your coding
+agent applies them by reading. There's nothing to install beyond `git`, `gh`, and
+a local checkout.
 
-- **this pack (`contributing`)** owns step 1: writing a high-quality issue.
-- **the `pr-pipeline` pack** owns steps 2-4: finding work, planning and building
-  the PR, and the pre-push self-review gate. This pack imports it, so its
-  `gc pr-pipeline pr ...` commands are available alongside the skills here.
-
-Nothing here pushes a branch or opens a PR for you — those stay explicit human
-actions. Each step produces an artifact (an issue, a plan, a report) you act on.
+Nothing here pushes a branch or opens a PR for you — those stay your explicit
+call. Each step produces an artifact (an issue, a plan, a report) you act on.
 
 ## The lifecycle
 
 ```
-   ┌─ 1. write a good issue ────────────────┐   (this pack: write-issue)
-   │                                         │
-   │   ┌─ 2. find priority work ─────────┐   │   (pr-pipeline: mol-pr-triage)
-   │   │                                 │   │
-   ▼   ▼                                 │   │
-   3. plan & build the PR ───────────────┘   │   (pr-pipeline: pr plan + pr blast-radius)
-   │                                         │
-   ▼                                         │
-   4. self-review before pushing ◀───────────┘   (pr-pipeline: pr review + pr ship)
+   ┌─ 1. write a good issue ───────────────┐   (write-issue)
+   │                                        │
+   │   ┌─ 2. find priority work ────────┐   │   (find-work)
+   │   │                                │   │
+   ▼   ▼                                │   │
+   3. plan the PR ──────────────────────┘   │   (plan-pr)
+   │                                        │
+   ▼                                        │
+   4. map blast radius                      │   (blast-radius)
+   │                                        │
+   ▼                                        │
+   5. run the codebase check                │   (check)
+   │                                        │
+   ▼                                        │
+   6. self-review before pushing ◀──────────┘   (ship)
 ```
 
-| Step | What you do | Command | Owned by |
-|------|-------------|---------|----------|
-| 1 | Write a high-quality issue | follow the [write-issue](../write-issue/SKILL.md) skill | this pack |
-| 2 | Find a priority issue to work on | `gc sling <rig>/<agent> mol-pr-triage --formula` | pr-pipeline |
-| 3a | Plan a PR from an issue | `gc pr-pipeline pr plan <issue> --rig <rig>` | pr-pipeline |
-| 3b | Map the impact surface | `gc pr-pipeline pr blast-radius "<scope>" --rig <rig>` | pr-pipeline |
-| 4a | Self-review the outgoing PR | `gc pr-pipeline pr review <pr-number> --rig <rig>` | pr-pipeline |
-| 4b | Run the pre-push gate | `gc pr-pipeline pr ship --rig <rig>` | pr-pipeline |
+| Step | What you do | Skill |
+|------|-------------|-------|
+| 1 | Write a high-quality issue | [write-issue](../write-issue/SKILL.md) |
+| 2 | Find a priority issue to work on | [find-work](../find-work/SKILL.md) |
+| 3 | Plan the PR (adoption-review-aware) | [plan-pr](../plan-pr/SKILL.md) |
+| 4 | Map the impact surface | [blast-radius](../blast-radius/SKILL.md) |
+| 5 | Run mechanical gates + the B1–B36 audit | [check](../check/SKILL.md) |
+| 6 | Self-review and produce a readiness report | [ship](../ship/SKILL.md) |
 
 ## Two entry points
 
-The lifecycle is one loop, but you join it at different places depending on what
+The lifecycle is one loop; you join it at different places depending on what
 you're starting from.
 
 ### A. PR a priority issue (someone else's issue, or a triage pick)
 
-You want to help, but you don't have a specific bug in mind yet. Start at
-**step 2**.
+You want to help but don't have a specific bug in mind. Start at **step 2**.
 
-1. **Find work** — run triage to scan open issues and rank them into a
-   contributor work-queue:
-
-   ```bash
-   gc sling <rig>/<agent> mol-pr-triage --formula
-   ```
-
-   `mol-pr-triage` has no wrapper command; it's dispatched as a formula and
-   writes a ranked queue. Pick an issue that's unassigned and in scope for you.
-
+1. **Find work** — run [find-work](../find-work/SKILL.md) to scan open issues,
+   rank them into a contributor work-queue, and filter out anything already
+   covered by an open PR or blocked on a maintainer decision. Pick an unassigned,
+   in-scope issue that passes the decision gates.
 2. **Plan the PR** for the issue you picked — go to **step 3**.
 
 ### B. PR your own issue (something you found)
 
 You hit a bug or have a change in mind. Start at **step 1**.
 
-1. **Write the issue** first, with the [write-issue](../write-issue/SKILL.md)
-   skill. Filing it before you code gives a maintainer a chance to redirect the
-   approach, flag a duplicate, or point at a design constraint — cheaper than
-   finding that out on the PR.
-
+1. **Write the issue** first with [write-issue](../write-issue/SKILL.md). Filing
+   it before you code gives a maintainer a chance to redirect the approach, flag a
+   duplicate, or point at a design constraint — far cheaper than finding that out
+   on the PR.
 2. **Plan the PR** on the issue you just filed — go to **step 3**.
 
-## Step 3 — plan & build the PR
+## Step 3 — plan the PR
 
-Both entry points converge here. You have an issue number.
+Both entry points converge here; you have an issue number. Run
+[plan-pr](../plan-pr/SKILL.md). It front-loads the analysis the maintainer's
+review will check — the competing-PR and architectural-refactor gates, blast
+radius, convention alignment, the design-capture decision, and a plan audited
+against the recurring review findings. **No code is written until the plan is
+confirmed.**
 
-1. **Plan it.** This front-loads the analysis a maintainer's review will check,
-   before any code is written — competing-PR and architectural-refactor gates,
-   blast radius, repo conventions, and a plan audited against recurring review
-   findings:
+## Step 4 — map blast radius
 
-   ```bash
-   gc pr-pipeline pr plan <issue> --rig <rig>
-   ```
+For any change that isn't trivially local — refactors, anything touching shared
+state, lifecycle, config, or dispatch — run [blast-radius](../blast-radius/SKILL.md)
+to map callers, execution contexts, config-field sync chains, domain boundaries,
+and concurrency before you write the code. (plan-pr calls this in as its Phase 2.)
 
-   The plan lands in `.gc/pr-pipeline/plans/issue-<issue>.md`. No code is
-   written. Read it before you start.
+## Step 5 — implement, then check
 
-2. **Map blast radius** for any change that isn't trivially local — refactors,
-   anything touching shared state, lifecycle, or dispatch:
+Implement against the plan, keeping the change scoped to what the issue asks
+(note anything adjacent as out-of-scope). Then run [check](../check/SKILL.md): the
+mechanical gates (`make build` / `make check` / `make check-docs`) with
+baseline-vs-regression classification, plus the full B1–B36 codebase audit.
 
-   ```bash
-   gc pr-pipeline pr blast-radius "<scope>" --rig <rig>
-   ```
+## Step 6 — self-review before pushing
 
-3. **Implement** against the plan. Keep the change scoped to what the issue
-   asks; note anything adjacent as out-of-scope rather than folding it in.
-
-> Shortcut: `mol-pr-from-issue` chains issue → plan → implement → ship-gate in
-> one routed run. It halts at branch-ready by default (no push, no PR):
->
-> ```bash
-> gc sling <rig>/<agent> mol-pr-from-issue --formula --var issue_number=<N>
-> ```
-
-## Step 4 — self-review before pushing
-
-Catch the structural and correctness defects a careful maintainer review would
-flag, so your PR lands with few or no review comments.
-
-1. **Score the change** against the 11-category scorecard (correctness, contract
-   fidelity, blast radius, concurrency, error handling, security, resource
-   lifecycle, release safety, test evidence, architectural consistency,
-   debuggability):
-
-   ```bash
-   gc pr-pipeline pr review <pr-number> --rig <rig>
-   ```
-
-   It writes a scorecard to `.gc/pr-pipeline/reviews/pr-<pr-number>.md` and gives
-   a verdict (`block` / `request_changes` / `approve`). Apply the fixes it
-   surfaces.
-
-2. **Run the pre-push gate** — simplify, iterate the self-review until clean, run
-   the mechanical checks (build / vet / test / docs), and produce a readiness
-   report:
-
-   ```bash
-   gc pr-pipeline pr ship --rig <rig>
-   ```
-
-   It **stops at the report.** Pushing the branch and opening the PR are your
-   call — make them once the report is clean.
+Run [ship](../ship/SKILL.md): the design-capture gate, a simplify pass, a
+self-review loop against the recurring adoption-review findings, optional
+performance measurement, and the check skill — combined into one readiness
+report. **It stops at the report. Pushing the branch and opening the PR are your
+call.**
 
 ## Notes
 
-- Replace `<rig>` with your rig name and `<agent>` with your city's coding worker.
-  The pr-pipeline wrapper commands dispatch to a default coding-worker agent;
-  pass `--agent <name>` if your city's worker is named differently.
-- The pr-pipeline commands are read-only outside their own `.gc/pr-pipeline/`
-  output paths, except `pr ship`, which may modify the diff during its simplify
-  and review-iteration stages.
-- For the deeper mechanics of each pr-pipeline formula, see the
-  [pr-pipeline README](../../../pr-pipeline/README.md).
+- The whole pack is self-contained — no `[imports.*]`, no internal agents, no
+  maintainer-only tooling. If you can read these skills and run `git`/`gh`, you
+  have everything.
+- This is the gas-city-specific lifecycle. A city wanting generic contributor
+  discipline without Gas City's particular standards can use the `pr-pipeline`
+  pack instead; this pack bakes those standards in.

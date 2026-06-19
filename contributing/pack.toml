@@ -4,29 +4,35 @@
 # Gives an outside contributor the full journey of landing work in
 # https://github.com/gastownhall/gascity:
 #
-#   1. write a best-practice issue        (this pack's write-issue skill)
-#   2. find priority work                  (pr-pipeline: mol-pr-triage)
-#   3. plan & open a PR for an issue        (pr-pipeline: pr plan + pr blast-radius)
-#   4. self-review before pushing           (pr-pipeline: pr review + pr ship)
+#   1. write a best-practice issue        (write-issue skill)
+#   2. find priority work                  (find-work skill)
+#   3. plan a PR for an issue              (plan-pr skill)
+#   4. map the impact surface             (blast-radius skill)
+#   5. verify against the codebase audit  (check skill)
+#   6. self-review before pushing          (ship skill)
 #
-# Only step 1 is net-new here. Steps 2-4 are ALREADY delivered by the
-# pr-pipeline pack, so this pack composes pr-pipeline rather than
-# re-implementing it. The contributing skill stitches the four steps into a
-# single lifecycle and routes each one to the right command.
+# SELF-CONTAINED by design. Every step carries Gas City's ACTUAL standards
+# baked into the skill text — the full adoption-review audit (B1-B36), the
+# blast-radius dimensions, the design-capture discipline, the five test
+# tiers, the code conventions — so a contributor's own coding agent applies
+# them by READING the skill. There is NO [imports.*]: the pack stands alone
+# and depends on nothing a contributor lacks (no internal agents, no sibling
+# pack, no maintainer infrastructure).
+#
+# This is the gas-city-specific instantiation of the contributor lifecycle.
+# The generic pr-pipeline pack remains the right choice for cities that want
+# discipline without gas-city's particular standards; this pack bakes those
+# standards in.
 #
 # Usage in your city's pack.toml:
 #   [imports.contributing]
 #   source = "../packs/contributing"   # path; or git URL when published
 #
-# This pack pairs with pr-pipeline. The import below resolves the sibling
-# pack so `gc pr-pipeline pr ...` commands are available alongside the
-# contributing skills. Repoint `source` to wherever your city vendors
-# pr-pipeline (a git URL once both packs are published).
+# The skills then load for your coding agent. Nothing here pushes a branch or
+# opens a PR — each step produces an artifact (an issue, a plan, a report) you
+# act on. Pushing is always your call.
 
 [pack]
 name = "contributing"
-version = "0.1.0"
+version = "0.2.0"
 schema = 2
-
-[imports.pr-pipeline]
-source = "../pr-pipeline"

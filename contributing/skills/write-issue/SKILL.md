@@ -71,11 +71,17 @@ If you find a match:
 
 The most common failure mode: a bug seen on an old version or a feature branch
 is reported as if it's on `main`, but `main` already fixed it (or never had the
-buggy code). Always verify against an up-to-date checkout of
-`gastownhall/gascity` at `origin/main`.
+buggy code). Always verify against an up-to-date checkout of the
+`gastownhall/gascity` main you're targeting.
+
+> **Which remote?** If you cloned `gastownhall/gascity` directly, its main is
+> `origin/main`. If you forked first and cloned your fork, your `origin` is the
+> fork — add the upstream once (`git remote add upstream
+> https://github.com/gastownhall/gascity && git fetch upstream`) and use
+> `upstream/main` everywhere `origin/main` appears below.
 
 ```bash
-# from your local clone of gastownhall/gascity
+# from your local clone (use upstream/main instead if origin is your fork)
 git fetch origin && git log -1 origin/main --oneline   # confirm the tree is current
 git checkout origin/main
 
@@ -233,9 +239,12 @@ directly.
 
 ## After filing
 
-Once the issue exists, you can pick it up yourself: see the [contributing
-lifecycle](../contributing/SKILL.md), which routes a filed issue straight into
-`gc pr-pipeline pr plan <issue>` to plan the PR.
+Once the issue exists, you can pick it up yourself: run
+[plan-pr](../plan-pr/SKILL.md) on the issue number to plan the PR (it re-runs the
+competing-PR and architectural-refactor gates at code-time, maps blast radius, and
+aligns the plan to repo conventions before you write code). The
+[contributing](../contributing/SKILL.md) skill is the full lifecycle map if you
+want the whole journey from here to a ready-to-push PR.
 
 ## Anti-patterns
 
@@ -258,7 +267,7 @@ lifecycle](../contributing/SKILL.md), which routes a filed issue straight into
 ## Quick checklist before `gh issue create`
 
 - [ ] Searched duplicates (3+ searches) — none open
-- [ ] Confirmed the bug exists on `origin/main` today (`git rev-parse origin/main`)
+- [ ] Confirmed the bug exists on the upstream main today (`git rev-parse origin/main`, or `upstream/main` if origin is your fork)
 - [ ] Checked `engdocs/design/*.md` for accepted docs covering this area; cited
       the relevant section OR confirmed none applies
 - [ ] Have `file:line` refs for the root cause
