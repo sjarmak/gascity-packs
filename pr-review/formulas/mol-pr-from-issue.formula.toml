@@ -15,7 +15,7 @@ notes and metadata. Crash-safe: `bd mol current` resumes at the right step.
 
 ## Contract
 
-1. Caller slings with `--var issue=<number>` (and optionally `--var skip_open_pr=true`)
+1. Caller slings with `--var issue_number=<number>` (and optionally `--var skip_open_pr=true`)
 2. Polecat works through 6 sequential steps with explicit per-step gates
 3. Chain ends with either:
    - an opened PR on `gastownhall/gascity`, OR
@@ -25,7 +25,7 @@ notes and metadata. Crash-safe: `bd mol current` resumes at the right step.
 
 | Variable | Source | Description |
 |----------|--------|-------------|
-| issue | caller | Upstream GitHub issue number (required) |
+| issue_number | caller | Upstream GitHub issue number (required). Named `issue_number` rather than `issue` because formulas-v2 reserves `issue` as an auto-bound var; passing `--var issue=` collides with it and errors at instantiation. |
 | skip_open_pr | caller | "true" to stop at ship-green/branch-ready; do not actually open the PR (default: "false") |
 | auto_push | caller | "true" to authorize the polecat to push + open PR after the eligibility gate passes. Default "false" → halt at branch-ready (default-deny). See dr-1l9hc4 for the autonomous-pr-ship carve-out. |
 
@@ -61,8 +61,8 @@ version = 1
 contract = "graph.v2"
 
 [vars]
-[vars.issue]
-description = "Upstream GitHub issue number to author a PR for"
+[vars.issue_number]
+description = "Upstream GitHub issue number to author a PR for. Named issue_number (not issue) because formulas-v2 reserves `issue` as an auto-bound var — declaring/passing `issue` collides and errors at instantiation."
 required = true
 
 [vars.skip_open_pr]
@@ -75,7 +75,7 @@ default = "false"
 
 [[steps]]
 id = "pr-start"
-title = "Plan + scaffold the PR for issue {{issue}}"
+title = "Plan + scaffold the PR for issue {{issue_number}}"
 description = """
 Plan + create branch + implement per plan. Combines mol-pr-start's
 planning workflow (copy-with-prune) with the implementation work that
@@ -94,7 +94,7 @@ ROOT_ID=$(bd mol current --json | jq -r '.molecule_id')
 REPO_ROOT=$(git rev-parse --show-toplevel 2>/dev/null) || {
     echo "Not in a git repository — cannot plan."
     bd update "$ROOT_ID" --set-metadata "gc.halt_chain=true" \\
-                         --set-metadata "summary_for_human=Cannot plan issue #{{issue}}: not in a git checkout. No PR opened."
+                         --set-metadata "summary_for_human=Cannot plan issue #{{issue_number}}: not in a git checkout. No PR opened."
     bd close "$ROOT_ID" --reason "not a git checkout"
     exit 1
 }
@@ -102,19 +102,19 @@ cd "$REPO_ROOT"
 REPO=$(gh repo view --json nameWithOwner -q .nameWithOwner)
 ```
 
-**2. Run the mol-pr-start planning pipeline against issue {{issue}}.**
+**2. Run the mol-pr-start planning pipeline against issue {{issue_number}}.**
 
 Follow mol-pr-start's six step bodies in order (copy-with-prune from
 `/home/ds/gascity-packs/pr-pipeline/formulas/mol-pr-start.formula.toml`):
 
-  a. **intake** — read the issue via `gh issue view {{issue}}`; record
-     `issue: {{issue}}`, `repo: $REPO`, `repo_root: $REPO_ROOT` on the
+  a. **intake** — read the issue via `gh issue view {{issue_number}}`; record
+     `issue: {{issue_number}}`, `repo: $REPO`, `repo_root: $REPO_ROOT` on the
      root bead.
 
   b. **gates** — Two BLOCKING gates. Either fires → halt the chain:
 
      - **Gate 1 (Competing PR)**: any open PR already addresses this
-       issue, OR `gh issue view {{issue}} --json state` is `CLOSED`.
+       issue, OR `gh issue view {{issue_number}} --json state` is `CLOSED`.
      - **Gate 2 (Architectural refactor)**: active design docs marked
        Accepted/Implementing, open consolidation PRs from maintainers,
        or recent supersedes-pattern PRs in the area.
@@ -123,7 +123,7 @@ Follow mol-pr-start's six step bodies in order (copy-with-prune from
      ```bash
      bd update "$ROOT_ID" \\
        --set-metadata "gc.halt_chain=true" \\
-       --set-metadata "summary_for_human=Issue #{{issue}} blocked by <gate>: <detail>. Recommended pivot: <one-line suggestion based on which gate fired>."
+       --set-metadata "summary_for_human=Issue #{{issue_number}} blocked by <gate>: <detail>. Recommended pivot: <one-line suggestion based on which gate fired>."
      ```
      Then close this step and stop (the gate-after-pr-start step picks
      up the halt). Do NOT proceed to implementation.
@@ -134,7 +134,7 @@ Follow mol-pr-start's six step bodies in order (copy-with-prune from
   d. **conventions** — Read CONTRIBUTING.md / AGENTS.md / CLAUDE.md if
      present; inspect sibling files; pick a test strategy.
 
-  e. **produce-plan** — Write `.gc/pr-pipeline/plans/issue-{{issue}}.md`
+  e. **produce-plan** — Write `.gc/pr-pipeline/plans/issue-{{issue_number}}.md`
      with sections: Root cause, Files to change, Blast radius,
      Convention notes, Test plan, Risks, Branch (name + base).
 
@@ -169,7 +169,7 @@ Implementation rules:
 **5. Write evidence on close:**
 ```bash
 bd update "$ROOT_ID" \\
-  --set-metadata "evidence.artifact_path=.gc/pr-pipeline/plans/issue-{{issue}}.md" \\
+  --set-metadata "evidence.artifact_path=.gc/pr-pipeline/plans/issue-{{issue_number}}.md" \\
   --set-metadata "evidence.reviewer_verdict=pass" \\
   --set-metadata "evidence.reviewer_agent=<this polecat session>" \\
   --set-metadata "evidence.commit_sha=$(git rev-parse HEAD)" \\
@@ -209,7 +209,7 @@ VERDICT=$(bd show "$ROOT_ID" --json | jq -r '.[0].metadata."evidence.reviewer_ve
     EXISTING=$(bd show "$ROOT_ID" --json | jq -r '.[0].metadata.summary_for_human // ""')
     if [ -z "$EXISTING" ]; then
         bd update "$ROOT_ID" --set-metadata \\
-          "summary_for_human=Halt at gate-after-pr-start for issue #{{issue}}: <one-line synthesis of why>. No PR opened."
+          "summary_for_human=Halt at gate-after-pr-start for issue #{{issue_number}}: <one-line synthesis of why>. No PR opened."
     fi
     ```
   - Close THIS step with status=closed:
@@ -336,7 +336,7 @@ REPORT_PATH=$(bd show "$ROOT_ID" --json | jq -r '.[0].metadata."evidence.artifac
   - Write `summary_for_human` synthesizing the blockers:
     ```bash
     bd update "$ROOT_ID" --set-metadata \\
-      "summary_for_human=Ship gate halted on issue #{{issue}}: <one-line blocker summary>. Full readiness report at $REPORT_PATH. Branch left ready for human review — no PR opened."
+      "summary_for_human=Ship gate halted on issue #{{issue_number}}: <one-line blocker summary>. Full readiness report at $REPORT_PATH. Branch left ready for human review — no PR opened."
     ```
   - Set halt_chain:
     ```bash
@@ -383,7 +383,7 @@ through to `open-pr`, whose top-of-step check soft-halts at branch-ready
 ```bash
 ROOT_ID=$(bd mol current --json | jq -r '.molecule_id')
 AUTO_PUSH="{{auto_push}}"
-ISSUE_NUM={{issue}}
+ISSUE_NUM={{issue_number}}
 REPO_ROOT=$(git rev-parse --show-toplevel)
 cd "$REPO_ROOT"
 BRANCH=$(git branch --show-current)
@@ -575,7 +575,7 @@ upstream.
 ```bash
 ROOT_ID=$(bd mol current --json | jq -r '.molecule_id')
 BRANCH=$(git branch --show-current)
-ISSUE_NUM={{issue}}
+ISSUE_NUM={{issue_number}}
 SKIP_OPEN_PR="{{skip_open_pr}}"
 GATE_PASSED=$(bd show "$ROOT_ID" --json | jq -r '.[0].metadata."evidence.gate_passed" // ""')
 BYPASS_TOKEN=$(bd show "$ROOT_ID" --json | jq -r '.[0].metadata."evidence.auto_push_bypass_token" // ""')
