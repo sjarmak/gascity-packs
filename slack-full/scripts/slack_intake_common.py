@@ -352,27 +352,51 @@ def current_session_id() -> str:
 
 # --- inbound-event lookup -------------------------------------------------
 
+# Windows tried in order when scanning for a session's latest inbound.
+# The events endpoint returns oldest-first with no descending order, and
+# `limit` keeps the OLDEST slice of the window — so a wide window on a
+# busy city truncates away exactly the newest events we want. Starting
+# narrow makes each scan a newest-slice view: the common case (reply
+# soon after an inbound) resolves in the first cheap query, and the
+# wider fallbacks cover sessions whose latest inbound predates the
+# narrow window (e.g. an agent idle overnight) without paying the
+# truncation risk up front.
+_INBOUND_SCAN_WINDOWS = ("10m", "2h", "48h")
+
+
 def find_latest_inbound_for_session(session_id: str) -> dict[str, Any] | None:
     """Find the most recent extmsg.inbound event targeting session_id.
 
-    Queries the gc events stream (HTTP, not SSE — single shot snapshot).
-    Returns the parsed event dict, or None if no match found.
+    Queries the gc events stream (HTTP, not SSE — single shot snapshot)
+    over escalating `since` windows (see _INBOUND_SCAN_WINDOWS).
+    Returns the parsed event dict, or None if no window matched.
 
-    Uses `since=2h` to bound the query window: the endpoint returns
-    events oldest-first by default, so on busy cities (event log >700k
-    seqs) `limit=50` would return only ancient history and a recent
-    extmsg.inbound at the tail would never appear in the response.
-    The time bound is the primary filter; limit=500 is a defensive cap.
-    Without this, `gc slack reply-current --thread-current` bails with
-    'no inbound event...' and the agent falls back to a non-threaded
-    publish-to-channel.
+    Without the time bound, `gc slack reply-current --thread-current`
+    bails with 'no inbound event...' on busy cities (oldest-first +
+    limit returns only ancient history) and the agent falls back to a
+    non-threaded publish-to-channel. limit=500 is a defensive cap; when
+    the server reports more matching events than it returned
+    (total > items), the scan was incomplete and a warning is emitted
+    so truncation is never silent.
     """
-    url = f"{gc_api_base()}/v0/city/{gc_city_name()}/events?type=extmsg.inbound&since=2h&limit=500"
-    raw = _request("GET", url, csrf=False).get("items", [])
-    matches = [e for e in raw if (e.get("payload") or {}).get("target_session") == session_id]
-    if not matches:
-        return None
-    return matches[-1]  # events are in chronological order
+    for window in _INBOUND_SCAN_WINDOWS:
+        url = (
+            f"{gc_api_base()}/v0/city/{gc_city_name()}/events"
+            f"?type=extmsg.inbound&since={window}&limit=500"
+        )
+        res = _request("GET", url, csrf=False)
+        raw = res.get("items", [])
+        total = res.get("total", len(raw))
+        if total > len(raw):
+            print(
+                f"warning: inbound event scan ({window} window) truncated to "
+                f"{len(raw)}/{total} oldest events; the latest inbound may be missed",
+                file=sys.stderr,
+            )
+        matches = [e for e in raw if (e.get("payload") or {}).get("target_session") == session_id]
+        if matches:
+            return matches[-1]  # events are in chronological order
+    return None
 
 
 def find_latest_inbound_message_id_for_session(
