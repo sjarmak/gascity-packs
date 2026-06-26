@@ -444,9 +444,11 @@ Before showing the formatted comment, present a concise decision stanza:
 ```
 # PR Review: <title> (#<number>)
 
-## Decision: <approve|request_changes|block>
+## Decision: <approve|take-the-good|request_changes|block>
 
 <1-3 sentence plain-English summary of the PR quality and key takeaways from the review. State the decision rationale.>
+
+**Salvage path:** [if take-the-good] WE adopt + apply fixups + merge — name which findings we fix and why no author input is needed.
 
 **Fixes Validated:** [if applicable]
 - <fix description>: correct/incomplete/wrong
@@ -475,7 +477,7 @@ Where `<MODE_LABEL>` is:
 - Triple-model: `Triple-Model (Claude + Codex + Gemini)`
 - Dual-model (`--skip-gemini`): `Dual-Model (Claude + Codex)`
 
-### Decision: <approve | request_changes | block>
+### Decision: <approve | take-the-good | request_changes | block>
 
 <opening paragraph: 2-3 sentences thanking the contributor for the work, acknowledging the problem is real and worth solving, and noting what's good about the approach. Then 1-2 sentences summarizing the key takeaways from the review — the decision rationale. Be genuine, not formulaic.>
 
@@ -1237,7 +1239,7 @@ Where `<identifier>` is `#<number>` for PR mode or `<branch> vs <base>` for loca
 ```
 # Review: <title> (<identifier>)
 
-## Decision: approve | request_changes | block
+## Decision: approve | take-the-good | request_changes | block
 
 ## Fix Validations
 [For bug-fix PRs: brief confirmation that pre-existing bugs are correctly fixed]
@@ -1268,13 +1270,29 @@ Where `<identifier>` is `#<number>` for PR mode or `<branch> vs <base>` for loca
 
 ## Decision Policy
 
-Decision is based ONLY on new findings, NOT on fix validations:
-- Any unresolved blocker in categories 1-4 → `block`.
-- Any unresolved blocker in categories 5-8 → `request_changes`.
-- Major issues in categories 1-8 without mitigation → `request_changes`.
-- Purely minor/nit set → `approve`.
-- No new findings at all → `approve`.
-- Fix validations marked "incomplete" or "wrong" → treat as new findings at appropriate severity.
+Decision is based ONLY on new findings, NOT on fix validations. `request_changes`
+(bouncing the PR back to the author) is the LAST resort — the default for any
+finding WE can fix is `take-the-good` (adopt the change, apply the fixups
+ourselves, merge). For each unresolved new finding, ask in order:
+
+1. **Is it a security or release-safety blocker?** (category 6 Security, or
+   category 8 Release Safety, at blocker severity) → `block`. These are the
+   only blockers that block.
+2. **Can WE fix it?** — it is reproducible AND needs no author-only input
+   (no secret/credential, no environment we can't stand up, no design intent
+   only the author knows, and `maintainerCanModify` is not false) → `take-the-good`.
+   This is the default for fixable findings at ANY severity, including blocker
+   and major correctness issues in categories 1-5, 7, 9-11.
+3. **Does it genuinely need the author?** → `request_changes`, and name the
+   reserved case: **cant-reproduce**, **needs-author-input** (secret / env /
+   design-intent / `maintainerCanModify = false`), or **author-wants-to-iterate**
+   (the author explicitly asked to own the fix).
+4. **Purely minor/nit, or no new findings at all** → `approve`.
+
+- Fix validations marked "incomplete" or "wrong" → treat as new findings at the
+  appropriate severity, then run them through the same ladder.
+- **Never `request_changes` a finding WE can fix.** If none of the three reserved
+  cases applies, the finding is ours → `take-the-good`.
 
 ## Constraints
 - No style-only commentary.

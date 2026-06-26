@@ -103,11 +103,19 @@ gh pr view <number> --json files --jq '.files[].path'
 
 Compare against the PR title/description. If the changes are clearly outside
 the described scope (e.g., a "fix typo" PR that touches dozens of packages),
-the branch has diverged from main. **STOP immediately:**
-- Post a scope mismatch comment asking the contributor to rebase
-- Request changes: `gh pr review <number> --request-changes --body "Branch has diverged from main"`
-- Close the root bead: `bd close $ROOT_ID --reason "scope mismatch"`
-- Exit
+the branch has diverged from main. **Do NOT reflexively request changes** —
+scope divergence is usually salvageable by us (rebase + finalize). Record the
+status and continue:
+- Record in root bead notes: `scope_status: diverged` (or `scope_status: clean`).
+- Continue to the `rebase-check` step. The default route is **take-the-good**:
+  we rebase the branch onto main ourselves, drop the stray commits, and the
+  review/finalize machinery merges the in-scope change.
+- Only `gh pr review <number> --request-changes` here when the divergence is
+  UNSALVAGEABLE *and* genuinely needs the author — i.e. one of the reserved
+  cases holds: **cant-reproduce**, **needs-author-input** (secret/env/design
+  intent / `maintainerCanModify = false`), or **author-wants-to-iterate**. When
+  you do, name the case in the RC body and `bd close $ROOT_ID --reason
+  "request_changes: <case>"`, then exit.
 
 **5. Check maintainer edits:**
 Record in root bead notes: `maintainer_edits: true` or `maintainer_edits: false`.
@@ -268,21 +276,37 @@ review_run_dir: <run_dir_path>"
 
 The synthesis artifact is at `<run_dir>/outputs/synthesis.md`.
 
-**5. Present findings summary:**
+**5. Present findings summary (salvage-first):**
 
-Read the synthesis and present a brief summary to orient the human reviewer:
-- Decision (approve/request_changes)
+Read the synthesis and present a brief summary to orient the human reviewer.
+For every finding, lead with the salvage question — *can WE fix it?* (it is
+reproducible AND needs no author-only input). If yes, the default verdict is
+**take-the-good**: we adopt + apply fixups + merge via finalize. `request_changes`
+is reserved for the three cases (cant-reproduce / needs-author-input /
+author-wants-to-iterate); `block` is reserved for security/release-safety
+blockers only.
+- Decision (approve / take-the-good / request_changes / block)
+- For take-the-good: which findings WE fix in finalize
+- For request_changes: which reserved case applies
 - Top findings by severity
 - Key files affected
 
+Record the verdict in root bead notes so finalize and the human gate can read it:
+```bash
+bd update $ROOT_ID --notes "<existing notes>
+verdict: <approve|take-the-good|request_changes|block>
+salvageable: <true|false>
+rc_reason: <none|cant-reproduce|needs-author-input|author-wants-to-iterate>"
+```
+
 ```
 [adopt-pr] Review complete
-[adopt-pr]   Decision: <approve|request_changes>
+[adopt-pr]   Decision: <approve|take-the-good|request_changes|block>
 [adopt-pr]   Findings: <N> total (<blockers>, <majors>, <minors>)
 [adopt-pr]   Run dir: <path>
 ```
 
-**Exit criteria:** Review complete, findings presented, run_dir saved in notes."""
+**Exit criteria:** Review complete, findings presented, verdict recorded in notes, run_dir saved in notes."""
 
 [[steps]]
 id = "human-gate"
