@@ -121,9 +121,44 @@ status and continue:
 Record in root bead notes: `maintainer_edits: true` or `maintainer_edits: false`.
 If false, warn but continue — Phase 6 uses Path C if maintainer changes exist.
 
-**6. Checkout the PR branch:**
+**6. Stage a per-PR worktree and checkout the branch:**
+
+Do **NOT** run `gh pr checkout` in place. A fresh polecat shell starts in the
+persistent slot worktree (`/home/ds/gascity-worktrees/polecat-N`), which may
+hold another molecule's in-progress WIP; an in-place checkout clobbers/stashes
+it. Stage an ephemeral per-PR worktree instead (polecat-prompt Mode 4
+convention) and check the PR out there:
+
 ```bash
+PR_WORKTREE="/home/ds/gascity-worktrees/adopt-pr-<number>"
+EXPECTED_BRANCH="<headRefName>"
+
+if [ -d "$PR_WORKTREE" ]; then
+  # Re-sling: a prior run already staged this worktree. Only TRUST it if it is
+  # on the expected PR branch AND clean. Otherwise fail loud — never silently
+  # clobber, stash, or build review work on top of unknown state.
+  cd "$PR_WORKTREE"
+  WT_BRANCH=$(git branch --show-current)
+  if [ "$WT_BRANCH" != "$EXPECTED_BRANCH" ] || [ -n "$(git status --porcelain)" ]; then
+    echo "[adopt-pr] FATAL: staged worktree $PR_WORKTREE is on branch '$WT_BRANCH' (expected '$EXPECTED_BRANCH') or has uncommitted changes." >&2
+    bd update "$ROOT_ID" --set-metadata "gc.halt_chain=true" \\
+      --set-metadata "summary_for_human=adopt-pr intake found a dirty or wrong-branch staged worktree at $PR_WORKTREE (branch '$WT_BRANCH', expected '$EXPECTED_BRANCH'). Inspect it, then 'git worktree remove --force $PR_WORKTREE' before re-slinging."
+    bd close "$ROOT_ID" --reason "dirty/wrong-branch staged worktree in intake"
+    exit 1
+  fi
+else
+  git worktree add --detach "$PR_WORKTREE"
+  cd "$PR_WORKTREE"
+fi
+
 gh pr checkout <number>
+```
+
+Record the staging directory on the root bead. Every later step runs in a
+fresh shell that otherwise lands back in the slot worktree, so they re-enter
+`work_dir` from this metadata:
+```bash
+bd update "$ROOT_ID" --set-metadata "work_dir=$PR_WORKTREE"
 ```
 
 **7. Record state in root bead notes:**
@@ -163,9 +198,23 @@ description = """
 Check mergeable status and handle conflicts. Auto-rebase straightforward
 cases; abort on complex conflicts that need the contributor.
 
-**1. Read root bead notes for PR metadata:**
+**1. Re-enter the staged PR worktree and read root bead state:**
+
+A fresh polecat shell starts in the slot worktree, not the per-PR worktree the
+`intake` step staged. Re-enter it from `work_dir` before any git work — this
+step (the mergeable check and rebase) assumes it runs inside the staged
+worktree:
 ```bash
 ROOT_ID=$(bd mol current --json | jq -r '.molecule_id')
+WORK_DIR=$(bd show "$ROOT_ID" --json | jq -r '.[0].metadata.work_dir // empty')
+if [ -z "$WORK_DIR" ] || [ ! -d "$WORK_DIR" ]; then
+  echo "[adopt-pr] FATAL: work_dir metadata missing or not a directory ('$WORK_DIR'). Intake staging did not complete; cannot continue." >&2
+  bd update "$ROOT_ID" --set-metadata "gc.halt_chain=true" \\
+    --set-metadata "summary_for_human=adopt-pr rebase-check could not re-enter the staged worktree (work_dir='$WORK_DIR', missing or not a dir). Re-sling from intake."
+  bd close "$ROOT_ID" --reason "work_dir missing in rebase-check"
+  exit 1
+fi
+cd "$WORK_DIR"
 ```
 
 **2. Check merge status:**
@@ -240,9 +289,22 @@ needs = ["rebase-check"]
 description = """
 Fetch the canonical upstream base and invoke the multi-model review engine.
 
-**1. Read root bead notes:**
+**1. Re-enter the staged PR worktree and read root bead state:**
+
+A fresh polecat shell starts in the slot worktree, not the per-PR worktree the
+`intake` step staged. Re-enter it from `work_dir` before fetching the base or
+running the review:
 ```bash
 ROOT_ID=$(bd mol current --json | jq -r '.molecule_id')
+WORK_DIR=$(bd show "$ROOT_ID" --json | jq -r '.[0].metadata.work_dir // empty')
+if [ -z "$WORK_DIR" ] || [ ! -d "$WORK_DIR" ]; then
+  echo "[adopt-pr] FATAL: work_dir metadata missing or not a directory ('$WORK_DIR'). Intake staging did not complete; cannot continue." >&2
+  bd update "$ROOT_ID" --set-metadata "gc.halt_chain=true" \\
+    --set-metadata "summary_for_human=adopt-pr review could not re-enter the staged worktree (work_dir='$WORK_DIR', missing or not a dir). Re-sling from intake."
+  bd close "$ROOT_ID" --reason "work_dir missing in review"
+  exit 1
+fi
+cd "$WORK_DIR"
 ```
 Extract `pr_number`, `repo`, `base_branch`, `skip_gemini` from notes.
 
@@ -364,9 +426,22 @@ B/C/D** — those publish maintainer-authored content (push of new history,
 new PRs, or synthesis comments under maintainer identity) and require
 per-action mayor approval.
 
-**1. Read root bead notes:**
+**1. Re-enter the staged PR worktree and read root bead state:**
+
+A fresh polecat shell starts in the slot worktree, not the per-PR worktree the
+`intake` step staged. Re-enter it from `work_dir` before resolving the merge
+path or touching git — every path below operates on the staged branch:
 ```bash
 ROOT_ID=$(bd mol current --json | jq -r '.molecule_id')
+WORK_DIR=$(bd show "$ROOT_ID" --json | jq -r '.[0].metadata.work_dir // empty')
+if [ -z "$WORK_DIR" ] || [ ! -d "$WORK_DIR" ]; then
+  echo "[adopt-pr] FATAL: work_dir metadata missing or not a directory ('$WORK_DIR'). Intake staging did not complete; cannot continue." >&2
+  bd update "$ROOT_ID" --set-metadata "gc.halt_chain=true" \\
+    --set-metadata "summary_for_human=adopt-pr finalize could not re-enter the staged worktree (work_dir='$WORK_DIR', missing or not a dir). Re-sling from intake."
+  bd close "$ROOT_ID" --reason "work_dir missing in finalize"
+  exit 1
+fi
+cd "$WORK_DIR"
 ```
 Extract all state: `pr_number`, `repo`, `base_branch`, `original_head`,
 `head_ref`, `maintainer_edits`, `rebase_status`, `review_run_dir`,
@@ -462,13 +537,29 @@ merge happens asynchronously — the polecat's own lifecycle does not wait for i
 
 **A.5: Cleanup and final report (terminal — all paths).**
 
-Remove the temporary upstream-base ref. This is the last step on every path
-(there is no separate `complete` step); the polecat's work ends here. Keep the
-per-path status already recorded (`ready-for-merge` for Path A,
-`ready-for-publish` for B/C/D) — the merge/publish itself is mayor's
-asynchronous work, so the polecat does not mark the PR "merged".
+Remove the temporary upstream-base ref and reclaim the per-PR worktree the
+`intake` step staged. This is the last step on every path (there is no separate
+`complete` step); the polecat's work ends here. Keep the per-path status already
+recorded (`ready-for-merge` for Path A, `ready-for-publish` for B/C/D) — the
+merge/publish itself is mayor's asynchronous work, so the polecat does not mark
+the PR "merged".
+
+`cd` out of the staged worktree before removing it (git refuses to remove the
+worktree you are standing in), then force-remove it so the slot is reclaimed on
+the success path of every merge path (A/B/C/D). Earlier-step halts (intake
+request-changes, rebase-check abort) `exit` without reaching here and leave
+their `adopt-pr-<N>` worktree in place; that is intentional and bounded — the
+worktree path is deterministic per PR number, so a re-sling of the same PR
+REUSES it (guarded clean + on-branch in intake) rather than accumulating, and a
+re-sling that runs to completion reclaims it here:
 ```bash
+WORK_DIR=$(bd show "$ROOT_ID" --json | jq -r '.[0].metadata.work_dir // empty')
 git update-ref -d refs/adopt-pr/upstream-base 2>/dev/null || true
+MAIN_WT=$(git worktree list --porcelain | awk '/^worktree /{print $2; exit}')
+cd "$MAIN_WT" 2>/dev/null || cd /
+if [ -n "$WORK_DIR" ]; then
+  git worktree remove --force "$WORK_DIR" 2>/dev/null || true
+fi
 ```
 
 **Report:**

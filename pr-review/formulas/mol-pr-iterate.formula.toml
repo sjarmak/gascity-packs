@@ -144,10 +144,45 @@ bd close "$ROOT_ID" --reason "PR not open"
 exit 1
 ```
 
-**5. Checkout the PR branch:**
+**5. Stage a per-PR worktree and checkout the branch:**
+
+Do **NOT** run `gh pr checkout` in place. A fresh polecat shell starts in the
+persistent slot worktree (`/home/ds/gascity-worktrees/polecat-N`), which may
+hold another molecule's in-progress WIP; an in-place checkout clobbers/stashes
+it. Stage an ephemeral per-PR worktree instead (polecat-prompt Mode 4
+convention), check the PR out there, then capture the base SHA:
+
 ```bash
+PR_WORKTREE="/home/ds/gascity-worktrees/iterate-pr-{{pr}}"
+EXPECTED_BRANCH="<headRefName>"
+
+if [ -d "$PR_WORKTREE" ]; then
+  # Re-sling: a prior run already staged this worktree. Only TRUST it if it is
+  # on the expected PR branch AND clean. Otherwise fail loud — never silently
+  # clobber, stash, or build iteration work on top of unknown state.
+  cd "$PR_WORKTREE"
+  WT_BRANCH=$(git branch --show-current)
+  if [ "$WT_BRANCH" != "$EXPECTED_BRANCH" ] || [ -n "$(git status --porcelain)" ]; then
+    echo "[iterate] FATAL: staged worktree $PR_WORKTREE is on branch '$WT_BRANCH' (expected '$EXPECTED_BRANCH') or has uncommitted changes." >&2
+    bd update "$ROOT_ID" --set-metadata "gc.halt_chain=true" \\
+                         --set-metadata "summary_for_human=iterate intake found a dirty or wrong-branch staged worktree at $PR_WORKTREE (branch '$WT_BRANCH', expected '$EXPECTED_BRANCH'). Inspect it, then 'git worktree remove --force $PR_WORKTREE' before re-slinging."
+    bd close "$ROOT_ID" --reason "dirty/wrong-branch staged worktree in intake"
+    exit 1
+  fi
+else
+  git worktree add --detach "$PR_WORKTREE"
+  cd "$PR_WORKTREE"
+fi
+
 gh pr checkout {{pr}}
 BASE_SHA=$(git rev-parse HEAD)
+```
+
+Record the staging directory on the root bead. Every later step runs in a
+fresh shell that otherwise lands back in the slot worktree, so they re-enter
+`work_dir` from this metadata:
+```bash
+bd update "$ROOT_ID" --set-metadata "work_dir=$PR_WORKTREE"
 ```
 
 **6. Record state in root bead notes:**
@@ -187,9 +222,22 @@ If the source yields no actionable signal (empty findings, unreachable URL,
 or content too vague to plan from), halt-and-mail-mayor with reason
 "feedback ambiguity".
 
-**1. Read root bead notes:**
+**1. Re-enter the staged PR worktree and read root bead state:**
+
+A fresh polecat shell starts in the slot worktree, not the per-PR worktree the
+`intake` step staged. Re-enter it from `work_dir` before any git or file work
+(the codecov path diffs the PR branch):
 ```bash
 ROOT_ID=$(bd mol current --json | jq -r '.molecule_id')
+WORK_DIR=$(bd show "$ROOT_ID" --json | jq -r '.[0].metadata.work_dir // empty')
+if [ -z "$WORK_DIR" ] || [ ! -d "$WORK_DIR" ]; then
+  echo "[iterate] FATAL: work_dir metadata missing or not a directory ('$WORK_DIR'). Intake staging did not complete; cannot continue." >&2
+  bd update "$ROOT_ID" --set-metadata "gc.halt_chain=true" \\
+                       --set-metadata "summary_for_human=iterate parse-feedback could not re-enter the staged worktree (work_dir='$WORK_DIR', missing or not a dir). Re-sling from intake."
+  bd close "$ROOT_ID" --reason "work_dir missing in parse-feedback"
+  exit 1
+fi
+cd "$WORK_DIR"
 ```
 
 **2. Dispatch on `feedback_source`:**
@@ -282,9 +330,22 @@ Read parsed feedback, design the smallest diff that clears the signal,
 write the plan to a markdown artifact under `.gc/pr-pipeline/iterate/`.
 Halt-and-mail-mayor if the plan exceeds 200 LOC.
 
-**1. Read root bead notes:**
+**1. Re-enter the staged PR worktree and read root bead state:**
+
+A fresh polecat shell starts in the slot worktree, not the per-PR worktree the
+`intake` step staged. Re-enter it from `work_dir` so the plan artifact is
+written under the staged worktree (where `apply` will read it):
 ```bash
 ROOT_ID=$(bd mol current --json | jq -r '.molecule_id')
+WORK_DIR=$(bd show "$ROOT_ID" --json | jq -r '.[0].metadata.work_dir // empty')
+if [ -z "$WORK_DIR" ] || [ ! -d "$WORK_DIR" ]; then
+  echo "[iterate] FATAL: work_dir metadata missing or not a directory ('$WORK_DIR'). Intake staging did not complete; cannot continue." >&2
+  bd update "$ROOT_ID" --set-metadata "gc.halt_chain=true" \\
+                       --set-metadata "summary_for_human=iterate propose-patch could not re-enter the staged worktree (work_dir='$WORK_DIR', missing or not a dir). Re-sling from intake."
+  bd close "$ROOT_ID" --reason "work_dir missing in propose-patch"
+  exit 1
+fi
+cd "$WORK_DIR"
 ```
 Extract `parsed_feedback`, `pr_number`, `repo`, `base_sha`.
 
@@ -339,9 +400,23 @@ description = """
 Read the plan, implement the minimal diff, verify the build is green,
 commit on the PR branch with a conventional message. Do NOT push.
 
-**1. Read root bead notes:**
+**1. Re-enter the staged PR worktree and read root bead state:**
+
+A fresh polecat shell starts in the slot worktree, not the per-PR worktree the
+`intake` step staged. Re-enter it from `work_dir` before editing, building, or
+committing — the on-branch and clean-worktree checks below assume the staged
+worktree:
 ```bash
 ROOT_ID=$(bd mol current --json | jq -r '.molecule_id')
+WORK_DIR=$(bd show "$ROOT_ID" --json | jq -r '.[0].metadata.work_dir // empty')
+if [ -z "$WORK_DIR" ] || [ ! -d "$WORK_DIR" ]; then
+  echo "[iterate] FATAL: work_dir metadata missing or not a directory ('$WORK_DIR'). Intake staging did not complete; cannot continue." >&2
+  bd update "$ROOT_ID" --set-metadata "gc.halt_chain=true" \\
+                       --set-metadata "summary_for_human=iterate apply could not re-enter the staged worktree (work_dir='$WORK_DIR', missing or not a dir). Re-sling from intake."
+  bd close "$ROOT_ID" --reason "work_dir missing in apply"
+  exit 1
+fi
+cd "$WORK_DIR"
 ```
 Extract `plan_path`, `pr_number`, `head_ref`, `iteration`.
 
@@ -423,9 +498,22 @@ Re-run the feedback source check to confirm the signal is gone. Behavior
 varies by source. If the signal persists AND `iteration >= 2`,
 halt-and-mail-mayor.
 
-**1. Read root bead notes:**
+**1. Re-enter the staged PR worktree and read root bead state:**
+
+A fresh polecat shell starts in the slot worktree, not the per-PR worktree the
+`intake` step staged. Re-enter it from `work_dir` before re-running the
+source-specific verification (codecov diffs the PR branch):
 ```bash
 ROOT_ID=$(bd mol current --json | jq -r '.molecule_id')
+WORK_DIR=$(bd show "$ROOT_ID" --json | jq -r '.[0].metadata.work_dir // empty')
+if [ -z "$WORK_DIR" ] || [ ! -d "$WORK_DIR" ]; then
+  echo "[iterate] FATAL: work_dir metadata missing or not a directory ('$WORK_DIR'). Intake staging did not complete; cannot continue." >&2
+  bd update "$ROOT_ID" --set-metadata "gc.halt_chain=true" \\
+                       --set-metadata "summary_for_human=iterate verify-clearance could not re-enter the staged worktree (work_dir='$WORK_DIR', missing or not a dir). Re-sling from intake."
+  bd close "$ROOT_ID" --reason "work_dir missing in verify-clearance"
+  exit 1
+fi
+cd "$WORK_DIR"
 ```
 Extract `feedback_source`, `feedback_ref`, `pr_number`, `repo`, `iteration`,
 `last_apply_commit`.
@@ -556,5 +644,27 @@ bd update "$ROOT_ID" \\
 [iterate]   Ready for maintainer review + push.
 ```
 
-**Exit criteria:** evidence.* and summary_for_human set on root bead;
-chain is complete; polecat exits without pushing or opening a PR."""
+**5. Reclaim the staged worktree.**
+
+The durable deliverable is the commit on the PR branch ref — it survives
+worktree removal. The ephemeral per-PR worktree is no longer needed, so remove
+it on the success path to keep per-PR worktrees from accumulating. `cd` to the
+main worktree first (git refuses to remove the worktree you are standing in):
+```bash
+WORK_DIR=$(bd show "$ROOT_ID" --json | jq -r '.[0].metadata.work_dir // empty')
+if [ -n "$WORK_DIR" ] && [ -d "$WORK_DIR" ]; then
+  MAIN_WT=$(git -C "$WORK_DIR" worktree list --porcelain | awk '/^worktree /{print $2; exit}')
+  cd "$MAIN_WT" 2>/dev/null || cd /
+  git worktree remove --force "$WORK_DIR" 2>/dev/null || true
+fi
+```
+
+The `iterate-pr-<N>` path is deterministic, so this is idempotent: an
+earlier-step halt leaves that single worktree in place (the plan artifact under
+it is transient — the actionable signal is the commit + `summary_for_human`),
+and a later re-sling of the same PR reuses it (guarded clean + on-branch in
+intake) before this step reclaims it on a clean run.
+
+**Exit criteria:** evidence.* and summary_for_human set on root bead; staged
+worktree reclaimed on the success path; chain is complete; polecat exits
+without pushing or opening a PR."""
