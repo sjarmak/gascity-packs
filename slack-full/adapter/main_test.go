@@ -3645,11 +3645,15 @@ func TestHandleSlackEventsDropsWhenSemaphoreFull(t *testing.T) {
 	req.Header.Set("X-Slack-Signature", sig)
 	w := httptest.NewRecorder()
 
+	droppedBefore := dispatchDroppedTotal.Load()
 	handleSlackEvents(cfg, aliasReg, nil, nil, nil, nil)(w, req)
 
 	// Slack always sees 200 (we ack quickly to suppress retries).
 	if w.Result().StatusCode != http.StatusOK {
 		t.Errorf("status = %d, want 200", w.Result().StatusCode)
+	}
+	if got := dispatchDroppedTotal.Load(); got != droppedBefore+1 {
+		t.Errorf("dispatchDroppedTotal = %d, want %d (one drop counted)", got, droppedBefore+1)
 	}
 	// Sem was full: processSlackEvent never ran → no inbound POST hit
 	// the gc stub.

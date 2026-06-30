@@ -244,6 +244,7 @@ func (c config) acquireDispatchSlot() (release func(), capacity int, ok bool) {
 	case sem <- struct{}{}:
 		return func() { <-sem }, semCap, true
 	default:
+		dispatchDroppedTotal.Add(1)
 		return nil, semCap, false
 	}
 }
@@ -1016,10 +1017,7 @@ func main() {
 	publicMux.HandleFunc("/slack/events", handleSlackEvents(cfg, aliasReg, threadReg, roomLaunchReg, subteamAliases, threadHandleSticky))
 	publicMux.HandleFunc("/slack/interactions", handleSlackInteractions(cfg, channelMapReg, rigMapReg))
 	registerOAuthHandlers(publicMux, cfg, appsReg)
-	publicMux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok\n"))
-	})
+	publicMux.HandleFunc("/healthz", handleHealthz)
 	publicMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 	})
@@ -1035,10 +1033,7 @@ func main() {
 	internalMux.HandleFunc("DELETE /identity", handleIdentityDelete(identityReg))
 	internalMux.HandleFunc("POST /handle-alias", handleHandleAlias(aliasReg))
 	internalMux.HandleFunc("DELETE /handle-alias", handleHandleAliasDelete(aliasReg))
-	internalMux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok\n"))
-	})
+	internalMux.HandleFunc("/healthz", handleHealthz)
 
 	publicSrv := &http.Server{
 		Addr:              cfg.publicListen,
@@ -1065,6 +1060,7 @@ func main() {
 	janitorCtx, janitorCancel := context.WithCancel(context.Background())
 	defer janitorCancel()
 	go runInboundFileJanitor(janitorCtx, cfg)
+	go runDispatchDropSummary(janitorCtx, dispatchDropSummaryInterval, cfg.dispatchConcurrency)
 
 	// Thread-binding teardown subscriber (cby.5.4): listens to gc's
 	// city-scoped event stream for terminal session lifecycle events
