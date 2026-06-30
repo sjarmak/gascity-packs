@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -1128,10 +1129,129 @@ func TestDispatchToAliasedSession(t *testing.T) {
 		"--conversation-id C0B1NSK4N3T",
 		"--thread-ts 1234.5678",
 		"gc slack publish-to-channel",
+		"writing_hand",
 	} {
 		if !strings.Contains(gotBody.Message, want) {
 			t.Errorf("body missing %q\n--- body ---\n%s", want, gotBody.Message)
 		}
+	}
+}
+
+// TestDispatchToAliasedSessionPostsWarningReactOnFailure verifies that when
+// the gc session-messages endpoint returns a 4xx error, the adapter fires a
+// ⚠️ (warning) reaction on the originating Slack message so the drop is
+// visible in-channel rather than silently lost.
+func TestDispatchToAliasedSessionPostsWarningReactOnFailure(t *testing.T) {
+	// gc stub returns 404 (session closed / unknown).
+	gcStub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	t.Cleanup(gcStub.Close)
+
+	// Slack stub captures the reactions.add call.
+	var gotChannel, gotName, gotTimestamp string
+	reactCh := make(chan struct{}, 1)
+	fakeSlack := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/reactions.add" {
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		var body struct {
+			Channel   string `json:"channel"`
+			Name      string `json:"name"`
+			Timestamp string `json:"timestamp"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		gotChannel, gotName, gotTimestamp = body.Channel, body.Name, body.Timestamp
+		select {
+		case reactCh <- struct{}{}:
+		default:
+		}
+		_, _ = fmt.Fprint(w, `{"ok":true}`)
+	}))
+	t.Cleanup(fakeSlack.Close)
+
+	origBase := slackAPIBase
+	t.Cleanup(func() { slackAPIBase = origBase })
+	slackAPIBase = fakeSlack.URL
+
+	cfg := config{
+		gcAPIBase:     gcStub.URL,
+		cityName:      "ds-research",
+		slackBotToken: "xoxb-test",
+	}
+	inbound := externalInboundMessage{
+		ProviderMessageID: "9999.0001",
+		Conversation: conversationRef{
+			ConversationID: "C0B25SS12CD",
+		},
+		Actor: externalActor{ID: "U0B1N5KD6HF"},
+		Text:  "hello, are you there?",
+	}
+	if !dispatchToAliasedSession(cfg, "gc-dead-session", inbound, "dashboard") {
+		reactAliasDispatchFailure(cfg.slackBotToken,
+			inbound.Conversation.ConversationID, inbound.ProviderMessageID)
+	}
+
+	select {
+	case <-reactCh:
+		if gotName != "warning" {
+			t.Errorf("reaction name = %q, want %q", gotName, "warning")
+		}
+		if gotChannel != "C0B25SS12CD" {
+			t.Errorf("reaction channel = %q, want %q", gotChannel, "C0B25SS12CD")
+		}
+		if gotTimestamp != "9999.0001" {
+			t.Errorf("reaction timestamp = %q, want %q", gotTimestamp, "9999.0001")
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("warning reaction was not posted to Slack within 2s")
+	}
+}
+
+// TestDispatchToAliasedSessionNoReactWithoutToken verifies that when
+// slackBotToken is empty the failure reaction is skipped (no token → no
+// Slack API call possible).
+func TestDispatchToAliasedSessionNoReactWithoutToken(t *testing.T) {
+	gcStub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(gcStub.Close)
+
+	reactCh := make(chan struct{}, 1)
+	fakeSlack := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		select {
+		case reactCh <- struct{}{}:
+		default:
+		}
+		_, _ = fmt.Fprint(w, `{"ok":true}`)
+	}))
+	t.Cleanup(fakeSlack.Close)
+
+	origBase := slackAPIBase
+	t.Cleanup(func() { slackAPIBase = origBase })
+	slackAPIBase = fakeSlack.URL
+
+	// slackBotToken intentionally empty.
+	cfg := config{gcAPIBase: gcStub.URL, cityName: "ds-research"}
+	inbound := externalInboundMessage{
+		ProviderMessageID: "1.0",
+		Conversation:      conversationRef{ConversationID: "C1"},
+		Actor:             externalActor{ID: "U1"},
+		Text:              "ping",
+	}
+	if !dispatchToAliasedSession(cfg, "gc-dead", inbound, "bot") {
+		reactAliasDispatchFailure(cfg.slackBotToken,
+			inbound.Conversation.ConversationID, inbound.ProviderMessageID)
+	}
+
+	select {
+	case <-reactCh:
+		t.Fatal("Slack API was called despite empty slackBotToken")
+	case <-time.After(200 * time.Millisecond):
+		// expected: no call
 	}
 }
 
@@ -1475,6 +1595,9 @@ func TestDispatchToAliasedSessionZeroAttachmentsUnchanged(t *testing.T) {
 		"\n" +
 		"Message text:\n" +
 		"hi mayor please ack the deploy\n" +
+		"\n" +
+		"React to this message with writing_hand to signal you are actively working on it:\n" +
+		"  gc slack react --emoji writing_hand\n" +
 		"\n" +
 		"To reply in that channel (threaded under their message), write your reply to a tmpfile and run:\n" +
 		"  gc slack publish-to-channel \\\n" +

@@ -2205,8 +2205,10 @@ func processSlackEvent(cfg config, aliasReg *handleAliasRegistry, threadReg *thr
 	// the eye, because most channel messages aren't intentionally
 	// directed at an agent. Fires once per inbound (the alias-dispatch
 	// fanout below targets the same Slack TS, so a duplicate react would
-	// be a Slack no-op). Best-effort: errors are logged and don't block
-	// the dispatch path.
+	// be a Slack no-op). If alias dispatch later fails, reactAliasDispatchFailure
+	// posts ⚠️ on the same TS — that is semantically distinct (transport-layer
+	// ack vs. delivery failure) and not a duplicate. Best-effort: errors are
+	// logged and don't block the dispatch path.
 	if target != "" && cfg.slackBotToken != "" {
 		go func(channel, ts string) {
 			_, err := postReactionToSlack(cfg.slackBotToken, slackReactionsAddReq{
@@ -2246,7 +2248,10 @@ func processSlackEvent(cfg config, aliasReg *handleAliasRegistry, threadReg *thr
 			go func() {
 				defer dispatchInflightWG.Done()
 				defer release()
-				dispatchToAliasedSession(cfg, aliasedSessionID, inbound, target)
+				if !dispatchToAliasedSession(cfg, aliasedSessionID, inbound, target) {
+					reactAliasDispatchFailure(cfg.slackBotToken,
+						inbound.Conversation.ConversationID, inbound.ProviderMessageID)
+				}
 			}()
 		}
 	}
@@ -3311,9 +3316,9 @@ func handleHandleAliasDelete(reg *handleAliasRegistry) http.HandlerFunc {
 // receiving session needs to compose a reply: originating channel id (for
 // routing the reply back), message ts (for threading), and the inbound text.
 //
-// On error we log and continue — best-effort delivery; the originating
-// channel's transcript still records the inbound regardless.
-func dispatchToAliasedSession(cfg config, sessionID string, msg externalInboundMessage, handle string) {
+// Returns true on successful delivery, false on any error. The caller is
+// responsible for surface-visible failure signaling (e.g. a ⚠️ reaction).
+func dispatchToAliasedSession(cfg config, sessionID string, msg externalInboundMessage, handle string) bool {
 	// Every interpolated string is run through neutralizeMarkupBoundaries
 	// to prevent a Slack workspace member from forging </system-reminder>
 	// boundaries inside the dispatched body and injecting arbitrary
@@ -3350,6 +3355,9 @@ func dispatchToAliasedSession(cfg config, sessionID string, msg externalInboundM
 			"%s\n"+
 			"%s"+
 			"\n"+
+			"React to this message with writing_hand to signal you are actively working on it:\n"+
+			"  gc slack react --emoji writing_hand\n"+
+			"\n"+
 			"To reply in that channel (threaded under their message), write your reply to a tmpfile and run:\n"+
 			"  gc slack publish-to-channel \\\n"+
 			"    --conversation-id %s \\\n"+
@@ -3378,22 +3386,44 @@ func dispatchToAliasedSession(cfg config, sessionID string, msg externalInboundM
 	req, err := http.NewRequest(http.MethodPost, target, bytes.NewReader(payload))
 	if err != nil {
 		log.Printf("alias dispatch: build request: %v", err)
-		return
+		return false
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-GC-Request", "gc-slack-adapter-alias")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		log.Printf("alias dispatch: POST %s: %v", target, err)
-		return
+		return false
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
 		respBody, _ := io.ReadAll(resp.Body)
 		log.Printf("alias dispatch: %s -> %s: %s", target, resp.Status, string(respBody))
-		return
+		return false
 	}
 	log.Printf("alias dispatch: handle=%s -> session=%s OK", handle, sessionID)
+	return true
+}
+
+// reactAliasDispatchFailure fires a best-effort ⚠️ reaction on the original
+// Slack message so a failed alias dispatch is visible in-channel rather than
+// silently dropped. Runs inside the dispatch goroutine (already async).
+func reactAliasDispatchFailure(token, channelID, ts string) {
+	if token == "" {
+		return
+	}
+	resp, err := postReactionToSlack(token, slackReactionsAddReq{
+		Channel:   channelID,
+		Name:      "warning",
+		Timestamp: ts,
+	})
+	if err != nil {
+		log.Printf("react warning (alias dispatch failure): chan=%s ts=%s: %v", channelID, ts, err)
+		return
+	}
+	if !resp.OK {
+		log.Printf("react warning (alias dispatch failure): chan=%s ts=%s: slack error=%s", channelID, ts, resp.Error)
+	}
 }
 
 // handleIdentity serves POST /identity. The caller (gc slack identity)
