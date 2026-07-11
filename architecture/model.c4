@@ -202,7 +202,7 @@ model {
       }
       scInteractions = component 'interaction ack (stub)' {
         #planned
-        description 'PLANNED: signature-verifies interactive payloads and 200-acks only — custom modal/action flows are deferred to the full slack-pack tier'
+        description 'PLANNED: signature-verifies interactive payloads and 200-acks only — custom modal/action flows are deferred to the slack-full tier'
         link ../slack-channel/adapter/interactions.go 'adapter/interactions.go'
       }
       scGcClient = component 'gc extmsg client' {
@@ -326,7 +326,7 @@ model {
   operator -> prReview 'gc sling mol-adopt-pr / merge-only'
   contributor -> github 'opens issues + PRs'
 
-  // slack-pack <-> Slack
+  // slack-full <-> Slack
   slack -> slackPack.spAdapter 'POST /slack/events (HMAC-signed)'
   slackPack.spAdapter -> slackPack.spHmac 'verify X-Slack-Signature before dispatch'
   slack -> slackPack.spInteractions 'POST /slack/interactions'
@@ -334,7 +334,7 @@ model {
   slackPack.spAdapter -> slack 'chat.postMessage / reactions / files / views'
   slackPack.spScripts -> slackPack.spAdapter 'publish / reply / react via command wrappers'
 
-  // slack-pack <-> gascity
+  // slack-full <-> gascity
   slackPack.spAdapter -> gascity.supervisor 'registers as proxy_process service; /svc/slack/* reverse-proxied'
   slackPack.spAdapter -> gascity.extmsg 'POST inbound; receives session-attributed /publish'
   slackPack.spRigDispatch -> gascity.beads 'bd create on rig slash-command'
