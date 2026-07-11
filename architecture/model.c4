@@ -19,8 +19,8 @@
 // main.
 //
 // Delivery state is tagged so stubs / experimental work renders distinctly from
-// what ships (see spec.c4 for the legend). Every element links to its real
-// source path, relative to architecture/.
+// what ships (see spec.c4 for the legend). Every in-tree element links to its
+// real source path, relative to architecture/.
 
 model {
 
@@ -243,7 +243,7 @@ model {
     prPipeline = container 'pr-pipeline' {
       #built
       #external
-      description 'Author-side PR discipline as gc formulas + CLI commands: issue → plan → blast-radius → self-review → pre-push ship gate, plus issue triage. #external: source lives on the unmerged feat-graph-v2-contract-pr-review-formulas branch, not in this tree'
+      description 'Author-side PR discipline as gc formulas + CLI commands: issue → plan → blast-radius → self-review → pre-push ship gate, plus issue triage'
       technology 'gascity formulas (TOML) + shell commands + markdown templates'
 
       ppCommands = component 'pr commands (plan / blast-radius / review / ship)' {
@@ -280,7 +280,7 @@ model {
     prReview = container 'pr-review' {
       #evolving
       #external
-      description 'Maintainer-side PR discipline: adopt an incoming PR → multi-model review → resolve a merge path, as gc formulas + a /review-pr skill overlay. #external: source lives on the unmerged feat-graph-v2-contract-pr-review-formulas branch, not in this tree'
+      description 'Maintainer-side PR discipline: adopt an incoming PR → multi-model review → resolve a merge path, as gc formulas + a /review-pr skill overlay'
       technology 'gascity formulas (TOML) + Claude skill overlay'
 
       prAdopt = component 'mol-adopt-pr' {

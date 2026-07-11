@@ -69,8 +69,7 @@ specification {
     color #dc2626
   }
 
-  // Cross-cutting: element is modelled but its source is not in this tree yet
-  // (lives on an unmerged branch), so it carries no in-tree source links.
+  // Cross-cutting: source not in this tree yet (see header legend).
   tag external {
     color #64748b
   }

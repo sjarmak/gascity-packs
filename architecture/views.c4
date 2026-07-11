@@ -16,11 +16,7 @@ views {
     style element.tag == #built, element.tag == #evolving {
       opacity 100%
     }
-    style element.tag == #planned {
-      color muted
-      border dashed
-    }
-    style element.tag == #external {
+    style element.tag == #planned, element.tag == #external {
       color muted
       border dashed
     }
@@ -31,11 +27,7 @@ views {
     title 'Authored packs — the five containers'
     include *
 
-    style element.tag == #planned {
-      color muted
-      border dashed
-    }
-    style element.tag == #external {
+    style element.tag == #planned, element.tag == #external {
       color muted
       border dashed
     }
