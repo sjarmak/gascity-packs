@@ -200,7 +200,7 @@ func TestSlackInteractionsRigSlashOpensModal(t *testing.T) {
 		accountID:       "T1",
 		cityName:        "test-city",
 		cityPath:        cityPath,
-		dispatchSem: defaultTestDispatchSem,
+		dispatchSem:     defaultTestDispatchSem,
 	}
 	chanReg := newTestChannelMappingRegistry(t)
 	rigReg := newTestRigMappingRegistry(t)
@@ -286,7 +286,7 @@ func TestSlackInteractionsRigSlashMissingTriggerID(t *testing.T) {
 		accountID:       "T1",
 		cityName:        "test-city",
 		cityPath:        cityPath,
-		dispatchSem: defaultTestDispatchSem,
+		dispatchSem:     defaultTestDispatchSem,
 	}
 	chanReg := newTestChannelMappingRegistry(t)
 	rigReg := newTestRigMappingRegistry(t)
@@ -332,7 +332,7 @@ func TestSlackInteractionsRigSlashViewsOpenFailure(t *testing.T) {
 		accountID:       "T1",
 		cityName:        "test-city",
 		cityPath:        cityPath,
-		dispatchSem: defaultTestDispatchSem,
+		dispatchSem:     defaultTestDispatchSem,
 	}
 	chanReg := newTestChannelMappingRegistry(t)
 	rigReg := newTestRigMappingRegistry(t)
@@ -461,7 +461,7 @@ func TestSlackInteractionsRigViewSubmissionDispatchesHappyPath(t *testing.T) {
 		accountID:       "T1",
 		cityName:        "test-city",
 		cityPath:        cityPath,
-		dispatchSem: defaultTestDispatchSem,
+		dispatchSem:     defaultTestDispatchSem,
 	}
 	chanReg := newTestChannelMappingRegistry(t)
 	rigReg := newTestRigMappingRegistry(t)

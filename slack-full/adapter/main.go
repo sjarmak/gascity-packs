@@ -244,6 +244,7 @@ func (c config) acquireDispatchSlot() (release func(), capacity int, ok bool) {
 	case sem <- struct{}{}:
 		return func() { <-sem }, semCap, true
 	default:
+		dispatchDroppedTotal.Add(1)
 		return nil, semCap, false
 	}
 }
@@ -1016,10 +1017,7 @@ func main() {
 	publicMux.HandleFunc("/slack/events", handleSlackEvents(cfg, aliasReg, threadReg, roomLaunchReg, subteamAliases, threadHandleSticky))
 	publicMux.HandleFunc("/slack/interactions", handleSlackInteractions(cfg, channelMapReg, rigMapReg))
 	registerOAuthHandlers(publicMux, cfg, appsReg)
-	publicMux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok\n"))
-	})
+	publicMux.HandleFunc("/healthz", handleHealthz)
 	publicMux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
 	})
@@ -1035,10 +1033,7 @@ func main() {
 	internalMux.HandleFunc("DELETE /identity", handleIdentityDelete(identityReg))
 	internalMux.HandleFunc("POST /handle-alias", handleHandleAlias(aliasReg))
 	internalMux.HandleFunc("DELETE /handle-alias", handleHandleAliasDelete(aliasReg))
-	internalMux.HandleFunc("/healthz", func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write([]byte("ok\n"))
-	})
+	internalMux.HandleFunc("/healthz", handleHealthz)
 
 	publicSrv := &http.Server{
 		Addr:              cfg.publicListen,
@@ -1065,6 +1060,7 @@ func main() {
 	janitorCtx, janitorCancel := context.WithCancel(context.Background())
 	defer janitorCancel()
 	go runInboundFileJanitor(janitorCtx, cfg)
+	go runDispatchDropSummary(janitorCtx, dispatchDropSummaryInterval, cfg.dispatchConcurrency)
 
 	// Thread-binding teardown subscriber (cby.5.4): listens to gc's
 	// city-scoped event stream for terminal session lifecycle events
@@ -1550,18 +1546,26 @@ func handlePublishFile(cfg config, reg *identityRegistry) http.HandlerFunc {
 // The returned path is the cleaned absolute form, suitable for passing
 // to os.Stat / os.ReadFile.
 func confineFileUploadPath(root, path string) (string, error) {
+	_, pathAbs, _, err := confinedUploadPath(root, path)
+	return pathAbs, err
+}
+
+// confinedUploadPath is confineFileUploadPath's full-detail form: it
+// additionally returns the canonical root and the root-relative path,
+// which openBeneath needs for its component walk.
+func confinedUploadPath(root, path string) (rootAbs, pathAbs, rel string, err error) {
 	if root == "" {
-		return "", errors.New("FILE_UPLOAD_ROOT is empty")
+		return "", "", "", errors.New("FILE_UPLOAD_ROOT is empty")
 	}
 	if !filepath.IsAbs(root) {
-		return "", fmt.Errorf("FILE_UPLOAD_ROOT %q is not absolute", root)
+		return "", "", "", fmt.Errorf("FILE_UPLOAD_ROOT %q is not absolute", root)
 	}
 	if strings.TrimSpace(path) == "" {
-		return "", errors.New("path is empty")
+		return "", "", "", errors.New("path is empty")
 	}
-	rootAbs, err := filepath.Abs(root)
+	rootAbs, err = filepath.Abs(root)
 	if err != nil {
-		return "", fmt.Errorf("resolving root: %w", err)
+		return "", "", "", fmt.Errorf("resolving root: %w", err)
 	}
 	rootAbs = filepath.Clean(rootAbs)
 	// Best-effort symlink resolution on the root: if the operator
@@ -1570,14 +1574,14 @@ func confineFileUploadPath(root, path string) (string, error) {
 	if resolved, err := filepath.EvalSymlinks(rootAbs); err == nil {
 		rootAbs = resolved
 	}
-	pathAbs, err := filepath.Abs(path)
+	pathAbs, err = filepath.Abs(path)
 	if err != nil {
-		return "", fmt.Errorf("resolving path: %w", err)
+		return "", "", "", fmt.Errorf("resolving path: %w", err)
 	}
 	pathAbs = filepath.Clean(pathAbs)
-	rel, err := filepath.Rel(rootAbs, pathAbs)
+	rel, err = filepath.Rel(rootAbs, pathAbs)
 	if err != nil {
-		return "", fmt.Errorf("computing relative path: %w", err)
+		return "", "", "", fmt.Errorf("computing relative path: %w", err)
 	}
 	// Reject the root itself: the helper's contract is "file inside
 	// root", and any caller that later treats the returned path as a
@@ -1585,31 +1589,28 @@ func confineFileUploadPath(root, path string) (string, error) {
 	// directory-typed paths. Anything starting with ".." has escaped.
 	// An absolute rel (Windows volume crossing) is also out of bounds.
 	if rel == "." || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) || filepath.IsAbs(rel) {
-		return "", fmt.Errorf("path %q is outside root %q", pathAbs, rootAbs)
+		return "", "", "", fmt.Errorf("path %q is outside root %q", pathAbs, rootAbs)
 	}
-	return pathAbs, nil
+	return rootAbs, pathAbs, rel, nil
 }
 
 // readConfinedFile reads realPath after re-asserting that it lies under
-// root, then opens with O_NOFOLLOW so a symlink that appears at the
-// leaf inode in the TOCTOU window between the caller's EvalSymlinks
-// resolution and the read causes the open to fail with ELOOP rather
-// than silently disclosing an arbitrary host file (gc-cby.10).
+// root, then opens it with openBeneath's component-wise walk so neither
+// a leaf symlink nor a parent directory swapped for a symlink in the
+// TOCTOU window between the caller's EvalSymlinks resolution and the
+// read can redirect the open outside root (gc-cby.10; the parent-swap
+// residual race was gpk-1ta4).
 //
 // realPath should be the filepath.EvalSymlinks-resolved canonical path
 // the caller has already verified with confineFileUploadPath; the
 // internal re-check makes the safe path the only path so a future call
 // site cannot regress arbitrary-read safety by skipping confinement.
-//
-// O_NOFOLLOW is leaf-only — a parent-directory component being swapped
-// to a symlink mid-flight is still followed by the kernel. Closing
-// that residual race requires openat2(2) with RESOLVE_BENEATH
-// (Linux ≥5.6) and is tracked separately.
 func readConfinedFile(root, realPath string) ([]byte, error) {
-	if _, err := confineFileUploadPath(root, realPath); err != nil {
+	rootAbs, _, rel, err := confinedUploadPath(root, realPath)
+	if err != nil {
 		return nil, err
 	}
-	f, err := os.OpenFile(realPath, os.O_RDONLY|syscall.O_NOFOLLOW, 0)
+	f, err := openBeneath(rootAbs, rel)
 	if err != nil {
 		return nil, err
 	}
@@ -1714,7 +1715,16 @@ func slackPutFileBytes(uploadURL string, filename string, body []byte) error {
 	defer resp.Body.Close()
 	if resp.StatusCode >= 300 {
 		respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		return fmt.Errorf("upload POST %s: %s — %s", uploadURL, resp.Status, string(respBody))
+		// Redact the pre-signed upload URL — its query string carries a
+		// short-lived auth token; strip RawQuery so it does not reach adapter
+		// logs verbatim. url.Redacted() alone only handles userinfo passwords
+		// and would leave query-string tokens intact.
+		safeURL := uploadURL
+		if u, perr := url.Parse(uploadURL); perr == nil {
+			u.RawQuery = ""
+			safeURL = u.String()
+		}
+		return fmt.Errorf("upload POST %s: %s — %s", safeURL, resp.Status, string(respBody))
 	}
 	_, _ = io.Copy(io.Discard, resp.Body)
 	return nil
@@ -2204,8 +2214,10 @@ func processSlackEvent(cfg config, aliasReg *handleAliasRegistry, threadReg *thr
 	// the eye, because most channel messages aren't intentionally
 	// directed at an agent. Fires once per inbound (the alias-dispatch
 	// fanout below targets the same Slack TS, so a duplicate react would
-	// be a Slack no-op). Best-effort: errors are logged and don't block
-	// the dispatch path.
+	// be a Slack no-op). If alias dispatch later fails, reactAliasDispatchFailure
+	// posts ⚠️ on the same TS — that is semantically distinct (transport-layer
+	// ack vs. delivery failure) and not a duplicate. Best-effort: errors are
+	// logged and don't block the dispatch path.
 	if target != "" && cfg.slackBotToken != "" {
 		go func(channel, ts string) {
 			_, err := postReactionToSlack(cfg.slackBotToken, slackReactionsAddReq{
@@ -2245,7 +2257,10 @@ func processSlackEvent(cfg config, aliasReg *handleAliasRegistry, threadReg *thr
 			go func() {
 				defer dispatchInflightWG.Done()
 				defer release()
-				dispatchToAliasedSession(cfg, aliasedSessionID, inbound, target)
+				if !dispatchToAliasedSession(cfg, aliasedSessionID, inbound, target) {
+					reactAliasDispatchFailure(cfg.slackBotToken,
+						inbound.Conversation.ConversationID, inbound.ProviderMessageID)
+				}
 			}()
 		}
 	}
@@ -3310,20 +3325,47 @@ func handleHandleAliasDelete(reg *handleAliasRegistry) http.HandlerFunc {
 // receiving session needs to compose a reply: originating channel id (for
 // routing the reply back), message ts (for threading), and the inbound text.
 //
-// On error we log and continue — best-effort delivery; the originating
-// channel's transcript still records the inbound regardless.
-func dispatchToAliasedSession(cfg config, sessionID string, msg externalInboundMessage, handle string) {
+// Returns true on successful delivery, false on any error. The caller is
+// responsible for surface-visible failure signaling (e.g. a ⚠️ reaction).
+func dispatchToAliasedSession(cfg config, sessionID string, msg externalInboundMessage, handle string) bool {
 	// Every interpolated string is run through neutralizeMarkupBoundaries
 	// to prevent a Slack workspace member from forging </system-reminder>
 	// boundaries inside the dispatched body and injecting arbitrary
 	// system instructions into the receiving aliased session (cby.33,
 	// extends cby.17 sanitization to the alias dispatch path).
+	//
+	// Surface any downloaded attachments (file:// local paths) so the aliased
+	// session can Read them — vision works on local files. downloadSlackFiles
+	// already wrote each file to local disk and set URL="file://"+localpath
+	// and MIMEType; before this the dispatch interpolated only msg.Text and
+	// dropped the images entirely. Each field is neutralized like the text
+	// path (cby.33) so a forged </system-reminder> in a filename cannot break
+	// out of the reminder envelope. Empty string when there are no
+	// attachments, leaving the body byte-identical to the text-only form.
+	attachmentsBlock := ""
+	if len(msg.Attachments) > 0 {
+		var ab strings.Builder
+		fmt.Fprintf(&ab, "\nAttachments (%d) — saved to local disk; Read the file:// path to view:\n", len(msg.Attachments))
+		for i, att := range msg.Attachments {
+			name := filepath.Base(strings.TrimPrefix(att.URL, "file://"))
+			fmt.Fprintf(&ab, "  %d. %s (%s): %s\n",
+				i+1,
+				neutralizeMarkupBoundaries(name),
+				neutralizeMarkupBoundaries(att.MIMEType),
+				neutralizeMarkupBoundaries(att.URL))
+		}
+		attachmentsBlock = ab.String()
+	}
 	body := fmt.Sprintf(
 		"<system-reminder>\n"+
 			"Slack address-by-handle: @%s addressed you from channel %s (Slack ts %s) by user %s.\n"+
 			"\n"+
 			"Message text:\n"+
 			"%s\n"+
+			"%s"+
+			"\n"+
+			"React to this message with writing_hand to signal you are actively working on it:\n"+
+			"  gc slack react --emoji writing_hand\n"+
 			"\n"+
 			"To reply in that channel (threaded under their message), write your reply to a tmpfile and run:\n"+
 			"  gc slack publish-to-channel \\\n"+
@@ -3338,6 +3380,7 @@ func dispatchToAliasedSession(cfg config, sessionID string, msg externalInboundM
 		neutralizeMarkupBoundaries(msg.ProviderMessageID),
 		neutralizeMarkupBoundaries(msg.Actor.ID),
 		neutralizeMarkupBoundaries(msg.Text),
+		attachmentsBlock, // already per-field neutralized; pass raw
 		neutralizeMarkupBoundaries(msg.Conversation.ConversationID),
 		neutralizeMarkupBoundaries(msg.ProviderMessageID),
 	)
@@ -3352,22 +3395,44 @@ func dispatchToAliasedSession(cfg config, sessionID string, msg externalInboundM
 	req, err := http.NewRequest(http.MethodPost, target, bytes.NewReader(payload))
 	if err != nil {
 		log.Printf("alias dispatch: build request: %v", err)
-		return
+		return false
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("X-GC-Request", "gc-slack-adapter-alias")
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		log.Printf("alias dispatch: POST %s: %v", target, err)
-		return
+		return false
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
 		respBody, _ := io.ReadAll(resp.Body)
 		log.Printf("alias dispatch: %s -> %s: %s", target, resp.Status, string(respBody))
-		return
+		return false
 	}
 	log.Printf("alias dispatch: handle=%s -> session=%s OK", handle, sessionID)
+	return true
+}
+
+// reactAliasDispatchFailure fires a best-effort ⚠️ reaction on the original
+// Slack message so a failed alias dispatch is visible in-channel rather than
+// silently dropped. Runs inside the dispatch goroutine (already async).
+func reactAliasDispatchFailure(token, channelID, ts string) {
+	if token == "" {
+		return
+	}
+	resp, err := postReactionToSlack(token, slackReactionsAddReq{
+		Channel:   channelID,
+		Name:      "warning",
+		Timestamp: ts,
+	})
+	if err != nil {
+		log.Printf("react warning (alias dispatch failure): chan=%s ts=%s: %v", channelID, ts, err)
+		return
+	}
+	if !resp.OK {
+		log.Printf("react warning (alias dispatch failure): chan=%s ts=%s: slack error=%s", channelID, ts, resp.Error)
+	}
 }
 
 // handleIdentity serves POST /identity. The caller (gc slack identity)
