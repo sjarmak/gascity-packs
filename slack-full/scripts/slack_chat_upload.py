@@ -87,10 +87,13 @@ def main(argv: list[str]) -> int:
                              "Mutually exclusive with --thread-ts.")
     parser.add_argument("--idempotency-key", default="",
                         help="Caller-supplied idempotency key for retries.")
-    parser.add_argument("--via", choices=("gc", "adapter"), default="gc",
-                        help="Routing path. 'gc' (default) records the upload "
-                             "in the transcript and fans out to peer sessions; "
-                             "'adapter' bypasses gc for diagnostics only.")
+    parser.add_argument("--via", choices=("gc", "adapter"), default="adapter",
+                        help="Routing path. 'adapter' (default) posts straight to "
+                             "the local adapter (files-upload-v2). 'gc' would record "
+                             "the upload in the transcript and fan out to peer "
+                             "sessions, but the gc-core /extmsg/outbound-file route "
+                             "is unimplemented (returns 404); restore 'gc' as the "
+                             "default once that route lands.")
     args = parser.parse_args(argv)
 
     if args.thread_ts and args.thread_current:
