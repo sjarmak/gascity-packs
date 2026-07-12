@@ -6,6 +6,8 @@
 //   #evolving  — built but the surface/contract is still moving (feature-by-feature port)
 //   #planned   — designed, CLI side written, but the runtime path is still a stub
 //   #research  — speculative track (shared extmsg-pack-lib extraction, tiering future)
+//   #external  — modelled here but its source is not in this tree yet (lives on an
+//                unmerged branch); carries no in-tree source links until it lands
 
 specification {
 
@@ -65,5 +67,10 @@ specification {
   // for the design review (in addition to its delivery-state tag).
   tag risk {
     color #dc2626
+  }
+
+  // Cross-cutting: source not in this tree yet (see header legend).
+  tag external {
+    color #64748b
   }
 }

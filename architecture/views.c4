@@ -16,7 +16,7 @@ views {
     style element.tag == #built, element.tag == #evolving {
       opacity 100%
     }
-    style element.tag == #planned {
+    style element.tag == #planned, element.tag == #external {
       color muted
       border dashed
     }
@@ -27,7 +27,7 @@ views {
     title 'Authored packs — the five containers'
     include *
 
-    style element.tag == #planned {
+    style element.tag == #planned, element.tag == #external {
       color muted
       border dashed
     }
@@ -36,7 +36,7 @@ views {
   // ── Per-pack component views ─────────────────────────────────────────────
 
   view slackPackView of packs.slackPack {
-    title 'slack-pack — the rich Slack provider (components)'
+    title 'slack-full — the rich Slack provider (components)'
     include *
 
     style element.tag == #planned {
@@ -98,7 +98,7 @@ views {
   // Walkthrough flows (dynamic views) — the narrative spine of the review.
   // ───────────────────────────────────────────────────────────────────────
 
-  // Flow 1 — a Slack message arrives and reaches a gc session (slack-pack).
+  // Flow 1 — a Slack message arrives and reaches a gc session (slack-full).
   dynamic view slackInbound {
     title 'Walkthrough — Slack inbound to a gc session'
     description 'Every inbound is HMAC-verified against the per-app signing secret before any dispatch; the adapter normalises and hands off to the extmsg bridge, which routes to the bound session.'
@@ -110,7 +110,7 @@ views {
     gascity.extmsg -> gascity.sessions 'deliver to the bound session'
   }
 
-  // Flow 2 — a rig slash-command spawns work (slack-pack).
+  // Flow 2 — a rig slash-command spawns work (slack-full).
   dynamic view slackRigDispatch {
     title 'Walkthrough — rig slash-command to a spawned bead'
     description 'Slash commands answer within Slack 3-second budget: the modal captures summary + context, then dispatch spawns a bead and slings it to the rig target.'

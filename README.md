@@ -137,11 +137,11 @@ Each pack documents its own prerequisites, import snippet, and usage.
 
 ## Layout
 
-Each top-level directory is either a pack or a group of related packs:
+Each top-level directory is either a pack or repo-support tooling:
 
-- A directory containing `pack.toml` is itself a pack; import it by path.
-- A directory without `pack.toml` groups related subpacks and typically ships
-  an `all/` rollup that imports the group as one.
+- A directory containing `pack.toml` is a pack; import it by path.
+- A directory without `pack.toml` (e.g. `architecture/`, `docs/`, `scripts/`,
+  `tests/`) is repo-support tooling, not an importable pack.
 
 Browse the tree for the current set; each pack has its own README.
 
