@@ -113,6 +113,17 @@ The `Smallest ask:` field of the template still gates whether
 `Why:` paragraph so the human can act on it in seconds rather than
 reading prose.
 
+### Frame it like a briefing to a busy CEO with zero context
+
+A standing preference of the human: the `Why:` and `*Asks:*` lead with what
+is actually happening and why it matters to an outcome she owns — a ship /
+publish gate, a cost, a risk — in plain English, BEFORE any mechanism. Bead
+IDs, file / function names, and internal jargon appear only as supporting
+detail where she needs them, never as the framing. State the ask, the paths
+available with a plain trade-off each, and your recommended path, in words a
+non-engineer could act on. (Error messages, paths, and identifiers stay
+verbatim when quoted — this governs the explanation, not the evidence.)
+
 ## Dedup (mandatory)
 
 Before writing a `severity:escalate` rollup, list existing open
