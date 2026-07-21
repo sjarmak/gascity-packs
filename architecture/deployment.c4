@@ -1,0 +1,66 @@
+// Deployment model — where the five authored packs actually run.
+//
+// The packs are configuration that runs INSIDE a gascity city on a host. The
+// three Slack adapters deploy the same way: each is a long-running proxy_process
+// the gc supervisor owns (public TCP for webhooks + a supervised socket for the
+// session-attributed callbacks). The PR-discipline packs ship no daemon — their
+// formulas are slung onto a rig/agent on demand and run to completion. Slack,
+// GitHub, and the review models are external.
+
+deployment {
+
+  cityHost = host 'gascity city host' {
+    description 'A gascity city on a host — gc supervises the adapters and runs the formula sessions'
+
+    slackPackProc = proc 'gc-slack-adapter (proxy_process)' {
+      description 'Long-running Go service: public TCP for /slack/events + /slack/interactions, UDS for /publish; SIGHUP-reloads its registries'
+      instanceOf packs.slackPack
+    }
+    slackChannelProc = proc 'gc-slack-channel-adapter (proxy_process)' {
+      description 'Long-running stdlib-only Go service; three 0600 JSON registries under .gc/slack-channel/. Use exactly one Slack adapter per city'
+      instanceOf packs.slackChannel
+    }
+    slackMiniProc = proc 'gc-slack-mini-adapter (proxy_process)' {
+      description 'Long-running single-file Go service; stateless (no registries). The Tier-1 choice when one Slack adapter per city is enough'
+      instanceOf packs.slackMini
+    }
+    prFormulaSession = proc 'PR formula session (on-demand)' {
+      description 'No daemon: the pr-pipeline / pr-review formulas are slung onto a rig/agent, run their steps with the root bead as control state, and exit'
+      instanceOf packs.prPipeline
+      instanceOf packs.prReview
+    }
+  }
+
+  slackHost = host 'Slack' {
+    description 'Slack platform — delivers HMAC-signed webhooks to the public adapter port, serves the Web API'
+    instanceOf slack
+  }
+
+  githubHost = host 'GitHub' {
+    description 'Issues / PRs / diffs / checks, reached via gh from the PR-formula session'
+    instanceOf github
+  }
+
+  modelHost = host 'Review model providers' {
+    description 'Claude / Codex / Gemini endpoints the review-pr skill fans out to'
+    instanceOf reviewModels
+  }
+
+  // Runtime data & control flow between processes/hosts.
+  slackHost -> slackPackProc 'webhooks → public TCP (HMAC-verified)'
+  slackHost -> slackChannelProc 'webhooks → public TCP (HMAC-verified)'
+  slackHost -> slackMiniProc 'webhooks → public TCP (HMAC-verified)'
+  slackPackProc -> slackHost 'Web API (chat.postMessage, OAuth, files)'
+  slackChannelProc -> slackHost 'Web API (chat.postMessage, reactions)'
+  slackMiniProc -> slackHost 'Web API (chat.postMessage)'
+  prFormulaSession -> githubHost 'gh: read issues/PRs, comment, merge'
+  prFormulaSession -> modelHost 'multi-model review fan-out'
+}
+
+views {
+
+  deployment view deployment {
+    title 'Deployment — where each pack runs'
+    include *
+  }
+}

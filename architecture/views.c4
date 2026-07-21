@@ -1,0 +1,179 @@
+// Views over the authored-packs model. Planned (#planned) elements and
+// relationships are dimmed + dashed so the "what ships vs what is still a stub"
+// split is readable at a glance.
+
+views {
+
+  // Landscape — the five authored packs in context of gascity, Slack, GitHub,
+  // and the review models.
+  view index {
+    title 'Authored gascity packs — system landscape'
+    include *
+
+    style * {
+      opacity 25%
+    }
+    style element.tag == #built, element.tag == #evolving {
+      opacity 100%
+    }
+    style element.tag == #planned {
+      color muted
+      border dashed
+    }
+  }
+
+  // The system, decomposed into its five pack containers.
+  view packsSystem of packs {
+    title 'Authored packs — the five containers'
+    include *
+
+    style element.tag == #planned {
+      color muted
+      border dashed
+    }
+  }
+
+  // ── Per-pack component views ─────────────────────────────────────────────
+
+  view slackPackView of packs.slackPack {
+    title 'slack-pack — the rich Slack provider (components)'
+    include *
+
+    style element.tag == #planned {
+      color muted
+      border dashed
+    }
+  }
+
+  view slackChannelView of packs.slackChannel {
+    title 'slack-channel — Tier-2 channel bridge (components)'
+    include *
+
+    style element.tag == #planned {
+      color muted
+      border dashed
+    }
+  }
+
+  view slackMiniView of packs.slackMini {
+    title 'slack-mini — Tier-1 minimal bridge (components)'
+    include *
+  }
+
+  view prPipelineView of packs.prPipeline {
+    title 'pr-pipeline — author-side PR discipline (components)'
+    include *
+  }
+
+  view prReviewView of packs.prReview {
+    title 'pr-review — maintainer-side PR discipline (components)'
+    include *
+
+    style element.tag == #planned {
+      color muted
+      border dashed
+    }
+  }
+
+  // Risks & open questions — the elements carrying a #risk flag, with each open
+  // question stated in-box. What a reviewer should probe, surfaced up front.
+  view risks {
+    title 'Risks & open questions'
+    include
+      packs,
+      element.tag == #risk,
+      packs.slackPack,
+      packs.prReview
+
+    style * {
+      opacity 30%
+    }
+    style element.tag == #risk {
+      opacity 100%
+      color red
+    }
+  }
+
+  // ───────────────────────────────────────────────────────────────────────
+  // Walkthrough flows (dynamic views) — the narrative spine of the review.
+  // ───────────────────────────────────────────────────────────────────────
+
+  // Flow 1 — a Slack message arrives and reaches a gc session (slack-pack).
+  dynamic view slackInbound {
+    title 'Walkthrough — Slack inbound to a gc session'
+    description 'Every inbound is HMAC-verified against the per-app signing secret before any dispatch; the adapter normalises and hands off to the extmsg bridge, which routes to the bound session.'
+
+    slack -> packs.slackPack.spAdapter 'POST /slack/events'
+    packs.slackPack.spAdapter -> packs.slackPack.spHmac 'verify v0:ts:body HMAC'
+    packs.slackPack.spHmac -> packs.slackPack.spThreadRouting 'resolve (channel, thread_ts) → session'
+    packs.slackPack.spThreadRouting -> gascity.extmsg 'POST /extmsg/inbound (session-attributed)'
+    gascity.extmsg -> gascity.sessions 'deliver to the bound session'
+  }
+
+  // Flow 2 — a rig slash-command spawns work (slack-pack).
+  dynamic view slackRigDispatch {
+    title 'Walkthrough — rig slash-command to a spawned bead'
+    description 'Slash commands answer within Slack 3-second budget: the modal captures summary + context, then dispatch spawns a bead and slings it to the rig target.'
+
+    slack -> packs.slackPack.spInteractions 'POST /slack/interactions (slash command)'
+    packs.slackPack.spInteractions -> packs.slackPack.spRigDispatch 'modal context → dispatch'
+    packs.slackPack.spRigDispatch -> gascity.beads 'bd create'
+    packs.slackPack.spRigDispatch -> gascity.sessions 'gc sling to rig target'
+    packs.slackPack.spAdapter -> slack 'chat.postMessage (ack + result)'
+  }
+
+  // Flow 3 — author-side: issue → plan → ship gate (pr-pipeline).
+  dynamic view prShipFlow {
+    title 'Walkthrough — author-side PR pipeline (plan to ship gate)'
+    description 'The ship gate is the firewall: simplify, iterate against the reviewer panel, run mechanical gates, then STOP at a readiness report — the formula never pushes or opens a PR.'
+
+    operator -> packs.prPipeline.ppCommands 'gc pr-pipeline pr plan <issue>'
+    packs.prPipeline.ppCommands -> gascity.sessions 'gc sling mol-pr-start'
+    packs.prPipeline.ppStart -> github 'read issue + competing PRs'
+    packs.prPipeline.ppStart -> packs.prPipeline.ppBlast 'map impact surface'
+    packs.prPipeline.ppStart -> gascity.beads 'plan path + gate state on root bead'
+    operator -> packs.prPipeline.ppShip 'gc pr-pipeline pr ship'
+    packs.prPipeline.ppShip -> reviewModels 'multi-reviewer iterate (<=3)'
+    packs.prPipeline.ppShip -> operator 'readiness report (stops — no push)'
+  }
+
+  // Flow 4 — maintainer-side: adopt an incoming PR (pr-review).
+  dynamic view prAdoptFlow {
+    title 'Walkthrough — maintainer-side incoming-PR adoption'
+    description 'The /review-pr skill fans out three independent models and synthesises adversarially; the maintainer human-gate decides which of the four merge paths runs.'
+
+    contributor -> github 'opens a PR'
+    operator -> packs.prReview.prAdopt 'gc sling mol-adopt-pr <pr>'
+    packs.prReview.prAdopt -> github 'checkout + auto-rebase'
+    packs.prReview.prAdopt -> packs.prReview.prReviewSkill 'run /review-pr'
+    packs.prReview.prReviewSkill -> reviewModels 'Claude + Codex + Gemini in parallel'
+    packs.prReview.prReviewSkill -> packs.prReview.prAdopt 'synthesised findings'
+    packs.prReview.prAdopt -> operator 'human-gate: pick merge path'
+    packs.prReview.prAdopt -> github 'comment / merge per path'
+  }
+
+  // Planned-only lens: the stubs + vapor formulas in context of what they need.
+  view planned {
+    title 'Planned & stubbed work'
+    include
+      packs,
+      packs.slackPack,
+      packs.slackPack.spRoomLaunch,
+      packs.slackPack.spSyncCommands,
+      packs.slackChannel.scInteractions,
+      packs.prReview,
+      packs.prReview.prFromIssue,
+      packs.prReview.prIterate,
+      packs.prPipeline.ppShip,
+      gascity.sessions
+
+    style * {
+      opacity 30%
+    }
+    style element.tag == #planned {
+      opacity 100%
+      color muted
+      border dashed
+    }
+  }
+}
