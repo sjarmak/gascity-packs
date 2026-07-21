@@ -18,3 +18,10 @@
 # Python test/runtime artifacts
 __pycache__/
 *.py[cod]
+
+# Generated tool indexes and coverage output (reconciled 2026-07-21).
+.codegraph/
+.coverage
+
+# Pre-change binary backups kept beside the file they back up.
+*.bak-pre-*
