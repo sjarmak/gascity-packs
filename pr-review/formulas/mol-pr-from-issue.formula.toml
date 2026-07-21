@@ -57,8 +57,22 @@ notes and metadata. Crash-safe: `bd mol current` resumes at the right step.
   Slack thread."""
 formula = "mol-pr-from-issue"
 phase = "vapor"
+# pour=true: eager-materialize the graph steps. Without it a vapor graph
+# formula compiles RootOnly and drops every step, so the root sits in_progress
+# with nothing routed. rootOnly (compile.go:333) is
+#   (!f.Pour && f.Phase == "vapor") || len(f.Steps) == 0
+# which keys only on pour and phase — the graph declaration form is not
+# consulted, so this formula was equally exposed under the older
+# contract = "graph.v2" spelling. The migration to [requires] did not arm it;
+# the missing pour did, and predates that migration.
+# Mirrors the city copy (gas-city/formulas/mol-pr-from-issue.formula.toml,
+# 82aa51b), mol-focus-review.formula.toml:35 and mol-do-work.toml:23.
+# Added 2026-07-21 per audit sec 1.3 (.gc-reports/city-audit-2026-07-21.md), gc-2lab.
+pour = true
 version = 1
-contract = "graph.v2"
+
+[requires]
+formula_compiler = ">=2.0.0"
 
 [vars]
 [vars.issue_number]
