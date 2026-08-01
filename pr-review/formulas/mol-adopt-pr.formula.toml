@@ -55,7 +55,22 @@ existing PR itself, and only hands off `gh pr merge` to mayor.
 | CI fails | Report failure, stop, wait for human-gate or nudge |
 | Review-pr fails | Report which step failed, stop. Retry on next nudge |"""
 formula = "mol-adopt-pr"
-version = 1
+# formulas v2. The root is stamped gc.kind = "workflow", which is what makes it
+# Ready-visible, so `gc sling <pool> mol-adopt-pr --formula` routes to the
+# polecat pool the workflow is written for. As a v1 molecule container the root
+# was not Ready-visible and every pool sling was rejected outright (gc-i2l9p);
+# the only other v1 escape, phase = "vapor" without pour, compiles a root-only
+# recipe that would drop all five step beads including the human gate.
+phase = "vapor"
+# pour = true materializes each step as its own bead. Required here, not
+# cosmetic: the human-gate step must exist as a bead for the maintainer to
+# close, and `bd mol current` needs step rows to resume at the right step
+# after a crash.
+pour = true
+version = 2
+
+[requires]
+formula_compiler = ">=2.0.0"
 
 [vars]
 [vars.pr]
