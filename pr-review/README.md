@@ -8,7 +8,9 @@ gate between review and merge.
 
 - **`mol-adopt-pr` formula** — 5-step molecule: intake, rebase-check, review,
   human-gate, finalize
-- **`/review-pr` skill** — multi-model code review engine (overlay)
+- **`/review-pr` skill** — multi-model code review engine (overlay), including
+  explicit doc-contract, error-path parity, lock-contract, and Gas City
+  mechanical-sync checks
 
 ## Prerequisites
 
