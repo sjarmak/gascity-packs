@@ -1,0 +1,118 @@
+# Codex Worker: a durable, named coding worker as configuration.
+#
+# A project lead delegates coding work by routing a bead. The worker picks it
+# up on its next turn, keeps its conversation across restarts, and is inspectable
+# by someone other than itself. No Go ships here: every mechanism this pack uses
+# already exists in the SDK, and the pack is the composition.
+#
+#   durable identity   [[named_session]] mode = "always"   (declared by the city)
+#   warm resume        wake_mode = "resume" + session_key captured by the
+#                      Codex SessionStart hook
+#   delegation         gc.routed_to + the three-tier work_query + the Codex
+#                      UserPromptSubmit hook running `gc hook`
+#   waking             the nudge queue + wake_request
+#
+# Usage in your city's city.toml:
+#
+#   [imports.codex-worker]
+#   source = "../packs/codex-worker"
+#
+#   [[named_session]]
+#   name     = "rivet"
+#   template = "codex-worker.coder"
+#   mode     = "always"
+#
+# Each [[named_session]] is one worker with one name and one continuous
+# conversation. Declare as many as you want lead capacity for. Names are the
+# addressing surface: a lead routes to `rivet` and means that worker, not "a
+# worker".
+#
+# WHY NAMES, NOT A POOL: a pool instance is interchangeable by design and routes
+# on its pool name, so its conversation is disposable and its identity is not
+# addressable. That is correct for fan-out work and wrong for a colleague you
+# delegate to repeatedly.
+
+[pack]
+name = "codex-worker"
+version = "0.1.0"
+schema = 2
+description = "Durable named Codex coding workers that project leads delegate to"
+
+# Codex must be a declared provider before an agent can name it. Shipped here so
+# importing the pack is sufficient; without it every city that imports this pack
+# fails resolution with "provider catalog is missing referenced providers".
+[providers.codex]
+base = "builtin:codex"
+
+# ---------------------------------------------------------------------------
+# The worker template. A city instantiates it once per named worker.
+# ---------------------------------------------------------------------------
+
+[[agent]]
+name = "coder"
+description = "A durable named Codex worker that takes routed coding beads"
+provider = "codex"
+prompt_template = "templates/coder.md"
+
+# Resume the same conversation on every wake. This is already the default; it
+# is stated because it is the whole point of the pack and a silent flip to
+# "fresh" would be indistinguishable from working.
+wake_mode = "resume"
+
+# Make a missed resume-key capture LOUD.
+#
+# Codex has no session-id flag and no fork verb exposed to the SDK, so the
+# resume key can only arrive through the SessionStart hook's stdin. If that hook
+# is missing, drifted, or user-owned, the key is never captured and every wake
+# silently starts a cold conversation: the worker still runs, still answers, and
+# has forgotten everything. wake_mode="resume" is recorded intent that nothing
+# reads back as outcome.
+#
+# GC_PROVIDER_SESSION_ID_REQUIRED turns that silence into an error. Do not
+# remove it to quiet a noisy start; a worker that cannot resume is not this
+# pack's worker, and you want to hear about it at start, not discover it three
+# delegations later.
+[agent.env]
+GC_PROVIDER_SESSION_ID_REQUIRED = "1"
+
+[agent.option_defaults]
+model = "gpt-5.6-sol"
+effort = "xhigh"
+# MEASURED, not chosen for comfort: "auto-edit" (--full-auto) confines Codex to
+# a workspace-write sandbox, and a Go coding worker cannot function inside it.
+# Observed 2026-08-09 running Codex against this repo:
+#   - every `go` command died in cache init, because GOCACHE is ~/.cache/go-build
+#     and lives outside the sandbox
+#   - `git commit` could not take an index lock, because a worktree's git
+#     metadata lives under the MAIN repo's .git/worktrees/, also outside
+#   - dolt-backed tests could not run at all: "socket: operation not permitted"
+# The worker still produced a confident patch and a green-looking report, having
+# verified nothing. That is worse than a worker that cannot start.
+#
+# Widening the sandbox per-run (--add-dir for the build cache and the parent
+# .git) fixes the first two but NOT sockets, so any test touching a real store
+# stays unverifiable. Until the profile can express a workspace that covers a
+# worker's real toolchain, "unrestricted" is the only setting under which this
+# worker's own verification means anything.
+#
+# The mitigation is NOT a looser sandbox alone: it is that the DISPATCHER re-runs
+# the gates. See "Verification belongs to the dispatcher" in README.md.
+permission_mode = "unrestricted"
+
+[[agent]]
+# Pool-shaped variant for cities that want fan-out capacity from the same
+# prompt and provider settings without durable identity. Present so that
+# choosing a pool is a decision rather than an accident: this one is
+# interchangeable and its conversation is disposable.
+name = "coder-pool"
+description = "Interchangeable Codex workers for fan-out; no durable identity"
+provider = "codex"
+prompt_template = "templates/coder.md"
+wake_mode = "fresh"
+min_active_sessions = 0
+max_active_sessions = 4
+
+[agent.option_defaults]
+model = "gpt-5.6-sol"
+effort = "high"
+permission_mode = "unrestricted"
