@@ -18,13 +18,13 @@
 #   source = "../packs/codex-worker"
 #
 #   [[named_session]]
-#   name     = "rivet"
+#   name     = "<worker-name>"
 #   template = "codex-worker.coder"
 #   mode     = "always"
 #
 # Each [[named_session]] is one worker with one name and one continuous
 # conversation. Declare as many as you want lead capacity for. Names are the
-# addressing surface: a lead routes to `rivet` and means that worker, not "a
+# addressing surface: a lead routes to `<worker-name>` and means that worker, not "a
 # worker".
 #
 # WHY NAMES, NOT A POOL: a pool instance is interchangeable by design and routes

@@ -2,9 +2,9 @@
 
 Durable, named Codex coding workers that project leads delegate to by name.
 
-A lead routes a bead to `rivet`. Rivet picks it up on its next turn, does the
+A lead routes a bead to `<worker-name>`. It picks the bead up on its next turn, does the
 work in its own worktree, and reports. Next week the lead routes another one to
-`rivet`, and it is the same conversation: what it learned about the codebase is
+`<worker-name>`, and it is the same conversation: what it learned about the codebase is
 still there.
 
 No Go ships here. Every mechanism already exists in the SDK; this pack is the
@@ -18,16 +18,25 @@ composition and the arguments for the settings it picks.
 source = "../packs/codex-worker"
 
 [[named_session]]
-name     = "rivet"
+name     = "<worker-name>"
 template = "codex-worker.coder"
 mode     = "always"
 ```
 
 One `[[named_session]]` per worker. Declare as many as you have lead capacity
-for. Verify before relying on it:
+for.
+
+**Choose the name deliberately.** In a city that keeps an agent roster, a named
+seat with durable identity gets a roster entry, and by convention that entry is
+self-authored by the seat and amended only by it. Do not reuse an existing seat's
+name for a new worker, and do not pre-write a roster entry on a worker's behalf.
+The pack's job is only to leave that possible: give the worker a workspace from
+which it can read and amend its own entry.
+
+Verify before relying on it:
 
 ```
-gc config show | grep -A6 'name = "rivet"'
+gc config show | grep -A6 'name = "<worker-name>"'
 ```
 
 ## Why named, not pooled
@@ -36,7 +45,7 @@ A pool instance is interchangeable by design: it routes on its pool name, not
 its own, and its conversation is disposable. That is right for fan-out and wrong
 for a colleague you delegate to repeatedly. `mode = "always"` gives the worker a
 stable public identity the controller keeps alive, which is what makes "route it
-to rivet" mean a particular worker with particular accumulated context.
+to <worker-name>" mean a particular worker with particular accumulated context.
 
 The pack also ships `coder-pool` for genuine fan-out, so choosing a pool stays a
 decision rather than an accident.
@@ -67,7 +76,7 @@ rather than discover it several delegations later.
 To confirm a worker is actually warm rather than trusting the config:
 
 ```
-gc session show rivet --json | grep session_key   # must be non-empty
+gc session show <worker-name> --json | grep session_key   # must be non-empty
 ```
 
 Empty means every wake has been cold no matter what `wake_mode` says.
