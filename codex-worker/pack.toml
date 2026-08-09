@@ -48,6 +48,15 @@ base = "builtin:codex"
 # The worker template. A city instantiates it once per named worker.
 # ---------------------------------------------------------------------------
 
+# DO NOT set `dir` or `scope = "rig"` on this agent.
+#
+# It is deliberately city-scoped, so its working directory is the city and it can
+# reach `docs/design/agent-welfare-roster.md`. A durable named seat must be able
+# to read AND amend its own roster entry: that is the mechanism the roster's
+# integrity rests on, since only a seat may create or amend its own. Rig-scoping
+# a coding worker is the obvious thing to do and it silently puts the roster out
+# of reach, which would make the first non-Claude declared identity in a city one
+# that was written FOR it. Give the worker a rig through its work, not its scope.
 [[agent]]
 name = "coder"
 description = "A durable named Codex worker that takes routed coding beads"
