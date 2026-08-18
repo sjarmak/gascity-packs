@@ -96,3 +96,110 @@ kit_banner() {
 kit_run() {
   python3 "$KIT_DIR/src/factory_check.py" "$@"
 }
+
+# --- verification receipt ----------------------------------------------------
+#
+# `factory audit` scores the contract and cannot tell whether the contract is
+# TRUE; only reconcile reads the code. The two commands run at different times,
+# often by different people, so audit needs a durable record of what the last
+# reconcile said about THIS contract. That record is this file.
+#
+# It stores digests, not paths. The question audit asks is whether the document
+# that was checked is the document being scored, and editing the contract after
+# a clean reconcile is exactly the case that must stop reading as verified.
+
+file_digest() {
+  if [ ! -f "$1" ]; then
+    printf 'missing'
+    return 0
+  fi
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" | cut -d' ' -f1
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" | cut -d' ' -f1
+  else
+    printf 'unhashable'
+  fi
+}
+
+receipt_path() {
+  printf '%s\n' "$1/reconcile.receipt"
+}
+
+receipt_field() {
+  # Parsed, never sourced. The file lives in the city and a `key=$(rm ...)`
+  # line in it would execute on the next audit if this were a `.` include.
+  sed -n "s/^$2=//p" "$1" | sed -n 1p
+}
+
+receipt_write() {
+  local out=$1 contract=$2 probes=$3 installation=$4 status=$5
+  local tmp="$out/.reconcile.receipt.$$"
+  {
+    printf 'receipt_version=1\n'
+    printf 'checked_at=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    printf 'kit_commit=%s\n' "${KIT_ACTUAL_COMMIT:-unknown}"
+    printf 'kit_tree=%s\n' "${KIT_TREE_STATE:-unknown}"
+    printf 'installation=%s\n' "$installation"
+    printf 'contract_path=%s\n' "$contract"
+    printf 'contract_sha256=%s\n' "$(file_digest "$contract")"
+    printf 'probes_path=%s\n' "$probes"
+    printf 'probes_sha256=%s\n' "$(file_digest "$probes")"
+    printf 'status=%s\n' "$status"
+  } >"$tmp"
+  mv -f "$tmp" "$(receipt_path "$out")"
+}
+
+# One of: none stale drifted errored confirmed.
+#
+# `stale` covers every way "this reading no longer applies": the contract
+# changed, the probe pack that decided what reconcile could see changed, or the
+# checker that produced the reading is not the one installed now. A receipt
+# whose digests cannot be computed is stale too, because an unverifiable receipt
+# and a verified contract must never produce the same word.
+#
+# What it is NOT: an attestation. The receipt sits in the city and anything that
+# can write the city can write it, so a forged CONFIRMED is available to anyone
+# who could equally have edited the contract itself. There is no key this pack
+# could hold that the same actor could not read. It is a record of what the last
+# reconcile found, and it is worth exactly what the rest of the city's `.gc`
+# directory is worth.
+receipt_state() {
+  local out=$1 contract=$2 receipt want got probes
+  receipt=$(receipt_path "$out")
+  if [ ! -f "$receipt" ]; then
+    printf 'none\n'
+    return 0
+  fi
+  want=$(receipt_field "$receipt" contract_sha256)
+  got=$(file_digest "$contract")
+  if [ "$got" = missing ] || [ "$got" = unhashable ] || [ "$want" != "$got" ]; then
+    printf 'stale\n'
+    return 0
+  fi
+  probes=$(receipt_field "$receipt" probes_path)
+  if [ -n "$probes" ] \
+     && [ "$(receipt_field "$receipt" probes_sha256)" != "$(file_digest "$probes")" ]; then
+    printf 'stale\n'
+    return 0
+  fi
+  # The checker that produced the reading has to be the one installed now. Its
+  # rules and its probers both decide what reconcile was able to see, so a pin
+  # move ages a reading exactly the way a probe-pack edit does. Recording this
+  # field and never reading it left a guard that could not go red, which is the
+  # shape of every check in this pack that turned out to be decoration.
+  #
+  # The tree state is deliberately NOT part of this. An operator pointing
+  # FACTORY_KIT_HOME at a checkout they are editing is the documented workflow;
+  # holding that permanently STALE would report the workflow as a fault and bury
+  # the signal, and the banner already names a modified checkout on every run.
+  if [ "$(receipt_field "$receipt" kit_commit)" != "${KIT_ACTUAL_COMMIT:-unknown}" ]; then
+    printf 'stale\n'
+    return 0
+  fi
+  case "$(receipt_field "$receipt" status)" in
+    0) printf 'confirmed\n' ;;
+    1) printf 'drifted\n' ;;
+    *) printf 'errored\n' ;;
+  esac
+}

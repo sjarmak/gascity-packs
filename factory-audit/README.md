@@ -70,6 +70,15 @@ moved by one when we declared four previously invisible effects and by zero
 when we shipped the real merge fence. A checker that reads only a declaration
 measures your prose.
 
+So `audit` will not print a bare score. `reconcile` leaves a receipt recording
+the SHA-256 of the contract and probe pack it read and what it found, and every
+audit states, above the number and again below it, one of `NONE`, `STALE`,
+`DRIFTED`, `ERRORED` or `CONFIRMED`. A contract the last reconcile contradicted
+exits 4 however clean the rules are, and editing the contract afterwards returns
+it to `STALE` rather than carrying the confirmation through the edit. Run
+`gc <binding> factory audit --require-verified` in CI to refuse an unchecked
+contract outright.
+
 ## Getting a contract without writing one
 
 ```bash

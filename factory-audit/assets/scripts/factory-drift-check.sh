@@ -54,4 +54,8 @@ if [ "$wrote" -ne 0 ]; then
     "$out/reconcile.txt" "$wrote" >&2
   exit 5
 fi
+# Same receipt the interactive command writes. The order is the reconcile most
+# cities actually run, so an audit that ignored it would report "never verified"
+# on a city that checks itself daily.
+receipt_write "$out" "$out/factory.yaml" "$out/probes.yaml" "$city" "$status"
 exit "$status"

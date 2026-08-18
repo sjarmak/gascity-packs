@@ -522,3 +522,205 @@ def test_the_changelog_names_the_commit_the_pack_pins() -> None:
         "moving the pin without recording what changed in the kit is the "
         "failure this test exists for"
     )
+
+
+# --- the verification receipt -------------------------------------------------
+#
+# `audit` scores the contract and `reconcile` checks it against the code. Every
+# document in the pack said to run both and nothing made the audit say which one
+# it was reporting, so a clean score over a contradicted contract was printable,
+# quotable, and exit 0. These cover the coupling that closes it.
+
+
+def set_stub_exit(city: Path, code: int) -> None:
+    """Repoint the already-installed stub at a different exit status.
+
+    Needed because the interesting cases run TWO kit invocations with different
+    answers: a reconcile that found drift, then an audit whose own rules pass.
+    A single-exit stub cannot express that, and the state it produces is the one
+    the feature exists for.
+    """
+    city.joinpath(".gc", "factory-kit", "src", "factory_check.py").write_text(
+        textwrap.dedent(
+            f"""\
+            import sys
+            print("stub checker ran: " + " ".join(sys.argv[1:]))
+            sys.exit({code})
+            """
+        )
+    )
+
+
+def receipt_of(city: Path) -> Path:
+    return city / ".gc" / "factory-audit" / "reconcile.receipt"
+
+
+def test_audit_says_the_score_is_unverified_when_no_reconcile_has_run(
+    tmp_path: Path,
+) -> None:
+    install_stub_kit(tmp_path)
+    write_contract(tmp_path)
+    result = run(AUDIT, tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "verification: NONE" in result.stdout, result.stdout
+    # The state has to be visible before the number as well as after it. A
+    # reader who has already seen `0 FAIL, 0 WARN` has formed the view this
+    # line exists to prevent.
+    head = result.stdout.split("stub checker ran")[0]
+    assert "verification: NONE" in head, result.stdout
+
+
+def test_audit_reports_confirmed_after_a_clean_reconcile(tmp_path: Path) -> None:
+    install_stub_kit(tmp_path)
+    write_contract(tmp_path)
+    assert run(RECONCILE, tmp_path).returncode == 0
+    assert receipt_of(tmp_path).is_file(), "reconcile wrote no receipt"
+    result = run(AUDIT, tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "verification: CONFIRMED" in result.stdout, result.stdout
+
+
+def test_audit_exits_4_when_the_last_reconcile_found_drift(tmp_path: Path) -> None:
+    """The failure this whole mechanism exists for.
+
+    The rules pass and the installation contradicts the document. Before the
+    receipt, that combination printed a perfect score and exited 0, which is
+    the number that ends up quoted in a README.
+    """
+    install_stub_kit(tmp_path, exit_code=1)
+    write_contract(tmp_path)
+    assert run(RECONCILE, tmp_path).returncode == 1
+
+    set_stub_exit(tmp_path, 0)
+    result = run(AUDIT, tmp_path)
+    assert "stub checker ran: review" in result.stdout, (
+        "the rule catalog did not run, so a nonzero exit here would be an "
+        f"error rather than the finding under test:\n{result.stdout}"
+    )
+    assert "verification: DRIFTED" in result.stdout, result.stdout
+    assert result.returncode == 4, (
+        "audit's own rules passed over a contract reconcile contradicted and "
+        f"it exited {result.returncode}. Output:\n{result.stdout}{result.stderr}"
+    )
+
+
+def test_editing_the_contract_after_a_clean_reconcile_returns_it_to_stale(
+    tmp_path: Path,
+) -> None:
+    """Verified state is lost by the edit, not carried through it."""
+    install_stub_kit(tmp_path)
+    write_contract(tmp_path)
+    assert run(RECONCILE, tmp_path).returncode == 0
+    contract = tmp_path / ".gc" / "factory-audit" / "factory.yaml"
+    contract.write_text(contract.read_text() + "effects: []\n")
+
+    result = run(AUDIT, tmp_path)
+    assert "verification: STALE" in result.stdout, result.stdout
+    assert "CONFIRMED" not in result.stdout, result.stdout
+
+
+def test_editing_the_probe_pack_returns_it_to_stale(tmp_path: Path) -> None:
+    """The second digest, and it is not redundant.
+
+    The probe pack decides what reconcile is able to see. A contract that has
+    not changed, checked through probes that have, was checked against a
+    different question. Without this case the probes digest can be deleted from
+    the receipt and every other test here stays green.
+    """
+    install_stub_kit(tmp_path)
+    write_contract(tmp_path)
+    assert run(RECONCILE, tmp_path).returncode == 0
+    probes = tmp_path / ".gc" / "factory-audit" / "probes.yaml"
+    probes.write_text("effects: [{name: publish}]\n")
+
+    result = run(AUDIT, tmp_path)
+    assert "verification: STALE" in result.stdout, result.stdout
+
+
+def test_require_verified_is_opt_in(tmp_path: Path) -> None:
+    """Both rails on the flag.
+
+    A flag that always failed would satisfy the nonzero half while making the
+    default unusable, and one that never failed is the bug. The same
+    unreconciled city answers both ways.
+    """
+    install_stub_kit(tmp_path)
+    write_contract(tmp_path)
+    assert run(AUDIT, tmp_path).returncode == 0
+    strictly = run(AUDIT, tmp_path, "--require-verified")
+    assert strictly.returncode == 4, strictly.stdout + strictly.stderr
+    assert "verification: NONE" in strictly.stdout, strictly.stdout
+
+
+def test_the_scheduled_order_writes_the_receipt_the_audit_reads(
+    tmp_path: Path,
+) -> None:
+    """The order is the reconcile most cities actually run.
+
+    It shares no code path with the interactive command beyond the helper, so a
+    receipt written only by `factory reconcile` would report NONE forever on a
+    city that checks itself every day, and nobody would look for the cause in
+    the order.
+    """
+    install_stub_kit(tmp_path, exit_code=1)
+    write_contract(tmp_path)
+    assert run(ORDER, tmp_path).returncode == 1
+    assert receipt_of(tmp_path).is_file(), "the order wrote no receipt"
+
+    set_stub_exit(tmp_path, 0)
+    result = run(AUDIT, tmp_path)
+    assert "verification: DRIFTED" in result.stdout, result.stdout
+    assert result.returncode == 4, result.stdout + result.stderr
+
+
+def test_the_receipt_is_parsed_and_never_sourced(tmp_path: Path) -> None:
+    """It lives in the city, where anything may write to it.
+
+    Sourcing it would execute whatever is in it on the next audit. The state
+    reported for a receipt shaped like an attack is beside the point; that the
+    command in it did not run is the assertion.
+    """
+    install_stub_kit(tmp_path)
+    write_contract(tmp_path)
+    assert run(RECONCILE, tmp_path).returncode == 0
+    marker = tmp_path / "sourced"
+    receipt_of(tmp_path).write_text(
+        f"status=$(touch {marker})\ncontract_sha256=x\n"
+    )
+    result = run(AUDIT, tmp_path)
+    assert not marker.exists(), "the receipt was sourced, not parsed"
+    # And the fields were read. Asserting only that nothing executed passes
+    # against a command that ignores the receipt entirely, which is the same
+    # green a working parser produces. `contract_sha256=x` matches no contract,
+    # so the state derived from THIS file is the assertion.
+    assert "verification: STALE" in result.stdout, result.stdout
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_moving_the_kit_ages_the_reading_that_kit_produced(tmp_path: Path) -> None:
+    """The checker is as much an input to a reconcile as the contract is.
+
+    Its rules and its probers decide what reconcile was able to see, so a pin
+    move ages a result the same way editing the probe pack does. Written
+    because `receipt_write` recorded the commit from the start and nothing read
+    it: a field that no branch consults is a guard that cannot go red.
+    """
+    kit = install_stub_kit(tmp_path)
+    write_contract(tmp_path)
+    assert run(RECONCILE, tmp_path).returncode == 0
+    assert "verification: CONFIRMED" in run(AUDIT, tmp_path).stdout
+
+    # A second commit in the same checkout: same contract, same probes, same
+    # files on disk, different checker.
+    kit.joinpath("src", "factory_check.py").write_text(
+        "import sys\nprint('stub checker ran: ' + ' '.join(sys.argv[1:]))\nsys.exit(0)\n"
+    )
+    subprocess.run(["git", "add", "-A"], cwd=kit, check=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "moved"],
+        cwd=kit, check=True,
+    )
+
+    result = run(AUDIT, tmp_path)
+    assert "verification: STALE" in result.stdout, result.stdout
+    assert "CONFIRMED" not in result.stdout, result.stdout

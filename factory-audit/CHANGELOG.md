@@ -6,6 +6,30 @@ changed in the kit and what a city sees differently because of it.
 
 ## Unreleased
 
+### A clean audit could be printed over a contract the code contradicts
+
+`factory audit` scores the contract and `factory reconcile` checks the contract
+against the installation. Every document in the pack said so, including the
+audit command's own header: *"a green audit over a contract nobody derived is
+worth nothing."* Nothing enforced it. A user who ran only `gc <binding> factory
+audit` got `0 FAIL, 0 WARN` and exit 0 over a contract reconcile would have
+reported as DRIFT, and that number is the one that ends up quoted.
+
+Reconcile now writes `reconcile.receipt` next to `reconcile.txt`. It records a
+SHA-256 of two files, the contract and the probe pack, and records the
+installation path, the kit commit and its own exit status as plain values. The scheduled `factory-drift` order writes
+the same receipt, so a city that checks itself daily is not reported as
+unverified.
+
+Audit reads it and prints `verification: NONE | STALE | DRIFTED | ERRORED |
+CONFIRMED` above the score and again below it. `DRIFTED` exits 4 whatever the
+findings say. `--require-verified` extends that to `NONE`, `STALE` and
+`ERRORED` for a CI job that should refuse an unchecked contract.
+
+Matching is on digests rather than paths, so editing the contract after a clean
+reconcile returns it to `STALE`. That is the case the mechanism exists for: the
+verified state has to be lost by the edit, not carried through it.
+
 ### Every instruction the pack printed named a command that does not exist
 
 `gc <binding> factory setup` is how a pack command is reached, and the binding

@@ -69,13 +69,23 @@ elif verb == "infer":
     print("inferred 0 effects")
 elif verb == "reconcile":
     print("1 drift, 0 confirmed" if os.environ.get("FACTORY_STUB_DRIFT") else "0 drift")
-elif verb == "audit":
+elif verb == "review":
+    # `factory audit` runs the kit's `review`, not a verb named after itself.
+    # This branch used to be spelled `audit` and was therefore dead: driving
+    # audit through gc landed in the `else` below and exited 64, and no test
+    # drove it, so both mistakes kept each other invisible.
+    pathlib.Path(value("--out"), "findings.json").write_text("[]\n")
     print("0 FAIL, 0 WARN")
 else:
     print("stub: unknown verb %s" % verb, file=sys.stderr)
     sys.exit(64)
 
-sys.exit(int(os.environ.get("FACTORY_STUB_EXIT", "0")))
+# Per-verb override. The interesting state for the verification receipt needs a
+# reconcile that found drift and an audit whose own rules pass, and one exit
+# status for the whole stub cannot say that.
+sys.exit(int(os.environ.get(
+    "FACTORY_STUB_EXIT_" + verb.upper(),
+    os.environ.get("FACTORY_STUB_EXIT", "0"))))
 '''
 
 
@@ -273,3 +283,96 @@ def test_the_override_warning_is_not_printed_when_there_is_no_override(
         "no override is in use and the banner named one anyway:\n" + result.stdout
     )
     assert "(pinned)" not in result.stdout, result.stdout
+
+
+def test_audit_through_gc_states_that_nothing_has_checked_its_score(
+    city: tuple[Workspace, Path, Path], gc_test_bin: Path  # noqa: F811
+) -> None:
+    """The score alone is a property of a document, and gc has to say so.
+
+    The pack's own suite can prove the wrapper prints this line. It cannot
+    prove a user meets it: gc resolves the pack directory, sets the city, and
+    runs the script, and a wrapper whose banner is correct in isolation is
+    worth nothing if the command a user types never reaches it.
+    """
+    workspace, kit, log = city
+    assert drive(gc_test_bin, workspace, kit, log, "factory", "derive").returncode == 0
+    out = workspace.city_dir / ".gc" / "factory-audit"
+    (out / "factory.yaml").write_text("factory_name: scratch\neffects: {}\n")
+
+    result = drive(gc_test_bin, workspace, kit, log, "factory", "audit")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "verification: NONE" in result.stdout, result.stdout
+    assert "0 FAIL, 0 WARN" in result.stdout, (
+        "the rule catalog did not run through gc, so the line above is a "
+        f"banner over nothing:\n{result.stdout}{result.stderr}"
+    )
+    assert [c["argv"] for c in calls(log)][-1] == [
+        "review", str(out / "factory.yaml"), "--out", str(out),
+    ], f"gc reached the kit with the wrong audit call. Calls: {calls(log)}"
+
+
+def test_audit_through_gc_refuses_a_clean_score_over_a_contradicted_contract(
+    city: tuple[Workspace, Path, Path], gc_test_bin: Path  # noqa: F811
+) -> None:
+    """The whole reason the receipt exists, driven the way a user drives it.
+
+    Reconcile finds the installation contradicts the contract. Nothing changes
+    the contract. The rule catalog then passes, because the rules read the
+    document and the document is internally consistent -- it is simply not
+    true. Before the receipt this printed `0 FAIL, 0 WARN` and exited 0, and
+    that is the pair anyone would quote.
+    """
+    workspace, kit, log = city
+    assert drive(gc_test_bin, workspace, kit, log, "factory", "derive").returncode == 0
+    out = workspace.city_dir / ".gc" / "factory-audit"
+    (out / "factory.yaml").write_text("factory_name: scratch\neffects: {}\n")
+
+    drifted = drive(
+        gc_test_bin, workspace, kit, log, "factory", "reconcile",
+        FACTORY_STUB_EXIT="1", FACTORY_STUB_DRIFT="1",
+    )
+    assert drifted.returncode == 1, drifted.stdout + drifted.stderr
+    assert (out / "reconcile.receipt").is_file(), (
+        "reconcile through gc left no receipt, so the audit below has nothing "
+        f"to read:\n{drifted.stdout}{drifted.stderr}"
+    )
+
+    result = drive(gc_test_bin, workspace, kit, log, "factory", "audit")
+    assert "0 FAIL, 0 WARN" in result.stdout, (
+        "the rules did not pass, so a nonzero exit here would not be the "
+        f"finding under test:\n{result.stdout}{result.stderr}"
+    )
+    assert "verification: DRIFTED" in result.stdout, result.stdout
+    assert result.returncode == 4, (
+        "audit's rules passed over a contract gc had just reported as drifted "
+        f"and it exited {result.returncode}:\n{result.stdout}{result.stderr}"
+    )
+
+
+def test_the_verification_state_reads_the_receipt_and_not_the_report_text(
+    city: tuple[Workspace, Path, Path], gc_test_bin: Path  # noqa: F811
+) -> None:
+    """The stub perturbation, not another revert of the fix.
+
+    Here the kit PRINTS a drift line and exits 0. A wrapper that decided the
+    verification state by grepping `reconcile.txt` would report DRIFTED and
+    exit 4, and every other test in this file would stay green while the pack
+    was coupled to a sentence in the checker's output -- a sentence the checker
+    is free to rewrite, in a repository this pack only pins.
+    """
+    workspace, kit, log = city
+    assert drive(gc_test_bin, workspace, kit, log, "factory", "derive").returncode == 0
+    out = workspace.city_dir / ".gc" / "factory-audit"
+    (out / "factory.yaml").write_text("factory_name: scratch\neffects: {}\n")
+
+    clean = drive(
+        gc_test_bin, workspace, kit, log, "factory", "reconcile",
+        FACTORY_STUB_DRIFT="1",
+    )
+    assert clean.returncode == 0, clean.stdout + clean.stderr
+    assert "1 drift" in clean.stdout, clean.stdout
+
+    result = drive(gc_test_bin, workspace, kit, log, "factory", "audit")
+    assert "verification: CONFIRMED" in result.stdout, result.stdout
+    assert result.returncode == 0, result.stdout + result.stderr

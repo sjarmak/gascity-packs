@@ -84,5 +84,11 @@ if [ "$wrote" -ne 0 ]; then
     "$out/reconcile.txt" "$wrote" >&2
   exit 5
 fi
-printf '\nwrote %s\n' "$out/reconcile.txt"
+# The receipt is what `factory audit` reads to say whether its score has been
+# checked against the code. Written on the drift path too: a reconcile that
+# found drift is a completed check with a bad answer, and the audit needs to be
+# able to say so rather than fall back to "never verified".
+receipt_write "$out" "$contract" "$probes" "$city" "$status"
+
+printf '\nwrote %s and %s\n' "$out/reconcile.txt" "$(receipt_path "$out")"
 exit "$status"
