@@ -408,3 +408,55 @@ def test_the_pack_ships_the_order_its_readme_promises(tmp_path: Path) -> None:
     here where it is a fact about this pack rather than a shape shared by five.
     """
     assert (PACK / "orders" / "factory-drift.toml").is_file()
+
+
+def _pin_values() -> dict[str, str]:
+    """The pin file is sourced by shell, so read it the same way rather than
+    parsing it with a regex that would disagree with what the scripts see."""
+    out = subprocess.run(
+        ["bash", "-c",
+         f'. "{PACK}/kit.pin"; printf "%s\\n%s\\n%s\\n" '
+         '"$KIT_REPO" "$KIT_COMMIT" "$KIT_COMMIT_SUMMARY"'],
+        capture_output=True, text=True, timeout=30,
+    )
+    assert out.returncode == 0, f"kit.pin does not source cleanly: {out.stderr}"
+    repo, commit, summary = out.stdout.rstrip("\n").split("\n")
+    return {"repo": repo, "commit": commit, "summary": summary}
+
+
+def test_the_pin_names_a_full_commit_and_says_what_it_is() -> None:
+    """A short or empty pin never equals `git rev-parse HEAD`, so setup's
+    already-at-the-pin check can never be true and every run re-clones while
+    reporting success. The summary is what makes a stale pin visible to a
+    reader who is not going to resolve the sha."""
+    pin = _pin_values()
+    assert len(pin["commit"]) == 40 and all(
+        c in "0123456789abcdef" for c in pin["commit"]
+    ), f"KIT_COMMIT is not a full lowercase sha: {pin['commit']!r}"
+    assert pin["summary"].strip(), "KIT_COMMIT_SUMMARY is empty"
+    assert pin["repo"].strip(), "KIT_REPO is empty"
+
+
+def test_the_changelog_names_the_commit_the_pack_pins() -> None:
+    """The pin went nine commits stale once, silently, because moving it is a
+    one-line edit and nothing tied that line to a record anyone reads. This is
+    that tie: the changelog has to name the pinned commit, so a pin move that
+    skips the changelog fails here rather than in an installing city.
+
+    It asserts the sha appears somewhere in the file, not that it appears in a
+    particular section, because pinning the section shape would break on the
+    first release that reorganises it and teach the next person to delete the
+    test instead of updating the entry.
+    """
+    changelog = PACK / "CHANGELOG.md"
+    assert changelog.is_file(), (
+        "kit.pin's own instructions say to record a pin move in the pack "
+        "CHANGELOG; there is no CHANGELOG.md"
+    )
+    commit = _pin_values()["commit"]
+    text = changelog.read_text()
+    assert commit[:7] in text, (
+        f"the changelog does not mention the pinned commit {commit[:12]}; "
+        "moving the pin without recording what changed in the kit is the "
+        "failure this test exists for"
+    )

@@ -10,5 +10,5 @@
 # record in the pack CHANGELOG what changed in the kit and why it matters here.
 
 KIT_REPO='https://github.com/sjarmak/software-factory-reliability.git'
-KIT_COMMIT='37c873d92036814b027543f5bda3d289e88d050a'
-KIT_COMMIT_SUMMARY='fix(infer): a command assembled over several statements still carries its flag'
+KIT_COMMIT='ca6609781e038cc809e9e24fa19bf83461425708'
+KIT_COMMIT_SUMMARY='docs(readme): the front page sent people to the hand-written contract'
