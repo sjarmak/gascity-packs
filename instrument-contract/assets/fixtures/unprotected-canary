@@ -1,0 +1,23 @@
+#!/usr/bin/env python3
+"""unprotected-canary — an instrument with no test, on purpose.
+
+The other half of the control. The positive control proves the checker can
+still recognise a protected instrument; this one proves it can still report an
+unprotected one. Without it, a checker that has quietly stopped finding
+anything and a codebase with nothing left to find produce the same output.
+
+Do not write a test for this file. If a test appears beside it, the pack's own
+suite fails, which is the only way to keep the negative rail honest.
+"""
+from __future__ import annotations
+
+import sys
+
+
+def main(argv: list[str]) -> int:
+    print("unprotected-canary: this instrument has no test, deliberately")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

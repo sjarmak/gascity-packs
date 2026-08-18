@@ -1,0 +1,10 @@
+[order]
+description = "Daily: audit every enabled local order against the mechanically checkable instrument contract; a partial population is never green."
+trigger = "cooldown"
+interval = "24h"
+# Quoted: a pack path with a space in it otherwise splits into two arguments,
+# and the order then fails with a message about a file that does not exist
+# rather than about the path that does.
+exec = 'python3 "$GC_PACK_DIR/assets/scripts/instrument-contract-check" --enabled-local-orders'
+timeout = "5m"
+idempotent = true

@@ -1,0 +1,50 @@
+# instrument-contract — check that your city's own instruments can go red.
+#
+# The problem this exists for. A city accumulates instruments: reapers,
+# sweepers, health checks, canaries, scanners. Each one reports, and each
+# report is believed. Almost none of them are ever shown to be capable of
+# reporting the failure they exist to catch, so the fleet ends up trusting a
+# population of green lights that has never been tested against a red one.
+#
+# The failure is not hypothetical and it is not loud. An instrument that has
+# quietly stopped looking prints the same clean line as an instrument that
+# looked and found nothing. In the city this pack was extracted from, five
+# separate measurements failed at once and every one of them returned zero,
+# empty, or a constant. None returned an error. The tools were not reporting
+# a healthy system; they were reporting nothing, in the shape of health.
+#
+# What the pack checks, and what it refuses to check. Exactly one thing here
+# is decided: does an instrument have a sibling test at all? That is a
+# filesystem fact. Everything else is printed as EVIDENCE with the scan that
+# produced it, and a scan that finds nothing prints LOOKUP_FAILED rather than
+# ABSENT, because grepping an imported document's vocabulary reports the most
+# careful components as unprotected. Six clauses of the convention cannot be
+# mechanically checked at all; they are named and printed unchecked on every
+# run, so a clean result can never be read as "conforms".
+#
+# The population comes from your city's own enabled orders. Nothing is
+# hand-declared: the checker resolves each order's exec to the files it runs
+# and audits those, and a corpus it could only partially resolve exits 2
+# rather than reporting a clean run over the part it could see.
+#
+# The control ships with the pack. assets/fixtures/protected-canary is a real
+# instrument with a red-case test, re-checked on every standing run: if this
+# tool ever calls it unprotected, the tool is wrong and its other answers are
+# worthless. assets/fixtures/unprotected-canary has no test on purpose, so the
+# finding rail stays provable. Without both, a checker that has stopped
+# finding anything and a codebase with nothing to find read identically.
+#
+# What it found where it came from, because that is the only claim worth
+# making about a checker: 8 of 79 audited instruments had no test at all, and
+# two more had a test this tool could not classify and correctly declined to
+# count either way.
+#
+# Your vocabulary, not ours. INSTRUMENT_CONTRACT_ISSUE_PREFIXES holds your
+# tracker's ID prefixes for the red-case scan. Shipping ours as a constant
+# would do to your careful code exactly what the imported vocabulary did to
+# ours: report it as unprotected because it was written in its own words.
+
+[pack]
+name = "instrument-contract"
+version = "0.1.0"
+schema = 2

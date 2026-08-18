@@ -1,0 +1,44 @@
+#!/usr/bin/env python3
+"""protected-canary — the checker's positive control, and nothing else.
+
+This file exists so that instrument-contract-check has one instrument it is
+KNOWN to be right about. A checker whose only failure mode is silence can be
+broken into permanent silence and still read as clean; re-checking a known-good
+instrument on every run is what makes that failure visible.
+
+It is deliberately a real instrument rather than a stub: it counts a corpus,
+reports a number on an empty run, and distinguishes "found nothing" from "could
+not look". Those are the properties the contract asks for, and a control that
+did not have them would not exercise the scan it is controlling.
+"""
+from __future__ import annotations
+
+import pathlib
+import sys
+
+
+def count_files(root: pathlib.Path) -> int | None:
+    """Return the number of files under root, or None when root cannot be read.
+
+    None is not zero. A directory that does not exist has an unknown count, and
+    reporting 0 for it is the failure this whole convention exists to prevent.
+    """
+    if not root.is_dir():
+        return None
+    return sum(1 for p in root.rglob("*") if p.is_file())
+
+
+def main(argv: list[str]) -> int:
+    root = pathlib.Path(argv[1]) if len(argv) > 1 else pathlib.Path.cwd()
+    total = count_files(root)
+    if total is None:
+        print(f"COULD-NOT-CHECK: {root} is not a readable directory")
+        return 2
+    print(f"protected-canary: {total} file(s) under {root}")
+    if total == 0:
+        print("clean: the corpus is empty, which is a count and not an absence")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

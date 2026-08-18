@@ -1,0 +1,69 @@
+#!/usr/bin/env python3
+"""Tests for protected-canary, including the RED case the contract requires.
+
+The red case is the point of this file. A suite that only proves the happy path
+cannot tell you the instrument would ever report a failure, and an instrument
+that cannot report a failure is not an instrument.
+
+Each case names the mutation that flips it, so a reader can check that the green
+is a property of the code and not of the assertion. Run it directly:
+
+    python3 assets/fixtures/protected-canary.test
+
+Exit 0 on pass, 1 on any failure.
+"""
+from __future__ import annotations
+
+import importlib.machinery
+import importlib.util
+import pathlib
+import sys
+import tempfile
+
+HERE = pathlib.Path(__file__).resolve().parent
+loader = importlib.machinery.SourceFileLoader(
+    "protected_canary", str(HERE / "protected-canary"))
+spec = importlib.util.spec_from_loader("protected_canary", loader)
+canary = importlib.util.module_from_spec(spec)
+loader.exec_module(canary)
+
+fails: list[str] = []
+
+
+def eq(name: str, got, want) -> None:
+    if got == want:
+        print(f"PASS {name}")
+        return
+    fails.append(name)
+    print(f"FAIL {name}: got {got!r}, want {want!r}")
+
+
+with tempfile.TemporaryDirectory() as td:
+    root = pathlib.Path(td)
+
+    # RED when count_files stops recursing: turn rglob into glob and this is 1.
+    (root / "a").write_text("x")
+    nested = root / "d"
+    nested.mkdir()
+    (nested / "b").write_text("y")
+    eq("counts files recursively", canary.count_files(root), 2)
+
+with tempfile.TemporaryDirectory() as td:
+    # RED when the empty case returns None: zero and unknown must not merge.
+    eq("an empty corpus counts zero", canary.count_files(pathlib.Path(td)), 0)
+
+    # THE RED CASE. Change `return None` to `return 0` in count_files and this
+    # fails. It is the incident the convention reproduces: an instrument that
+    # reports 0 for a corpus it could not read is indistinguishable from one
+    # reporting a clean run, and every consumer downstream believes it.
+    eq("an unreadable corpus is unknown, not zero",
+       canary.count_files(pathlib.Path(td) / "does-not-exist"), None)
+
+    # RED when main() returns 0 on the unknown branch.
+    eq("the command exits could-not-check",
+       canary.main(["protected-canary", str(pathlib.Path(td) / "missing")]), 2)
+
+if fails:
+    print(f"RESULT: FAIL ({len(fails)} case(s))")
+    sys.exit(1)
+print("RESULT: PASS")

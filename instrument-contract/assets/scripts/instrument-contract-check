@@ -1,0 +1,802 @@
+#!/usr/bin/env python3
+"""instrument-contract-check — the gate from docs/conventions/instrument-contract.md.
+
+Run this before trusting a new instrument's green.
+
+WHAT THIS TOOL IS. Almost nothing here can be decided by reading source, and
+this tool's first version overclaimed on exactly that. It now separates three
+things:
+
+  * THE CORPUS FACT IT DECIDES. Is there a sibling test file at all? That is a
+    filesystem fact, and its absence is the only per-instrument finding. The
+    standing population mode also hard-checks its named positive control.
+
+  * EVIDENCE IT GATHERS, never a verdict. C1, C2, C7, C11 and the C3 red-case
+    marker are keyword scans. A scan that finds nothing is LOOKUP_FAILED — we
+    could not look with the words we have — and NEVER ABSENT. A scan that finds
+    something is evidence to read, not proof.
+
+  * CLAUSES IT CANNOT CHECK. C4, C5, C6, C8, C9, C10 are named and printed on
+    every run, unchecked, so that a green result cannot be read as "conforms".
+
+WHY THE SCANS ARE ONLY EVIDENCE. Grepping an imported document's vocabulary
+INVERTS: it reports the most careful components as unprotected, because careful
+code was written before the book arrived and uses its own codebase's words, not
+the book's. This tool did exactly that in the city it was written in, to the
+one component that had implemented the absent-vs-unknown rule before the
+playbook existed, calling its suite untested and its corpus guard missing. Both
+were there, in that city's words.
+
+That is why the issue-ID half of the red-case scan is configuration:
+INSTRUMENT_CONTRACT_ISSUE_PREFIXES holds your tracker's prefixes, and shipping
+ours as a constant would repeat the inversion on your code.
+
+POSITIVE CONTROL, and run it after any change to the patterns here: if this
+tool reports its own control as unprotected, THIS TOOL is wrong. The control
+ships as assets/fixtures/protected-canary; point INSTRUMENT_CONTRACT_CONTROL at
+one of your own protected instruments as soon as you have one, because a
+fixture can drift into being the only thing the tool is still right about.
+
+ENVIRONMENT. GC_CITY_PATH or GC_CITY names the city under audit (gc sets both,
+one for commands and one for order execs); INSTRUMENT_CONTRACT_CITY overrides
+them. GC_PACK_DIR locates the shipped fixtures. GC_SOURCE_ROOT,
+GC_INSTALL_RECEIPT and GC_SOURCE_REMOTE describe where gc itself was built,
+for the installed-binary attestation path only.
+
+Usage:
+  bin/instrument-contract-check <path>...        one or more instruments
+  bin/instrument-contract-check --changed        every modified/staged file
+  bin/instrument-contract-check --order <name>   resolve every target in an order exec
+  bin/instrument-contract-check --enabled-local-orders
+                                                audit the live local order population
+
+Exit 0 when every instrument in the corpus has a test and the positive control
+is protected. Exit 1 when one has no test or the positive control fails.
+Exit 2 when any selected order binding or subject could not be examined — an
+empty or partial corpus is never reported as a clean run (C7). Binary and
+external installed executables are unreachable unless an order binds an exact
+installed ``gc`` receipt to canonical source and test Git blobs. The checker
+never decodes binaries or infers source from an executable name. The order file
+attests the semantic command-to-path mapping; this checker verifies and clearly
+labels that attestation rather than presenting it as a derived fact. Everything
+else is printed as evidence and resolves nothing.
+"""
+from __future__ import annotations
+
+import argparse
+import datetime
+import json
+import os
+import pathlib
+import re
+import shlex
+import shutil
+import subprocess
+import sys
+import tomllib
+import typing
+
+from instrument_contract_provenance import resolve_installed_gc_subject
+
+# The city under audit. In a pack, this script lives under the pack directory
+# rather than under the city, so the old `__file__.parent.parent` reading was
+# the pack root and every order path resolved against the wrong tree. gc sets
+# GC_CITY_PATH for a pack command and GC_CITY for an order exec; both are the
+# city root, and the cwd fallback is what makes the script runnable by hand.
+def _city_root() -> pathlib.Path:
+    for var in ("INSTRUMENT_CONTRACT_CITY", "GC_CITY_PATH", "GC_CITY"):
+        value = os.environ.get(var, "").strip()
+        if value:
+            return pathlib.Path(value).resolve()
+    return pathlib.Path.cwd().resolve()
+
+
+CITY = _city_root()
+
+# The pack directory, when gc supplied one. The positive control below ships
+# with the pack, so it has to be found relative to the pack and not the city.
+# The fallback is parents[2] because this file sits at
+# <pack>/assets/scripts/instrument-contract-check: parent is scripts/, and
+# parents[1] is assets/, which is one level short of the pack root and makes
+# the control resolve to <pack>/assets/assets/fixtures/... — a path that never
+# exists, so the control silently reads as unprotected.
+PACK_DIR = pathlib.Path(
+    os.environ.get("GC_PACK_DIR", "").strip()
+    or pathlib.Path(__file__).resolve().parents[2]
+).resolve()
+
+
+class EnabledOrderPopulation(typing.NamedTuple):
+    order_count: int
+    paths: tuple[pathlib.Path, ...]
+    unresolved: tuple[str, ...]
+    tracked_live: tuple[str, ...]
+    untracked_live: tuple[str, ...]
+    tracked_not_live: tuple[str, ...]
+    bindings: tuple["OrderBinding", ...]
+
+
+class OrderBinding(typing.NamedTuple):
+    name: str
+    source: str
+    command: str
+    targets: tuple[pathlib.Path, ...]
+    complete: bool
+
+
+class ExecResolution(typing.NamedTuple):
+    targets: tuple[pathlib.Path, ...]
+    complete: bool
+
+
+# Where the gc binary's own source lives, for the installed-binary attestation
+# path. A city that builds gc from somewhere else sets these; the defaults are
+# the conventional layout and are wrong for nobody who never uses that path.
+GASCITY_SOURCE_ROOT = pathlib.Path(
+    os.environ.get("GC_SOURCE_ROOT", "").strip() or pathlib.Path.home() / "gascity-main"
+)
+GC_INSTALL_RECEIPT = pathlib.Path(
+    os.environ.get("GC_INSTALL_RECEIPT", "").strip()
+    or pathlib.Path.home() / ".gc" / "gc-installed.sha"
+)
+GASCITY_REMOTE = (
+    os.environ.get("GC_SOURCE_REMOTE", "").strip()
+    or "https://github.com/gastownhall/gascity.git"
+)
+# This city marks a red case two ways. The imported convention is a literal
+# RED / red() / "expected RED". The NATIVE one, which predates it and is
+# stronger, is citing the incident the case reproduces by bead ID
+# (dr-of5r, gc-o8f9m, gc-l6m5y) — a case tied to a real failure is better
+# evidence than one tied to my keyword.
+#
+# Matching only the first spelling INVERTED on bin/orphaned-molecule-reaper,
+# the component the mayor names as having implemented the absent-vs-unknown
+# rule before the playbook existed. Its suite reproduces two named incidents
+# and this gate called it untested. Grepping an imported vocabulary reports
+# the most careful code as unprotected, because careful code was written in
+# our words, not the book's.
+#
+# Which is why the issue-ID half is configuration and not a constant. Set
+# INSTRUMENT_CONTRACT_ISSUE_PREFIXES to your own tracker's prefixes, comma
+# separated (`dr,gc,PROJ`), and the scan reads your vocabulary rather than
+# ours. Leave it empty to turn the issue-ID spelling off entirely. Shipping
+# our prefixes as the default would do to your careful code exactly what the
+# book's vocabulary did to ours.
+def _issue_id_alternation() -> str:
+    raw = os.environ.get("INSTRUMENT_CONTRACT_ISSUE_PREFIXES")
+    if raw is None:
+        raw = "dr,gc,gpk,aoa,dec,mem,codeprobe"
+    prefixes = [re.escape(p.strip()) for p in raw.split(",") if p.strip()]
+    if not prefixes:
+        return ""
+    return r"\b(?:" + "|".join(prefixes) + r")-[a-z0-9]{3,}\b|"
+
+
+RED_MARKER = re.compile(
+    r"\bRED\b|(?<![A-Za-z_])red\s*\(|expected[- ]red|"
+    + _issue_id_alternation()
+    + r"\bincident\b|\bregression\b|\bmust fail\b|fail(?:s|ed)? closed",
+    re.I)
+
+# Evidence scans. Each is a search for the instrument having a WAY to say the
+# thing, over its own literals. See the module docstring for what a miss means.
+EVIDENCE = {
+    "C1  reports on a clean/empty run": re.compile(
+        r"""=0\b|\b0\b\s*(?:found|reaped|flagged|stale)|
+            \bclean\b|\bnothing\b|\bnone\b|\bno[_ ](?:findings|matches|issues|candidates)\b|
+            \bempty\b|len\(\s*\w+\s*\)\s*==\s*0|-z\s+"?\$""", re.I | re.X),
+    "C2  can emit a could-not-check outcome": re.compile(
+        r"""\berror\b|\bfail(?:ed|ure)?\b|\bunknown\b|\bskip(?:ped)?\b|\btimeout\b|
+            \bunavailable\b|\bcould_not\b|\bcannot\b|\bnot[_ ]found\b|\brefus""", re.I | re.X),
+    "C7  counts its corpus before calling it clean": re.compile(
+        r"""\bcount\b|\btotal\b|\bconsidered\b|\bscanned\b|\bexamined\b|
+            \bcandidates?\b|\benumerated\b|\bwc -l\b|len\(""", re.I | re.X),
+    "C11 writes a dated line an outside watcher can rate-check": re.compile(
+        # `date -Is` is this city's most common form and was missed on the first
+        # pass, which reported NO EVIDENCE against an instrument that dates every
+        # line. Match the command, not one spelling of its flags.
+        r"""\bdate\s+[-+]|\bisoformat\b|datetime\.now|\bstrftime\b|%\(%Y-|\bts=|"ts"|\butcnow\b""",
+        re.I | re.X),
+}
+
+UNCHECKABLE = [
+    "C4  reports the measured EFFECT, not the attempted action",
+    "C5  the alert name matches the quantity actually measured",
+    "C6  every reading carries its own age and source",
+    "C8  destination proved by a positive AND a negative discriminator",
+    "C9  expected-under-disarm segmented from actionable, read from state",
+    "C10 covers transitions, not only states",
+]
+
+
+def changed_files() -> list[pathlib.Path]:
+    out = subprocess.run(
+        ["git", "-C", str(CITY), "status", "--porcelain"],
+        capture_output=True, text=True).stdout
+    paths = []
+    for line in out.splitlines():
+        p = line[3:].split(" -> ")[-1].strip()
+        if p:
+            paths.append(CITY / p)
+    return [p for p in paths if p.is_file()]
+
+
+def _strip_assignments(words: list[str]) -> list[str]:
+    assignment = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
+    while words and assignment.match(words[0]):
+        words = words[1:]
+    return words
+
+
+def _resolve_target(word: str) -> pathlib.Path | None:
+    if any(token in word for token in ";|&<>"):
+        return None
+    target = pathlib.Path(word)
+    if not target.is_absolute():
+        found = shutil.which(word)
+        if found is None:
+            return None
+        target = pathlib.Path(found)
+    return target.resolve() if target.is_file() else None
+
+
+def _tokenize_command(command: str) -> list[str] | None:
+    expanded = command.replace("${GC_CITY}", str(CITY)).replace("$GC_CITY", str(CITY))
+    try:
+        lexer = shlex.shlex(expanded, posix=True, punctuation_chars=";&|\n")
+        lexer.whitespace = " \t\r"
+        lexer.whitespace_split = True
+        lexer.commenters = ""
+        return list(lexer)
+    except ValueError:
+        return None
+
+
+def _resolve_segment(words: list[str]) -> ExecResolution:
+    words = _strip_assignments(words)
+    if words and pathlib.Path(words[0]).name == "env":
+        words = _strip_assignments(words[1:])
+    if words and words[0] == "exec":
+        words = _strip_assignments(words[1:])
+    if not words:
+        return ExecResolution((), True)
+    if words[0] in {"[", "test"}:
+        return ExecResolution((), True)
+    if words[0] in {"if", "then", "else", "elif", "fi", "for", "while", "until", "case", "esac"}:
+        return ExecResolution((), False)
+    if pathlib.Path(words[0]).name in {"sh", "bash"}:
+        try:
+            command_index = words.index("-c")
+            body = words[command_index + 1]
+        except (ValueError, IndexError):
+            return ExecResolution((), False)
+        return _resolve_exec_targets(body)
+    target = _resolve_target(words[0])
+    return ExecResolution((target,), True) if target is not None else ExecResolution((), False)
+
+
+def _resolve_exec_targets(command: str) -> ExecResolution:
+    """Resolve known executable targets without ever treating a shell as one."""
+    tokens = _tokenize_command(command)
+    if not tokens:
+        return ExecResolution((), False)
+
+    normalized_tokens: list[str] = []
+    for token in tokens:
+        if token and all(char in ";&|\n" for char in token):
+            index = 0
+            while index < len(token):
+                pair = token[index:index + 2]
+                if pair in {"&&", "||"}:
+                    normalized_tokens.append(pair)
+                    index += 2
+                else:
+                    normalized_tokens.append(token[index])
+                    index += 1
+        else:
+            normalized_tokens.append(token)
+
+    segments: list[list[str]] = [[]]
+    operators: list[str] = []
+    for token in normalized_tokens:
+        if token in {";", "&&", "||", "|", "&", "\n"}:
+            operators.append(token)
+            segments.append([])
+        else:
+            segments[-1].append(token)
+
+    resolutions = [_resolve_segment(segment) for segment in segments]
+    targets = tuple(dict.fromkeys(
+        target for resolution in resolutions for target in resolution.targets
+    ))
+    complete = all(resolution.complete for resolution in resolutions)
+    if "$(" in command or "`" in command:
+        complete = False
+    for index, operator in enumerate(operators):
+        if operator in {"|", "&"}:
+            complete = False
+        elif operator == "||" and (
+            resolutions[index].targets or resolutions[index + 1].targets
+        ):
+            complete = False
+    return ExecResolution(targets, complete)
+
+
+def enabled_local_order_population() -> EnabledOrderPopulation:
+    try:
+        order_result = subprocess.run(
+            ["gc", "order", "list", "--json"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise RuntimeError(f"gc order list could not run: {exc}") from exc
+    if order_result.returncode != 0:
+        raise RuntimeError(f"gc order list failed: {order_result.stderr.strip()}")
+    try:
+        tracked_result = subprocess.run(
+            ["git", "ls-files", "orders/*.toml"],
+            cwd=CITY,
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        raise RuntimeError(f"git ls-files could not run: {exc}") from exc
+    if tracked_result.returncode != 0:
+        raise RuntimeError(f"git ls-files failed: {tracked_result.stderr.strip()}")
+    try:
+        document = json.loads(order_result.stdout)
+        rows = document["orders"]
+    except (json.JSONDecodeError, KeyError, TypeError) as exc:
+        raise RuntimeError(f"gc order list returned unreadable JSON: {exc}") from exc
+    if not isinstance(rows, list):
+        raise RuntimeError("gc order list JSON has no order array")
+
+    order_dir = (CITY / "orders").resolve()
+    live_rows = []
+    for row in rows:
+        if not isinstance(row, dict) or row.get("enabled") is not True:
+            continue
+        source = pathlib.Path(str(row.get("source", ""))).resolve()
+        if source.parent == order_dir:
+            live_rows.append(row)
+
+    live_sources = {
+        str(pathlib.Path(str(row["source"])).resolve().relative_to(CITY.resolve()))
+        for row in live_rows
+    }
+    tracked = {line.strip() for line in tracked_result.stdout.splitlines() if line.strip()}
+    paths: set[pathlib.Path] = set()
+    unresolved: list[str] = []
+    bindings: list[OrderBinding] = []
+    for row in live_rows:
+        resolution = _resolve_exec_targets(str(row.get("exec", "")))
+        name = str(row.get("name") or row.get("source") or "(unnamed)")
+        if not resolution.complete:
+            unresolved.append(name)
+        paths.update(resolution.targets)
+        bindings.append(OrderBinding(
+            name=name,
+            source=str(pathlib.Path(str(row["source"])).resolve().relative_to(CITY.resolve())),
+            command=str(row.get("exec", "")),
+            targets=resolution.targets,
+            complete=resolution.complete,
+        ))
+    return EnabledOrderPopulation(
+        order_count=len(live_rows),
+        paths=tuple(sorted(paths, key=str)),
+        unresolved=tuple(sorted(unresolved)),
+        tracked_live=tuple(sorted(live_sources & tracked)),
+        untracked_live=tuple(sorted(live_sources - tracked)),
+        tracked_not_live=tuple(sorted(tracked - live_sources)),
+        bindings=tuple(sorted(bindings, key=lambda binding: binding.name)),
+    )
+
+
+def order_binding(name: str) -> OrderBinding | None:
+    source = next(
+        (cand for cand in (
+            CITY / "orders" / f"{name}.toml",
+            CITY / "orders" / f"{name}.toml.disabled",
+        ) if cand.is_file()),
+        None,
+    )
+    if source is None:
+        return None
+    try:
+        command = str(tomllib.loads(source.read_text())["order"]["exec"])
+    except (OSError, tomllib.TOMLDecodeError, KeyError, TypeError):
+        return None
+    resolution = _resolve_exec_targets(command)
+    return OrderBinding(
+        name=name,
+        source=str(source.resolve().relative_to(CITY.resolve())),
+        command=command,
+        targets=resolution.targets,
+        complete=resolution.complete,
+    )
+
+
+def is_instrument_source(p: pathlib.Path) -> bool:
+    """Only files that could BE an instrument. Excludes tests and docs so the
+    corpus is what the caller thinks it is."""
+    if p.name.endswith((".test", ".test.py", ".test.sh")):
+        return False
+    if p.suffix in {".md", ".toml", ".json", ".jsonl", ".txt", ".yaml", ".yml"}:
+        return False
+    return p.is_file()
+
+
+def sibling_test(p: pathlib.Path) -> pathlib.Path | None:
+    # This city's pytest suites translate hyphens to underscores:
+    # bin/resource-observability-sample -> bin/test_resource_observability_sample.py.
+    # Missing that convention made the checker fail a conforming instrument,
+    # which is how a gate teaches people to skip it.
+    snake = p.stem.replace("-", "_")
+    for cand in (p.with_name(p.name + ".test"),
+                 p.with_name(p.name + ".test.sh"),
+                 p.with_name(p.stem + ".test"),
+                 p.with_name(p.stem + ".test.sh"),
+                 p.with_name("test_" + snake + ".py"),
+                 p.with_name(snake + "_test.py"),
+                 p.with_name("test_" + p.stem + ".py")):
+        if cand.is_file():
+            return cand
+    return None
+
+
+def examine_content(
+    p: pathlib.Path,
+    src: str,
+    test: pathlib.Path | None,
+    test_src: str,
+    *,
+    display: str,
+    attestation: str | None = None,
+) -> dict:
+    return {
+        "path": p,
+        "display": display,
+        "attestation": attestation,
+        "test": test,
+        "c3_has_test": test is not None,
+        "c3_has_red_case": bool(test and RED_MARKER.search(test_src)),
+        "evidence": {k: bool(rx.search(src)) for k, rx in EVIDENCE.items()},
+    }
+
+
+def examine(p: pathlib.Path) -> dict:
+    src = p.read_bytes().decode("utf-8")
+    test = sibling_test(p)
+    test_src = test.read_bytes().decode("utf-8") if test else ""
+    return examine_content(
+        p, src, test, test_src, display=display_path(p)
+    )
+
+
+def examine_external_gc(binding: OrderBinding, target: pathlib.Path) -> tuple[dict | None, str | None]:
+    order_path = CITY / binding.source
+    if not order_path.is_file():
+        return None, "external installed executable"
+    subject, error = resolve_installed_gc_subject(
+        order_path=order_path,
+        command=binding.command,
+        target=target,
+        source_root=GASCITY_SOURCE_ROOT,
+        receipt_path=GC_INSTALL_RECEIPT,
+        expected_remote=GASCITY_REMOTE,
+    )
+    if error:
+        return None, error
+    return examine_content(
+        subject.source_path,
+        subject.source_text,
+        subject.test_path,
+        subject.test_text,
+        display=subject.display,
+        attestation=subject.attestation,
+    ), None
+
+
+def source_unreachable_reason(p: pathlib.Path, *, order_bound: bool) -> str | None:
+    """Return why a target cannot be audited as source without decoding it."""
+    try:
+        resolved = p.resolve(strict=True)
+    except OSError as exc:
+        return f"unreadable target ({exc})"
+    if order_bound:
+        try:
+            resolved.relative_to(CITY.resolve())
+        except ValueError:
+            return "external installed executable"
+    if not is_instrument_source(resolved):
+        return "not an instrument source"
+    try:
+        with resolved.open("rb") as source:
+            sample = source.read(8192)
+    except OSError as exc:
+        return f"unreadable target ({exc})"
+    if sample.startswith(b"\x7fELF") or b"\x00" in sample:
+        return "non-text/binary target"
+    try:
+        sample.decode("utf-8")
+    except UnicodeDecodeError:
+        return "non-text/binary target"
+    return None
+
+
+def display_path(p: pathlib.Path) -> str:
+    try:
+        return str(p.relative_to(CITY))
+    except ValueError:
+        return str(p)
+
+
+def print_order_evidence(bindings: list[OrderBinding]) -> None:
+    print(f"  resolution PATH={os.environ.get('PATH', '')}")
+    print("  resolved order bindings:")
+    for binding in bindings:
+        targets = ", ".join(display_path(path) for path in binding.targets) or "(none)"
+        status = "complete" if binding.complete else "partial"
+        print(f"    order {binding.name} source={binding.source} -> {targets} [{status}]")
+
+
+def print_drift_members(label: str, members: tuple[str, ...]) -> None:
+    print(f"  {label}: {len(members)}")
+    for member in members:
+        print(f"    {label}: {member}")
+
+
+# The positive control. A checker whose only rail is "reports a finding" can
+# be broken into permanent silence and still look clean, so every standing
+# audit re-checks one instrument that is KNOWN to be protected: if the tool
+# calls it unprotected, the tool is wrong and its other answers are worthless.
+#
+# In this city that control was a real component, named by absolute path. A
+# pack cannot name a file in your city, so the control ships in the pack as a
+# fixture: assets/fixtures/protected-canary and its sibling .test. Point
+# INSTRUMENT_CONTRACT_CONTROL at one of your own components once you have one
+# you would stake the tool's credibility on; a real instrument is a better
+# control than a fixture, because a fixture can drift into being the only
+# thing the tool is still right about.
+def positive_control() -> pathlib.Path:
+    override = os.environ.get("INSTRUMENT_CONTRACT_CONTROL", "").strip()
+    if override:
+        p = pathlib.Path(override)
+        return p if p.is_absolute() else (CITY / p)
+    return PACK_DIR / "assets" / "fixtures" / "protected-canary"
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(add_help=True)
+    ap.add_argument("paths", nargs="*")
+    ap.add_argument("--changed", action="store_true",
+                    help="examine every modified/staged file in the city")
+    ap.add_argument("--order", action="append", default=[],
+                    help="resolve an order name to its exec and examine that")
+    ap.add_argument("--enabled-local-orders", action="store_true",
+                    help="examine every enabled order sourced from this city's orders directory")
+    args = ap.parse_args()
+
+    candidates: list[pathlib.Path] = []
+    unresolved: list[str] = []
+    population: EnabledOrderPopulation | None = None
+    bindings: list[OrderBinding] = []
+    explicit_paths: set[pathlib.Path] = set()
+    order_targets: set[pathlib.Path] = set()
+    order_selector = bool(args.order or args.enabled_local_orders)
+    positive_control_path = positive_control().resolve()
+
+    if args.enabled_local_orders:
+        if args.paths or args.order or args.changed:
+            ap.error("--enabled-local-orders cannot be combined with other corpus selectors")
+        try:
+            population = enabled_local_order_population()
+        except RuntimeError as exc:
+            print("instrument-contract-check")
+            print(f"COULD-NOT-CHECK: {exc}")
+            return 2
+        candidates.extend(population.paths)
+        unresolved.extend(population.unresolved)
+        bindings.extend(population.bindings)
+        order_targets.update(population.paths)
+
+        # This is the contract checker's positive control. It is part of every
+        # standing population audit even while its own order is disabled, and
+        # dict.fromkeys below prevents a live order from adding it twice.
+        candidates.append(positive_control_path)
+
+    for name in args.order:
+        binding = order_binding(name)
+        if binding is None:
+            unresolved.append(f"order {name}")
+            continue
+        bindings.append(binding)
+        candidates.extend(binding.targets)
+        order_targets.update(binding.targets)
+        if not binding.complete:
+            unresolved.append(f"order {name}")
+    for s in args.paths:
+        p = pathlib.Path(s)
+        if not p.is_absolute():
+            p = CITY / p
+        if p.is_file():
+            candidates.append(p)
+            explicit_paths.add(p)
+        else:
+            unresolved.append(s)
+    if args.changed:
+        candidates.extend(changed_files())
+
+    candidates = list(dict.fromkeys(candidates))
+    corpus: list[pathlib.Path] = []
+    records: list[dict] = []
+    for candidate in candidates:
+        # The positive control is NOT treated as order-bound, even though the
+        # population run adds it. `order_bound` turns on the in-city check that
+        # stops an order running /usr/bin/foo from being audited as source, and
+        # the control ships with the pack, which in a real install is inside
+        # the city and in a checkout is not. Marking it bound made the control
+        # unreachable and every population run reported POSITIVE CONTROL:
+        # FAILED — the tool's own credibility rail, broken by the rule meant to
+        # protect it. It is still fully audited: it is a readable text file, so
+        # every other reachability test below still applies to it.
+        order_bound = (
+            candidate in order_targets and candidate != positive_control_path
+        )
+        reason = source_unreachable_reason(candidate, order_bound=order_bound)
+        if reason is not None:
+            owner_bindings = sorted(
+                (binding for binding in bindings if candidate in binding.targets),
+                key=lambda binding: binding.name,
+            )
+            if reason == "external installed executable" and owner_bindings:
+                for binding in owner_bindings:
+                    record, provenance_error = examine_external_gc(binding, candidate)
+                    if provenance_error is not None:
+                        unresolved.append(
+                            f"{binding.name}: {provenance_error} ({display_path(candidate)})"
+                        )
+                    else:
+                        corpus.append(record["path"])
+                        records.append(record)
+                continue
+            if order_bound or candidate in explicit_paths:
+                owners = [binding.name for binding in owner_bindings]
+                subject = ",".join(owners) if owners else display_path(candidate)
+                unresolved.append(f"{subject}: {reason} ({display_path(candidate)})")
+            continue
+        try:
+            record = examine(candidate)
+        except (OSError, UnicodeError) as exc:
+            unresolved.append(
+                f"{display_path(candidate)}: unreadable source after resolution ({exc})"
+            )
+            continue
+        corpus.append(candidate)
+        records.append(record)
+
+    generated_at = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    print("instrument-contract-check")
+    if population is not None:
+        print(f"  generated_at={generated_at}")
+        print("  source=gc order list --json + git ls-files orders/*.toml")
+        print(f"  enabled local orders: {population.order_count}")
+        print(f"  resolved unique executable targets: {len(population.paths)}")
+        print_drift_members("tracked + live", population.tracked_live)
+        print_drift_members("untracked + live", population.untracked_live)
+        print_drift_members("tracked + not live", population.tracked_not_live)
+    if order_selector:
+        print_order_evidence(bindings)
+    print(f"  corpus examined: {len(corpus)} file(s)")
+    for record in records:
+        print(f"    {record['display']}")
+    if unresolved:
+        print(f"  COULD NOT RESOLVE: {len(unresolved)} — {', '.join(unresolved)}")
+
+    # C7 applied to this tool. An empty corpus is not a clean run.
+    if not corpus:
+        if order_selector:
+            print(f"COVERAGE: PARTIAL — {len(unresolved)} order binding/subject(s) "
+                  "could not be examined.")
+        print()
+        print("COULD-NOT-CHECK: the corpus is empty, so nothing was examined.")
+        print("  This is NOT a pass. Name an instrument, or use --changed with")
+        print("  modified files present.")
+        return 2
+
+    failures = 0
+    lookup_failed = 0
+    positive_control_seen = False
+    positive_control_protected = False
+    positive_control_has_test = False
+    for r in records:
+        rel = r["display"]
+        print()
+        print(f"== {rel}")
+        if r["attestation"] is not None:
+            print(f"  PROVENANCE: {r['attestation']}")
+            print("              missing/invalid named test blobs are "
+                  "COULD-NOT-CHECK before C3, not C3 FAIL.")
+
+        # --- the ONE fact this tool can decide ---
+        # "There is no sibling test" is a filesystem fact. "The test contains no
+        # red case" is NOT: it is a grep for a marker, and a grep that misses is
+        # LOOKUP_FAILED, never ABSENT. That distinction is the whole playbook
+        # rule turned back on this auditor, and it was not academic — the miss
+        # landed on bin/orphaned-molecule-reaper, one of the most careful
+        # components in the city.
+        if not r["c3_has_test"]:
+            print("  C3  FAIL — no sibling test. Its green has never been shown")
+            print("            to be capable of being red, so it is not evidence.")
+            failures += 1
+        elif not r["c3_has_red_case"]:
+            print(f"  C3  LOOKUP_FAILED — {r['test'].name} exists and this tool")
+            print("            found no marker it recognises. That is NOT a finding")
+            print("            that the suite has never been made to fail. READ IT.")
+            print("            If it has a red case, mark it in a way the next")
+            print("            reader can find; if it does not, add one.")
+            lookup_failed += 1
+        else:
+            print(f"  C3  marker found in {r['test'].name} — evidence, not proof."
+                  " Confirm the case is really red by reverting the fix.")
+
+        if args.enabled_local_orders and r["path"].resolve() == positive_control_path:
+            positive_control_seen = True
+            positive_control_has_test = bool(r["c3_has_test"])
+            positive_control_protected = bool(
+                r["c3_has_test"] and r["c3_has_red_case"]
+            )
+
+        # --- evidence scans: LOOKUP_FAILED, never ABSENT ---
+        for k, found in r["evidence"].items():
+            print(f"  {k}: {'evidence found' if found else 'LOOKUP_FAILED (scan found nothing; read the source)'}")
+
+    print()
+    print("NOT CHECKED BY THIS TOOL — judgment clauses, verify by reading:")
+    for c in UNCHECKABLE:
+        print(f"  {c}")
+    print()
+    print("A LOOKUP_FAILED line means this tool's scan found nothing. It does NOT")
+    print("mean the property is absent — this codebase's careful components predate")
+    print("this vocabulary and use their own words. Positive control: if this tool")
+    control_name = display_path(positive_control_path)
+    print(f"calls {control_name} unprotected, this tool is wrong.")
+    if args.enabled_local_orders:
+        if positive_control_seen and positive_control_protected:
+            print(f"POSITIVE CONTROL: protected — {control_name} has "
+                  "a discoverable red-case test.")
+        else:
+            print(f"POSITIVE CONTROL: FAILED — {control_name} was "
+                  "not examined with a discoverable red-case test.")
+    print()
+    if lookup_failed:
+        print(f"UNRESOLVED: {lookup_failed} instrument(s) have a test this tool "
+              "could not classify. Read them; do not count them either way.")
+    if order_selector:
+        if unresolved:
+            print(f"COVERAGE: PARTIAL — {len(unresolved)} order binding/subject(s) "
+                  "could not be examined.")
+        else:
+            print("COVERAGE: COMPLETE — every selected order binding resolved "
+                  "to an examined text/source subject.")
+    if failures:
+        print(f"RESULT: {failures} of {len(corpus)} instrument(s) have NO test at all.")
+    elif args.enabled_local_orders and positive_control_seen and positive_control_has_test \
+            and not positive_control_protected:
+        print("RESULT: positive control has no discoverable red-case marker.")
+    else:
+        print(f"RESULT: no instrument in this corpus is missing a test. "
+              "Everything else above is unresolved by design.")
+    if unresolved:
+        return 2
+    positive_control_failed = (
+        args.enabled_local_orders and not positive_control_protected
+    )
+    return 1 if failures or positive_control_failed else 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,825 @@
+#!/usr/bin/env python3
+"""Hermetic coverage for instrument-contract-check.
+
+This suite exists to satisfy C3 for the checker itself. Each RED case below is
+a way the checker could pass falsely, which is the failure mode the contract
+names: a gate that only ever says "fine" is worse than no gate, because a green
+from it gets treated as evidence.
+
+RED cases:
+  1. An instrument with NO test must fail. A gate that passes an untested
+     instrument is the whole problem in miniature.
+  2. An instrument whose test this tool cannot classify must report
+     LOOKUP_FAILED and must NOT fail. The first version failed it, which is
+     the playbook rule broken by the tool built to enforce it — and in the
+     city this checker came from it landed on the one component that had
+     implemented the absent-vs-unknown rule before the playbook existed.
+  3. An EMPTY corpus must exit 2, never 0. "Examined nothing" and "examined
+     everything and found it clean" must not render the same (C7).
+  4. Test discovery must not silently miss the pytest naming convention, or
+     the checker fails a conforming instrument and teaches people to skip it.
+  5. A test marked in THIS CODEBASE'S native way — citing the incident bead ID
+     it reproduces — must be recognised. Grepping an imported vocabulary
+     inverts on careful code.
+"""
+import importlib.machinery
+import importlib.util
+import io
+import contextlib
+import json
+import os
+import pathlib
+import sys
+import tempfile
+import tomllib
+from unittest import mock
+
+HERE = pathlib.Path(__file__).resolve().parent
+spec = importlib.util.spec_from_file_location(
+    "icc", HERE / "instrument-contract-check",
+    loader=importlib.machinery.SourceFileLoader("icc", str(HERE / "instrument-contract-check")))
+icc = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(icc)
+
+fails = []
+
+
+def eq(name, got, want):
+    if got == want:
+        print(f"PASS: {name}")
+    else:
+        print(f"FAIL: {name} — got {got!r}, want {want!r}")
+        fails.append(name)
+
+
+def run(argv):
+    """Run main() with argv, returning (exit_code, stdout)."""
+    old = sys.argv
+    sys.argv = ["instrument-contract-check"] + argv
+    buf = io.StringIO()
+    try:
+        with contextlib.redirect_stdout(buf):
+            rc = icc.main()
+    finally:
+        sys.argv = old
+    return rc, buf.getvalue()
+
+
+tmp = pathlib.Path(tempfile.mkdtemp(prefix="icc-test-"))
+
+
+def write(name, body):
+    p = tmp / name
+    p.write_text(body)
+    p.chmod(0o755)
+    return p
+
+
+# --- RED CASE 1: no test at all -------------------------------------------
+naked = write("naked-reaper", "#!/bin/bash\necho REAPED 0\n")
+rc, out = run([str(naked)])
+eq("instrument with no test fails C3", rc, 1)
+eq("...and says so", "no sibling test" in out, True)
+
+# --- RED CASE 2: an unrecognised test is LOOKUP_FAILED, never a verdict ----
+# The first version FAILED this case. That was the playbook rule broken by the
+# tool that enforces it: "the test contains no red case" is a grep that missed,
+# not a fact. It landed on a reaper whose suite reproduces two named incidents,
+# and called it untested.
+covered = write("covered-reaper", "#!/bin/bash\necho REAPED 0\n")
+write("covered-reaper.test", "#!/bin/bash\n[ 1 -eq 1 ] && echo PASS: it works\n")
+rc, out = run([str(covered)])
+eq("unrecognised test does NOT fail the gate", rc, 0)
+eq("...it is reported as LOOKUP_FAILED", "C3  LOOKUP_FAILED" in out, True)
+eq("...and explicitly refuses to conclude it was never made to fail",
+   "NOT a finding" in out, True)
+eq("...and names the file", "covered-reaper.test" in out, True)
+
+# --- THE POSITIVE CONTROL, per the mayor's rule: confirm the mapping against
+# a component already known to be careful. Native marking is an incident bead
+# ID, which predates the imported RED convention and is stronger evidence.
+native = write("native-reaper", "#!/bin/bash\necho REAPED 0\n")
+write("native-reaper.test",
+      "#!/bin/bash\n# dr-of5r: session inventory must fail CLOSED (gc-o8f9m)\n")
+r_native = icc.examine(native)
+eq("an incident-ID marked test is recognised", r_native["c3_has_red_case"], True)
+
+# --- GREEN: a test that marks a RED case ----------------------------------
+good = write("good-reaper", "#!/bin/bash\necho \"clean: 0 stale of $n scanned at $(date -u)\"\n")
+write("good-reaper.test", "#!/bin/bash\nred 'stale count is RED when the dir is missing' foo\n")
+rc, out = run([str(good)])
+eq("test with a marked RED case passes C3", rc, 0)
+
+# --- RED CASE 3: empty corpus must not read as clean ----------------------
+rc, out = run([])
+eq("empty corpus exits 2, not 0", rc, 2)
+eq("...and refuses to call itself a pass", "This is NOT a pass" in out, True)
+
+rc, out = run([str(tmp / "does-not-exist")])
+eq("unresolvable path still exits 2", rc, 2)
+eq("...and reports what it could not resolve", "COULD NOT RESOLVE" in out, True)
+
+# --- RED CASE 4: pytest-convention tests must be discovered ---------------
+py = write("py-instrument", "#!/usr/bin/env python3\nprint('clean')\n")
+write("test_py_instrument.py", "# RED: fails when the corpus is empty\ndef test_x(): pass\n")
+eq("pytest-named sibling test is discovered",
+   icc.sibling_test(py) is not None, True)
+
+# --- the tool must always name what it did NOT check ----------------------
+rc, out = run([str(good)])
+eq("unchecked judgment clauses are always printed", "NOT CHECKED BY THIS TOOL" in out, True)
+eq("C4 named as unchecked", "C4" in out, True)
+eq("C10 named as unchecked", "C10" in out, True)
+eq("a failed scan is LOOKUP_FAILED, never absence",
+   "does NOT" in out and "absent" in out, True)
+eq("the positive control is named in the output",
+   "protected-canary" in out, True)
+
+# --- evidence scan is evidence, never a verdict ---------------------------
+r = icc.examine(good)
+eq("C1 evidence found in a clean-reporting instrument",
+   r["evidence"]["C1  reports on a clean/empty run"], True)
+eq("C11 evidence found where a date is written",
+   r["evidence"]["C11 writes a dated line an outside watcher can rate-check"], True)
+silent = write("silent-thing", "#!/bin/bash\nfor f in *; do echo \"$f\"; done\n")
+r2 = icc.examine(silent)
+eq("no C11 evidence where nothing is dated",
+   r2["evidence"]["C11 writes a dated line an outside watcher can rate-check"], False)
+
+# --- corpus filtering -----------------------------------------------------
+eq("a .test file is not itself an instrument",
+   icc.is_instrument_source(tmp / "good-reaper.test"), False)
+eq("a markdown file is not an instrument",
+   icc.is_instrument_source(write("doc.md", "# hi")), False)
+eq("an executable script is an instrument", icc.is_instrument_source(good), True)
+
+# A compiled target is a subject the source checker cannot inspect. It must
+# never be decoded with replacement and then misreported as a source file with
+# no test.
+binary = tmp / "compiled-instrument"
+binary.write_bytes(b"\x7fELF\x02\x01\x01\x00" + b"\x00" * 64)
+binary.chmod(0o755)
+rc, out = run([str(binary)])
+eq("binary target is could-not-check", rc, 2)
+eq("binary target is explicitly unreachable", "non-text/binary target" in out, True)
+eq("binary target is never reported as a C3 failure", "C3  FAIL" in out, False)
+eq("generic path audit makes no order coverage claim", "COVERAGE:" in out, False)
+
+# The .test.sh convention is used by shell instruments too.
+shell_sibling = write("shell-sibling", "#!/bin/sh\necho clean\n")
+write("shell-sibling.test.sh", "#!/bin/sh\n# RED: missing input must fail closed\n")
+eq(".test.sh sibling is discovered", icc.sibling_test(shell_sibling).name,
+   "shell-sibling.test.sh")
+eq("a .test.sh file is not itself an instrument",
+   icc.is_instrument_source(tmp / "shell-sibling.test.sh"), False)
+
+# --- enabled local order population ---------------------------------------
+# Named mutations: drop any enabled local row, omit an untracked live order,
+# treat /bin/sh as the subject, allow an unresolved binding to exit clean,
+# remove generated_at/source, or remove C6 from UNCHECKABLE. Each assertion
+# below turns the corresponding mutation red.
+city = tmp / "city"
+(city / "orders").mkdir(parents=True)
+(city / "bin").mkdir()
+
+# Every case below mutates the control to prove both of its rails, so the
+# control has to be a file this suite owns. Pointing INSTRUMENT_CONTRACT_CONTROL
+# at the synthetic city is also the exercise an adopting city runs: the shipped
+# fixture is a starting default, not the intended long-term control.
+os.environ["INSTRUMENT_CONTRACT_CONTROL"] = str(city / "bin" / "city-canary")
+
+direct = write("direct-instrument", "#!/bin/sh\necho clean\n")
+direct.rename(city / "bin" / direct.name)
+write("direct-instrument.test", "# RED: missing input must fail closed\n").rename(
+    city / "bin" / "direct-instrument.test"
+)
+wrapped = write("wrapped-instrument", "#!/bin/sh\necho clean\n")
+wrapped.rename(city / "bin" / wrapped.name)
+write("wrapped-instrument.test", "# RED: missing input must fail closed\n").rename(
+    city / "bin" / "wrapped-instrument.test"
+)
+untested = write("untested-instrument", "#!/bin/sh\necho clean\n")
+untested.rename(city / "bin" / untested.name)
+positive = write("city-canary", "#!/bin/sh\necho clean\n")
+positive.rename(city / "bin" / positive.name)
+positive_test = write(
+    "city-canary.test",
+    "#!/bin/sh\n# dr-of5r: orphan detection must fail closed\n",
+)
+positive_test.rename(city / "bin" / positive_test.name)
+compiled = city / "bin" / "compiled-instrument"
+compiled.write_bytes(b"\x7fELF\x02\x01\x01\x00" + b"\x00" * 64)
+compiled.chmod(0o755)
+
+live_orders = {
+    "orders": [
+        {
+            "name": "direct",
+            "enabled": True,
+            "source": str(city / "orders" / "direct.toml"),
+            "exec": "$GC_CITY/bin/direct-instrument --json",
+        },
+        {
+            "name": "wrapped-untracked",
+            "enabled": True,
+            "source": str(city / "orders" / "wrapped.toml"),
+            "exec": "/bin/sh -c 'MODE=read exec \"$GC_CITY/bin/wrapped-instrument\" --summary'",
+        },
+        {
+            "name": "ambiguous",
+            "enabled": True,
+            "source": str(city / "orders" / "ambiguous.toml"),
+            "exec": "/bin/sh -c 'if true; then echo no-single-subject; fi'",
+        },
+        {
+            "name": "untested",
+            "enabled": True,
+            "source": str(city / "orders" / "untested.toml"),
+            "exec": "$GC_CITY/bin/untested-instrument",
+        },
+        {
+            "name": "compiled",
+            "enabled": True,
+            "source": str(city / "orders" / "compiled.toml"),
+            "exec": "$GC_CITY/bin/compiled-instrument",
+        },
+        {
+            "name": "positive-control",
+            "enabled": True,
+            "source": str(city / "orders" / "positive-control.toml"),
+            "exec": "$GC_CITY/bin/city-canary",
+        },
+        {
+            "name": "disabled",
+            "enabled": False,
+            "source": str(city / "orders" / "disabled.toml"),
+            "exec": "$GC_CITY/bin/direct-instrument",
+        },
+        {
+            "name": "pack-order",
+            "enabled": True,
+            "source": str(tmp / "pack" / "orders" / "outside.toml"),
+            "exec": "$GC_CITY/bin/direct-instrument",
+        },
+    ]
+}
+tracked = "orders/direct.toml\norders/disabled.toml\n"
+
+
+def fake_run(command, **_kwargs):
+    if command[:3] == ["gc", "order", "list"]:
+        return mock.Mock(returncode=0, stdout=json.dumps(live_orders), stderr="")
+    if command[:2] == ["git", "ls-files"]:
+        return mock.Mock(returncode=0, stdout=tracked, stderr="")
+    raise AssertionError(command)
+
+
+with mock.patch.object(icc, "CITY", city), mock.patch.object(
+    icc.subprocess, "run", side_effect=fake_run
+):
+    population = icc.enabled_local_order_population()
+    eq("enabled local population includes every live local row", population.order_count, 6)
+    eq("untracked live orders remain in the population", population.untracked_live,
+       ("orders/ambiguous.toml", "orders/compiled.toml",
+        "orders/positive-control.toml", "orders/untested.toml", "orders/wrapped.toml"))
+    eq("tracked non-live order is reported", population.tracked_not_live, ("orders/disabled.toml",))
+    eq("shell wrapper resolves its exec target, not /bin/sh",
+       population.paths, (city / "bin" / "city-canary",
+                          city / "bin" / "compiled-instrument",
+                          city / "bin" / "direct-instrument",
+                          city / "bin" / "untested-instrument",
+                          city / "bin" / "wrapped-instrument"))
+    eq("ambiguous wrapper is explicit", population.unresolved, ("ambiguous",))
+    rc, out = run(["--enabled-local-orders"])
+
+eq("partial enabled-order population exits nonzero", rc, 2)
+eq("enabled-order output carries generated_at", "generated_at=" in out, True)
+eq("enabled-order output names both structural sources",
+   "source=gc order list --json + git ls-files orders/*.toml" in out, True)
+eq("enabled-order output records resolver PATH", "resolution PATH=" in out, True)
+eq("enabled-order output reports exact live population", "enabled local orders: 6" in out, True)
+eq("enabled-order output binds every drift count", all(line in out for line in (
+    "tracked + live: 1",
+    "untracked + live: 5",
+    "tracked + not live: 1",
+)), True)
+eq("enabled-order output names every untracked live member", all(line in out for line in (
+    "    untracked + live: orders/ambiguous.toml",
+    "    untracked + live: orders/compiled.toml",
+    "    untracked + live: orders/positive-control.toml",
+    "    untracked + live: orders/untested.toml",
+    "    untracked + live: orders/wrapped.toml",
+)), True)
+eq("enabled-order output names tracked live member",
+   "    tracked + live: orders/direct.toml" in out, True)
+eq("enabled-order output names tracked non-live member",
+   "    tracked + not live: orders/disabled.toml" in out, True)
+eq("enabled-order output carries order-to-target evidence",
+   "order direct" in out and "bin/direct-instrument" in out, True)
+eq("C6 remains named as NOT CHECKED for subjects",
+   "C6  every reading carries its own age and source" in out, True)
+eq("untracked live order is audited, not dropped", "wrapped-instrument" in out, True)
+eq("binary order target makes coverage partial", "compiled: non-text/binary target" in out, True)
+eq("partial coverage still reports known target failures", "RESULT: 1 of 4" in out, True)
+eq("positive control is examined exactly once when already in corpus",
+   out.count("    bin/city-canary") == 1, True)
+eq("pre-exec instrument cannot hide behind the final exec",
+   icc._resolve_exec_targets(
+       f"/bin/sh -c '{city}/bin/direct-instrument --probe; "
+       f"exec {city}/bin/wrapped-instrument --summary'"
+   ).targets,
+   (city / "bin" / "direct-instrument", city / "bin" / "wrapped-instrument"))
+sequential = icc._resolve_exec_targets(
+    f"{city}/bin/direct-instrument; MODE=scan {city}/bin/direct-instrument"
+)
+eq("top-level sequential commands resolve", sequential.targets,
+   (city / "bin" / "direct-instrument",))
+eq("top-level sequential commands are complete", sequential.complete, True)
+newline_sequential = icc._resolve_exec_targets(
+    f"{city}/bin/direct-instrument\n{city}/bin/wrapped-instrument"
+)
+eq("literal newline separates simple commands", newline_sequential.targets,
+   (city / "bin" / "direct-instrument", city / "bin" / "wrapped-instrument"))
+eq("newline-separated known commands are complete", newline_sequential.complete, True)
+for separator in ("\n\n", ";\n"):
+    grouped_sequential = icc._resolve_exec_targets(
+        f"{city}/bin/direct-instrument{separator}{city}/bin/wrapped-instrument"
+    )
+    eq(f"grouped separator {separator!r} retains both commands",
+       grouped_sequential.targets,
+       (city / "bin" / "direct-instrument", city / "bin" / "wrapped-instrument"))
+    eq(f"grouped separator {separator!r} is mechanically complete",
+       grouped_sequential.complete, True)
+for substitution in (
+    f"X=$(probe) {city}/bin/direct-instrument",
+    f"X=`probe` {city}/bin/direct-instrument",
+):
+    resolution = icc._resolve_exec_targets(substitution)
+    eq("command substitution retains known safe target", resolution.targets,
+       (city / "bin" / "direct-instrument",))
+    eq("unsupported command substitution is partial", resolution.complete, False)
+partial = icc._resolve_exec_targets(
+    f"/bin/sh -c '/definitely/missing/precheck --probe; "
+    f"exec {city}/bin/wrapped-instrument --summary'"
+)
+eq("known target is retained when a sibling binding is missing",
+   partial.targets, (city / "bin" / "wrapped-instrument",))
+eq("partially resolved wrapper is never complete", partial.complete, False)
+
+complete_orders = json.loads(json.dumps(live_orders))
+complete_orders["orders"] = [
+    row for row in complete_orders["orders"]
+    if row["name"] not in {"ambiguous", "compiled", "untested"}
+]
+
+
+def complete_run(command, **_kwargs):
+    if command[:3] == ["gc", "order", "list"]:
+        return mock.Mock(returncode=0, stdout=json.dumps(complete_orders), stderr="")
+    if command[:2] == ["git", "ls-files"]:
+        return mock.Mock(returncode=0, stdout=tracked, stderr="")
+    raise AssertionError(command)
+
+
+with mock.patch.object(icc, "CITY", city), mock.patch.object(
+    icc.subprocess, "run", side_effect=complete_run
+):
+    rc, out = run(["--enabled-local-orders"])
+eq("fully resolved population says coverage complete", "COVERAGE: COMPLETE" in out, True)
+eq("fully resolved tested population exits clean", rc, 0)
+
+# The enabled-local positive control is injected when no order already names
+# it, and it is a hard failure if its protection disappears.
+no_positive_orders = json.loads(json.dumps(complete_orders))
+no_positive_orders["orders"] = [
+    row for row in no_positive_orders["orders"] if row["name"] != "positive-control"
+]
+
+
+def no_positive_run(command, **_kwargs):
+    if command[:3] == ["gc", "order", "list"]:
+        return mock.Mock(returncode=0, stdout=json.dumps(no_positive_orders), stderr="")
+    if command[:2] == ["git", "ls-files"]:
+        return mock.Mock(returncode=0, stdout=tracked, stderr="")
+    raise AssertionError(command)
+
+
+with mock.patch.object(icc, "CITY", city), mock.patch.object(
+    icc.subprocess, "run", side_effect=no_positive_run
+):
+    rc, out = run(["--enabled-local-orders"])
+eq("enabled-local mode injects the positive control", "POSITIVE CONTROL: protected" in out, True)
+eq("injected positive control stays clean", rc, 0)
+
+(city / "bin" / "city-canary.test").rename(
+    city / "bin" / "city-canary.test.hidden"
+)
+with mock.patch.object(icc, "CITY", city), mock.patch.object(
+    icc.subprocess, "run", side_effect=no_positive_run
+):
+    rc, out = run(["--enabled-local-orders"])
+eq("unprotected positive control fails the checker", rc, 1)
+eq("positive-control failure is explicit", "POSITIVE CONTROL: FAILED" in out, True)
+(city / "bin" / "city-canary.test.hidden").rename(
+    city / "bin" / "city-canary.test"
+)
+(city / "bin" / "city-canary.test").write_text(
+    "#!/bin/sh\necho ordinary passing test\n"
+)
+with mock.patch.object(icc, "CITY", city), mock.patch.object(
+    icc.subprocess, "run", side_effect=no_positive_run
+):
+    rc, out = run(["--enabled-local-orders"])
+eq("positive control without a red-case marker fails", rc, 1)
+eq("positive-control marker failure is not mislabeled as no test",
+   "RESULT: positive control has no discoverable red-case marker." in out, True)
+(city / "bin" / "city-canary.test").write_text(
+    "#!/bin/sh\n# dr-of5r: orphan detection must fail closed\n"
+)
+
+# Subprocess launch and timeout failures are could-not-check, never tracebacks
+# or ordinary finding exits.
+subprocess_errors = (
+    FileNotFoundError("gc missing"),
+    OSError("exec failed"),
+    icc.subprocess.TimeoutExpired(["gc", "order", "list"], 30),
+    icc.subprocess.SubprocessError("subprocess failed"),
+)
+for exc in subprocess_errors:
+    with mock.patch.object(icc, "CITY", city), mock.patch.object(
+        icc.subprocess, "run", side_effect=exc
+    ):
+        rc, out = run(["--enabled-local-orders"])
+    eq(f"{type(exc).__name__} becomes could-not-check", rc, 2)
+    eq(f"{type(exc).__name__} is named without traceback",
+       "COULD-NOT-CHECK:" in out and "Traceback" not in out, True)
+
+
+def git_failure(exc):
+    calls = 0
+
+    def fail_second(command, **_kwargs):
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return mock.Mock(returncode=0, stdout=json.dumps(complete_orders), stderr="")
+        raise exc
+
+    return fail_second
+
+
+for exc in subprocess_errors:
+    with mock.patch.object(icc, "CITY", city), mock.patch.object(
+        icc.subprocess, "run", side_effect=git_failure(exc)
+    ):
+        rc, out = run(["--enabled-local-orders"])
+    eq(f"git {type(exc).__name__} becomes could-not-check", rc, 2)
+    eq(f"git {type(exc).__name__} is named without traceback",
+       "COULD-NOT-CHECK: git ls-files could not run:" in out
+       and "Traceback" not in out, True)
+
+# PATH-resolved external executables have no auditable repository source. The
+# checker names that boundary instead of decoding an ELF and inventing C3.
+external_orders = {
+    "orders": [{
+        "name": "external",
+        "enabled": True,
+        "source": str(city / "orders" / "external.toml"),
+        "exec": "true",
+    }]
+}
+
+
+def external_run(command, **_kwargs):
+    if command[:3] == ["gc", "order", "list"]:
+        return mock.Mock(returncode=0, stdout=json.dumps(external_orders), stderr="")
+    if command[:2] == ["git", "ls-files"]:
+        return mock.Mock(returncode=0, stdout="", stderr="")
+    raise AssertionError(command)
+
+
+with mock.patch.object(icc, "CITY", city), mock.patch.object(
+    icc.subprocess, "run", side_effect=external_run
+):
+    rc, out = run(["--enabled-local-orders"])
+eq("external installed executable makes enabled coverage partial", rc, 2)
+eq("external installed executable is explicitly unreachable",
+   "external: external installed executable" in out, True)
+eq("external installed executable is never a C3 failure",
+   "== /usr/bin/true" not in out and "== /bin/true" not in out, True)
+
+# A gc order can name exact source and test blobs, but that mapping is evidence
+# only when the executable, its own version, the install receipt, and the Git
+# object all agree. This is the installed-binary seam used by beads-health and
+# session-prune-dormant. The clean case was RED before provenance-aware
+# resolution: it exited 2 as an external installed executable.
+provenance_city = tmp / "provenance-city"
+(provenance_city / "orders").mkdir(parents=True)
+source_repo = tmp / "gascity-source"
+(source_repo / "cmd" / "gc").mkdir(parents=True)
+(source_repo / "bin").mkdir()
+(source_repo / "cmd" / "gc" / "cmd_beads.go").write_text(
+    "package main\n\nfunc doBeadsHealth() error { return nil }\n"
+)
+(source_repo / "cmd" / "gc" / "cmd_beads_test.go").write_text(
+    "package main\n\n// RED: unhealthy provider must fail closed.\n"
+)
+for command in (
+    ["git", "init", "-q", str(source_repo)],
+    ["git", "-C", str(source_repo), "add", "cmd/gc/cmd_beads.go",
+     "cmd/gc/cmd_beads_test.go"],
+    ["git", "-C", str(source_repo), "-c", "user.name=test",
+     "-c", "user.email=x@invalid", "-c", "commit.gpgsign=false",
+     "commit", "-qm", "fixture"],
+    ["git", "-C", str(source_repo), "remote", "add", "origin",
+     icc.GASCITY_REMOTE],
+):
+    result = icc.subprocess.run(command, capture_output=True, text=True)
+    if result.returncode != 0:
+        raise RuntimeError(result.stderr)
+source_head = icc.subprocess.run(
+    ["git", "-C", str(source_repo), "rev-parse", "HEAD"],
+    capture_output=True, text=True, check=True,
+).stdout.strip()
+installed_dir = tmp / "installed"
+installed_dir.mkdir()
+installed_gc = installed_dir / "gc"
+installed_body = (
+    "#!/bin/sh\n"
+    "if [ \"${1-}\" = version ] && [ \"${2-}\" = --json ]; then\n"
+    f"  printf '%s\\n' '{{\"commit\":\"{source_head[:10]}\"}}'\n"
+    "  exit 0\n"
+    "fi\n"
+    "exit 64\n"
+)
+installed_gc.write_text(installed_body)
+installed_gc.chmod(0o755)
+(source_repo / "bin" / "gc").write_text(installed_body)
+(source_repo / "bin" / "gc").chmod(0o755)
+receipt = tmp / "gc-installed.sha"
+receipt.write_text(source_head + "\n")
+(provenance_city / "orders" / "provenanced-gc.toml").write_text(
+    "[order]\n"
+    f'exec = "{installed_gc} beads health --quiet"\n'
+    'instrument_repository = "gascity"\n'
+    'instrument_source = "cmd/gc/cmd_beads.go"\n'
+    'instrument_test = "cmd/gc/cmd_beads_test.go"\n'
+    'instrument_argv = ["beads", "health"]\n'
+)
+
+
+def run_provenanced_gc():
+    with mock.patch.object(icc, "CITY", provenance_city), mock.patch.object(
+        icc, "GASCITY_SOURCE_ROOT", source_repo, create=True
+    ), mock.patch.object(icc, "GC_INSTALL_RECEIPT", receipt, create=True):
+        return run(["--order", "provenanced-gc"])
+
+
+rc, out = run_provenanced_gc()
+eq("exact installed gc provenance becomes examinable", rc, 0)
+eq("exact installed source and test identity are printed",
+   f"gascity@{source_head}:cmd/gc/cmd_beads.go" in out
+   and "cmd_beads_test.go" in out, True)
+eq("provenanced source/test mapping is disclosed as attested",
+   "source/test mapping attested by orders/provenanced-gc.toml; not derived from command"
+   in out, True)
+
+installed_gc.write_text(installed_body + "# drift\n")
+installed_gc.chmod(0o755)
+rc, out = run_provenanced_gc()
+eq("installed gc byte drift remains could-not-check", rc, 2)
+eq("installed gc byte drift is explicit", "binary bytes differ" in out, True)
+installed_gc.write_text(installed_body)
+installed_gc.chmod(0o755)
+
+receipt.write_text("0" * 40 + "\n")
+rc, out = run_provenanced_gc()
+eq("install receipt mismatch remains could-not-check", rc, 2)
+eq("install receipt mismatch is explicit", "version does not match receipt" in out, True)
+receipt.write_text(source_head + "\n")
+
+receipt.unlink()
+rc, out = run_provenanced_gc()
+eq("missing install receipt remains could-not-check", rc, 2)
+eq("missing install receipt is explicit", "cannot read install receipt" in out, True)
+receipt.write_text(source_head + "\n")
+
+receipt.write_text("not-a-commit\n")
+rc, out = run_provenanced_gc()
+eq("malformed install receipt remains could-not-check", rc, 2)
+eq("malformed install receipt is explicit", "not one full commit SHA" in out, True)
+receipt.write_text(source_head + "\n")
+
+with mock.patch.object(icc, "GASCITY_REMOTE", "https://invalid.example/repo.git"):
+    rc, out = run_provenanced_gc()
+eq("wrong source repository identity remains could-not-check", rc, 2)
+eq("wrong source repository identity is explicit",
+   "repository identity does not match" in out, True)
+
+bad_version_body = "#!/bin/sh\nprintf '%s\\n' not-json\n"
+installed_gc.write_text(bad_version_body)
+installed_gc.chmod(0o755)
+(source_repo / "bin" / "gc").write_text(bad_version_body)
+(source_repo / "bin" / "gc").chmod(0o755)
+rc, out = run_provenanced_gc()
+eq("unreadable installed version remains could-not-check", rc, 2)
+eq("unreadable installed version is explicit", "cannot read installed gc version" in out, True)
+installed_gc.write_text(installed_body)
+installed_gc.chmod(0o755)
+(source_repo / "bin" / "gc").write_text(installed_body)
+(source_repo / "bin" / "gc").chmod(0o755)
+
+(source_repo / "bin" / "gc").unlink()
+rc, out = run_provenanced_gc()
+eq("missing canonical built copy remains could-not-check", rc, 2)
+eq("missing canonical built copy is explicit", "cannot hash installed gc identity" in out, True)
+(source_repo / "bin" / "gc").write_text(installed_body)
+(source_repo / "bin" / "gc").chmod(0o755)
+
+(provenance_city / "orders" / "provenanced-gc.toml").write_text(
+    "[order]\n"
+    f'exec = "{installed_gc} beads health --quiet"\n'
+    'instrument_repository = "gascity"\n'
+    'instrument_test = "cmd/gc/cmd_beads_test.go"\n'
+    'instrument_argv = ["beads", "health"]\n'
+)
+rc, out = run_provenanced_gc()
+eq("missing source provenance remains could-not-check", rc, 2)
+eq("missing source provenance is explicit", "instrument_source is missing" in out, True)
+
+(provenance_city / "orders" / "provenanced-gc.toml").write_text(
+    "[order]\n"
+    f'exec = "{installed_gc} beads health --quiet"\n'
+    'instrument_repository = "gascity"\n'
+    'instrument_source = "cmd/gc/cmd_beads.go"\n'
+    'instrument_argv = ["beads", "health"]\n'
+)
+rc, out = run_provenanced_gc()
+eq("missing test provenance remains could-not-check", rc, 2)
+eq("missing test provenance names the C3 boundary",
+   "instrument_test is missing; C3 presence could not be checked" in out, True)
+
+(provenance_city / "orders" / "provenanced-gc.toml").write_text(
+    "[order]\n"
+    f'exec = "{installed_gc} beads health --quiet"\n'
+    'instrument_repository = "gascity"\n'
+    'instrument_source = "cmd/gc/cmd_beads.go"\n'
+    'instrument_test = "cmd/gc/../secret"\n'
+    'instrument_argv = ["beads", "health"]\n'
+)
+rc, out = run_provenanced_gc()
+eq("noncanonical test provenance remains could-not-check", rc, 2)
+eq("noncanonical test provenance is explicit", "canonical repository-relative" in out, True)
+
+(provenance_city / "orders" / "provenanced-gc.toml").write_text(
+    "[order]\n"
+    f'exec = "{installed_gc} beads health --quiet"\n'
+    'instrument_repository = "gascity"\n'
+    'instrument_source = "cmd/gc/cmd_beads.go"\n'
+    'instrument_test = "cmd/gc/cmd_beads_test.go"\n'
+    'instrument_argv = []\n'
+)
+rc, out = run_provenanced_gc()
+eq("empty argv provenance remains could-not-check", rc, 2)
+eq("empty argv provenance is explicit", "nonempty string array" in out, True)
+
+(provenance_city / "orders" / "provenanced-gc.toml").write_text(
+    "[order]\n"
+    f'exec = "{installed_gc} beads ; health"\n'
+    'instrument_repository = "gascity"\n'
+    'instrument_source = "cmd/gc/cmd_beads.go"\n'
+    'instrument_test = "cmd/gc/cmd_beads_test.go"\n'
+    'instrument_argv = ["beads", "health"]\n'
+)
+rc, out = run_provenanced_gc()
+eq("compound provenance command remains could-not-check", rc, 2)
+eq("compound provenance command is explicit", "not one simple invocation" in out, True)
+
+(provenance_city / "orders" / "provenanced-gc.toml").write_text(
+    "[order]\n"
+    f'exec = "{installed_gc} beads health --quiet"\n'
+    'instrument_repository = "gascity"\n'
+    'instrument_source = "cmd/gc/cmd_beads.go"\n'
+    'instrument_test = "cmd/gc/cmd_beads_test.go"\n'
+    'instrument_argv = ["session", "prune"]\n'
+)
+rc, out = run_provenanced_gc()
+eq("wrong command-to-source binding remains could-not-check", rc, 2)
+eq("wrong command-to-source binding is explicit",
+   "instrument_argv does not match" in out, True)
+
+(provenance_city / "orders" / "provenanced-gc.toml").write_text(
+    "[order]\n"
+    f'exec = "{installed_gc} beads health --quiet"\n'
+    'instrument_repository = "gascity"\n'
+    'instrument_source = "cmd/gc/cmd_beads.go"\n'
+    'instrument_test = "cmd/gc/missing_test.go"\n'
+    'instrument_argv = ["beads", "health"]\n'
+)
+rc, out = run_provenanced_gc()
+eq("missing exact test blob remains could-not-check", rc, 2)
+eq("missing exact test blob names the C3 boundary",
+   "cannot read exact test blob; C3 presence could not be checked" in out, True)
+
+# Legacy --order remains multi-target and propagates partial resolution.
+(city / "orders" / "legacy.toml").write_text(
+    "[order]\n"
+    f'linux = true\nexec = "{city}/bin/direct-instrument; '
+    f'{city}/bin/wrapped-instrument"\n'
+)
+with mock.patch.object(icc, "CITY", city):
+    rc, out = run(["--order", "legacy"])
+eq("legacy --order examines every resolved target", "corpus examined: 2 file(s)" in out, True)
+eq("legacy --order reports complete selector coverage", "COVERAGE: COMPLETE" in out, True)
+eq("legacy --order clean multi-target exits zero", rc, 0)
+
+(city / "orders" / "legacy-partial.toml").write_text(
+    "[order]\n"
+    f'exec = "/definitely/missing/precheck; {city}/bin/direct-instrument"\n'
+)
+with mock.patch.object(icc, "CITY", city):
+    rc, out = run(["--order", "legacy-partial"])
+eq("legacy --order retains known target on partial resolution",
+   "bin/direct-instrument" in out, True)
+eq("legacy --order reports partial selector coverage", "COVERAGE: PARTIAL" in out, True)
+eq("legacy --order partial exits could-not-check", rc, 2)
+
+# --- the meta-check itself has a standing run -----------------------------
+# HERE is <pack>/assets/scripts, so the pack root is two levels up. The order
+# ships at the pack root, not under assets/ — an importing city gets it from
+# the pack's own orders/ directory.
+PACK_ROOT = HERE.parent.parent
+audit_order = tomllib.loads(
+    (PACK_ROOT / "orders" / "instrument-contract-audit.toml").read_text())
+eq("standing meta-audit order is exact", audit_order["order"], {
+    "description": (
+        "Daily: audit every enabled local order against the mechanically "
+        "checkable instrument contract; a partial population is never green."
+    ),
+    "trigger": "cooldown",
+    "interval": "24h",
+    # The pack invokes its own vendored copy through $GC_PACK_DIR, and the
+    # path is quoted because a pack directory containing a space would
+    # otherwise split into two arguments.
+    "exec": (
+        'python3 "$GC_PACK_DIR/assets/scripts/instrument-contract-check"'
+        " --enabled-local-orders"
+    ),
+    "timeout": "5m",
+    "idempotent": True,
+})
+
+# --- the fixtures this pack SHIPS ----------------------------------------
+# Every case above overrides the control, so without this block the shipped
+# fixture is the one thing the suite never looks at — and a control that has
+# rotted is indistinguishable from a control that is fine, which is the exact
+# failure the control exists to catch.
+del os.environ["INSTRUMENT_CONTRACT_CONTROL"]
+shipped = icc.positive_control()
+eq("shipped control is the packaged fixture",
+   shipped, PACK_ROOT / "assets" / "fixtures" / "protected-canary")
+eq("shipped control exists", shipped.is_file(), True)
+eq("shipped control is executable", os.access(shipped, os.X_OK), True)
+# Guarded: if the fixture cannot be found the assertions above have already
+# gone red, and examining a path that is not there would replace those readings
+# with a traceback — a crash and a finding are not the same result (C7).
+if shipped.is_file():
+    eq("shipped control has a discoverable sibling test",
+       icc.sibling_test(shipped) is not None, True)
+    eq("shipped control carries a red-case marker",
+       icc.examine(shipped)["c3_has_red_case"], True)
+    rc, out = run([str(shipped)])
+    eq("shipped control passes the checker it validates", rc, 0)
+else:
+    eq("shipped control is readable enough to examine", False, True)
+
+# A control that has gone missing must fail the standing audit, not crash it.
+# This is the layout bug that shipped in this pack's first draft: the fallback
+# for GC_PACK_DIR was one directory short, so the control resolved to a path
+# that does not exist. It has to read as FAILED, because "the control is gone"
+# and "the control is unprotected" are the same conclusion for a caller.
+os.environ["INSTRUMENT_CONTRACT_CONTROL"] = str(city / "bin" / "no-such-control")
+with mock.patch.object(icc, "CITY", city), mock.patch.object(
+    icc.subprocess, "run", side_effect=no_positive_run
+):
+    rc, out = run(["--enabled-local-orders"])
+eq("a missing control fails the audit", rc, 1)
+eq("...and says the control failed rather than tracebacking",
+   "POSITIVE CONTROL: FAILED" in out, True)
+del os.environ["INSTRUMENT_CONTRACT_CONTROL"]
+
+# The negative rail. A control proves the tool can still say "protected"; this
+# fixture proves it can still say the opposite. Both are needed, because a
+# checker stuck on either answer passes half of any suite that only tests one.
+unprotected = PACK_ROOT / "assets" / "fixtures" / "unprotected-canary"
+eq("shipped unprotected canary exists", unprotected.is_file(), True)
+eq("shipped unprotected canary has no sibling test",
+   icc.sibling_test(unprotected), None)
+rc, out = run([str(unprotected)])
+eq("shipped unprotected canary fails C3", rc, 1)
+eq("...and the failure names the missing test", "no sibling test" in out, True)
+
+if fails:
+    print(f"RESULT: FAIL ({len(fails)} case(s))")
+    sys.exit(1)
+print("RESULT: PASS")
