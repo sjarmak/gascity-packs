@@ -9,6 +9,8 @@ import textwrap
 
 import pytest
 
+from gc_test_env import scrubbed_environ
+
 
 # This suite cannot do its job without a real gc binary: without one its
 # fixture skips, the step stays green, and the output says `s` where it would
@@ -100,15 +102,14 @@ def write_prompt_workspace(
         encoding="utf-8",
     )
 
-    env = {
-        **os.environ,
-        "HOME": str(home),
+    env = scrubbed_environ(home)
+    env.update({
         "GC_HOME": str(gc_home),
         "GC_CITY": str(city_dir),
         "GC_CITY_PATH": str(city_dir),
         "GC_CITY_ROOT": str(city_dir),
         "GC_RIG": "fixture",
-    }
+    })
     return PromptWorkspace(city_dir=city_dir, rig_dir=rig_dir, env=env)
 
 

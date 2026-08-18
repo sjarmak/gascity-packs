@@ -38,6 +38,8 @@ import subprocess
 import textwrap
 import tomllib
 
+from gc_test_env import scrubbed_environ
+
 import pytest
 
 
@@ -352,30 +354,9 @@ def write_city(
             brief.read_text(encoding="utf-8"), encoding="utf-8"
         )
 
-    # Strip the caller's Gas City and beads environment rather than inheriting
-    # it. `BEADS_DOLT_SERVER_PORT` in particular overrides what a city's own
-    # metadata names, so a developer running this suite inside a live city
-    # would have these scratch invocations reach that city's canonical store.
-    env = {
-        key: value
-        for key, value in os.environ.items()
-        if not key.startswith(("GC_", "BEADS_", "XDG_"))
-    }
+    env = scrubbed_environ(home)
     env.update(
         {
-            "HOME": str(home),
-            # Pinning HOME is not enough. Pack code that resolves config the
-            # portable way reads `${XDG_CONFIG_HOME:-$HOME/.config}`, and a set
-            # XDG_CONFIG_HOME beats the pinned HOME, so the scratch city reads
-            # the developer's real dotfiles. Caught by CI, not locally:
-            # `slack-full`'s doctor/check-env.sh found this operator's
-            # ~/.config/gc-slack-adapter/env and passed here, while a clean
-            # runner with no such file reported `slack-full:env`. Redirect the
-            # whole XDG set, since data/state/cache override HOME identically.
-            "XDG_CONFIG_HOME": str(home / ".config"),
-            "XDG_DATA_HOME": str(home / ".local" / "share"),
-            "XDG_STATE_HOME": str(home / ".local" / "state"),
-            "XDG_CACHE_HOME": str(home / ".cache"),
             "GC_HOME": str(gc_home),
             "GC_CITY": str(city_dir),
             "GC_CITY_PATH": str(city_dir),
