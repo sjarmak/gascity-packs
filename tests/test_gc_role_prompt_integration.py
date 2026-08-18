@@ -100,15 +100,28 @@ def write_prompt_workspace(
         encoding="utf-8",
     )
 
+    # Strip the caller's Gas City and beads environment rather than inheriting
+    # it, the same way `gc_live_city.write_city` does. This harness is a second
+    # copy of that one and drifted from it: `gascity/commands/claim/run.sh`
+    # reads `EXPECTED_ROUTE="${GC_TEMPLATE:-${GC_AGENT:-}}"`, so a maintainer
+    # running this suite from inside a Gas City seat had their own seat's
+    # GC_TEMPLATE beat the GC_AGENT the test sets, and the claim test failed
+    # with `CLAIM_REJECTED route mismatch`. Green in CI, red for exactly the
+    # people who maintain these packs. Refute by restoring `**os.environ` and
+    # running the suite with GC_TEMPLATE set.
     env = {
-        **os.environ,
+        key: value
+        for key, value in os.environ.items()
+        if not key.startswith(("GC_", "BEADS_"))
+    }
+    env.update({
         "HOME": str(home),
         "GC_HOME": str(gc_home),
         "GC_CITY": str(city_dir),
         "GC_CITY_PATH": str(city_dir),
         "GC_CITY_ROOT": str(city_dir),
         "GC_RIG": "fixture",
-    }
+    })
     return PromptWorkspace(city_dir=city_dir, rig_dir=rig_dir, env=env)
 
 
@@ -258,3 +271,33 @@ def test_registered_claim_command_dispatches_store_aware_show_and_normalizes_jso
         "hook --claim --drain-ack --json",
         " ".join(("b" + "d", "show", "bd-123", "--json")),
     ]
+
+
+def test_the_harness_does_not_inherit_the_callers_seat_environment(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """CI has a clean environment; the people who maintain these packs do not.
+
+    Every command under test reads `GC_*`, and the claim command in particular
+    resolves its expected route as `${GC_TEMPLATE:-${GC_AGENT:-}}`. Inheriting
+    the caller's environment therefore let a maintainer's own seat decide the
+    answer, and the suite was green on a runner and red on the machine where
+    the packs are actually edited.
+
+    The variables are set here rather than relied on from the runner, so this
+    goes red on a clean CI box too if the scrub is removed.
+    """
+    monkeypatch.setenv("GC_TEMPLATE", "mayor")
+    monkeypatch.setenv("GC_AGENT", "some-other-agent")
+    monkeypatch.setenv("BEADS_DOLT_SERVER_PORT", "29620")
+
+    workspace = write_prompt_workspace(
+        tmp_path, city_binding="gc", city_pack=REPO_ROOT / "gascity"
+    )
+    assert workspace.env.get("GC_TEMPLATE") is None, workspace.env.get("GC_TEMPLATE")
+    assert workspace.env.get("GC_AGENT") is None, workspace.env.get("GC_AGENT")
+    assert workspace.env.get("BEADS_DOLT_SERVER_PORT") is None
+    # And the variables the harness sets on purpose survive the scrub, so this
+    # cannot be satisfied by handing back an empty environment.
+    assert workspace.env["GC_CITY_PATH"] == str(workspace.city_dir)
+    assert workspace.env["GC_RIG"] == "fixture"
