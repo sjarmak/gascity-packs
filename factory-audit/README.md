@@ -27,6 +27,13 @@ The specific things it surfaced, each one checkable:
   open question rather than as drift.
 - **A Slack idempotency key accepted and discarded at 0 of 16 call sites.** The
   parameter existed, the plumbing accepted it, and nothing downstream used it.
+  This is the one on the list we have closed end to end: the key now reaches the
+  request body, and reconcile reads all 20 scripted call sites as carrying one.
+  Two of those twenty read as missing until we fixed the checker, not the code.
+  They assembled the command over several statements, so the marker was not on
+  the line the scan had found. A checker is allowed to withdraw an identity it
+  cannot prove and is never allowed to confirm one that does not hold, which is
+  why that bug was safe to have and worth fixing anyway.
 - **Four effects this city performs on the outside world with nothing written
   down about half-success**, found because reconcile reported them as
   UNDECLARED against a contract their authors believed was complete.
@@ -34,6 +41,12 @@ The specific things it surfaced, each one checkable:
 We have not finished fixing these. That is the point of publishing the number:
 a factory with this much machinery still fails its own check, so the check is
 not a formality you pass by having good practices.
+
+That reading is from 2026-08-17, and it is a reading rather than a fact about
+us: it moves whenever our code or our contract does. The two commands that
+produce it are the two in this pack, run against our own tree, so the way to
+check the claim is to run them against yours and see whether a number that
+uncomfortable is hard to get.
 
 ## The two halves, and why one alone is worthless
 

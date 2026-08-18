@@ -44,6 +44,11 @@ import unittest
 from collections import Counter
 from pathlib import Path
 
+# Declared for the CI-coverage guard in
+# tests/test_ci_runs_every_pack_suite.py: without a gc binary this suite skips,
+# and a step that skips everything is green and says nothing.
+REQUIRES_GC_BINARY = True
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 PACK = "gastown"
 PACK_DIR = REPO_ROOT / PACK

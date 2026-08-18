@@ -10,6 +10,13 @@ import textwrap
 import pytest
 
 
+# This suite cannot do its job without a real gc binary: without one its
+# fixture skips, the step stays green, and the output says `s` where it would
+# have said `F`. Declared rather than inferred, so the CI-coverage guard in
+# tests/test_ci_runs_every_pack_suite.py can see it whatever route it takes to
+# ask for a binary.
+REQUIRES_GC_BINARY = True
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 
 

@@ -31,6 +31,13 @@ from gc_live_city import (  # noqa: F401  (fixture import)
     write_city,
 )
 
+# This suite cannot do its job without a real gc binary: without one its
+# fixture skips, the step stays green, and the output says `s` where it would
+# have said `F`. Declared rather than inferred, so the CI-coverage guard in
+# tests/test_ci_runs_every_pack_suite.py can see it whatever route it takes to
+# ask for a binary.
+REQUIRES_GC_BINARY = True
+
 BINDING = "factory-audit"
 
 # The stub records what it was asked to do and then does the smallest thing the
@@ -122,26 +129,26 @@ def test_derive_through_gc_reaches_the_kit_and_writes_what_it_promises(
     result = drive(gc_test_bin, workspace, kit, log, "factory", "derive")
     assert result.returncode == 0, result.stdout + result.stderr
 
-    verbs = [c["argv"][0] for c in calls(log)]
-    assert verbs == ["probes-init", "infer"], (
-        "gc reached the kit with the wrong chain; a `--help` that lists the "
-        f"verb would not have caught this. Calls: {calls(log)}"
-    )
-
-    # The city the kit was handed has to be the city gc is running in. Passing
-    # the wrapper's own directory, or the rig, would produce a clean report
-    # about the wrong tree -- the most expensive way for this pack to be wrong.
-    #
-    # Every call, not the first one. Checking only the scaffold step left the
-    # step that actually produces the report free to scan somewhere else, and a
-    # mutation pointing `infer` at $PWD passed against that weaker assertion.
-    pointed_at = {Path(c["argv"][1]) for c in calls(log)}
-    assert pointed_at == {workspace.city_dir}, (
-        f"the kit was pointed at {sorted(map(str, pointed_at))}, and the city "
-        f"is {workspace.city_dir}"
-    )
-
+    # The whole argv of every call, in order. Checking the verb and the city
+    # left every flag between them unasserted, and deleting `--probes` from the
+    # infer call passed: the stub still wrote the files this test looks for,
+    # while the real checker would have been scanning with no probe pack. A
+    # wrapper's job here is entirely the argv it assembles, so that is the
+    # thing to pin, including the city -- pointing it at the rig or at the
+    # wrapper's own directory yields a clean report about the wrong tree, which
+    # is the most expensive way for this pack to be wrong.
     out = workspace.city_dir / ".gc" / "factory-audit"
+    probes = out / "probes.yaml"
+    assert [c["argv"] for c in calls(log)] == [
+        ["probes-init", str(workspace.city_dir), "--write", str(probes)],
+        [
+            "infer", str(workspace.city_dir),
+            "--probes", str(probes),
+            "--out", str(out),
+            "--write", str(out / "factory.derived.yaml"),
+        ],
+    ], f"gc reached the kit with the wrong chain. Calls: {calls(log)}"
+
     for promised in ("probes.yaml", "factory.derived.yaml", "derived.txt", "evidence.json"):
         assert (out / promised).is_file(), (
             f"the command's closing message names {promised} and it is not there"
@@ -177,21 +184,44 @@ def test_reconcile_through_gc_reports_the_kits_failure_rather_than_swallowing_it
     )
     assert "1 drift" in drifted.stdout, drifted.stdout + drifted.stderr
 
+    # Equality, not membership. Searching for the new finding leaves an
+    # appending write undetected: switching the wrapper's `tee` to `tee -a`
+    # keeps both reports in the file, and a reader who greps it for drift is
+    # answered by a run that has been superseded.
     written = workspace.city_dir / ".gc" / "factory-audit" / "reconcile.txt"
-    assert "1 drift" in written.read_text(), (
-        "the finding reached the terminal but not the file the wrapper says it "
-        "wrote, so the next reader of that file sees the previous run"
+    assert written.read_text().strip() == "1 drift, 0 confirmed", (
+        "the file the wrapper says it wrote does not hold exactly this run's "
+        f"report. It holds:\n{written.read_text()}"
     )
 
 
+@pytest.mark.parametrize("present,missing", [
+    ("probes.yaml", "factory.yaml"),
+    ("factory.yaml", "probes.yaml"),
+])
 def test_reconcile_before_derive_gives_an_instruction_not_a_traceback(
-    city: tuple[Workspace, Path, Path], gc_test_bin: Path  # noqa: F811
+    city: tuple[Workspace, Path, Path], gc_test_bin: Path,  # noqa: F811
+    present: str, missing: str,
 ) -> None:
+    """One prerequisite at a time, and the message names the absent one.
+
+    With both absent the command cannot show which of the two it checks: the
+    surviving check answers for both, so dropping either one from the wrapper
+    leaves this green. Each case here supplies one file and asserts the error
+    names the other.
+    """
     workspace, kit, log = city
+    out = workspace.city_dir / ".gc" / "factory-audit"
+    out.mkdir(parents=True, exist_ok=True)
+    (out / present).write_text("factory_name: scratch\neffects: {}\n")
 
     result = drive(gc_test_bin, workspace, kit, log, "factory", "reconcile")
     assert result.returncode == 2, result.stdout + result.stderr
     assert "factory derive" in result.stderr
+    assert missing in result.stderr, (
+        f"{present} is present and {missing} is not; the error should name "
+        f"{missing}. It said:\n{result.stderr}"
+    )
     assert not calls(log), "the kit ran before its inputs existed"
 
 
@@ -207,5 +237,39 @@ def test_the_banner_names_the_override_when_one_is_in_use(
     """
     workspace, kit, log = city
     result = drive(gc_test_bin, workspace, kit, log, "factory", "derive")
+    assert result.returncode == 0, result.stdout + result.stderr
     assert "DRIFT: FACTORY_KIT_HOME is set" in result.stdout, result.stdout
     assert "(pinned)" not in result.stdout
+
+
+def test_the_override_warning_is_not_printed_when_there_is_no_override(
+    city: tuple[Workspace, Path, Path], gc_test_bin: Path  # noqa: F811
+) -> None:
+
+    """The other rail on the banner.
+
+    A banner that always printed the override line would satisfy the test
+    above, and would then be noise on every real install rather than the one
+    piece of information that separates a pinned run from an operator's
+    checkout. So the same stub is placed where the pack looks by default and
+    the line has to be absent. It is still not `(pinned)`: the stub is not a
+    checkout of the pinned commit, and the banner says so, which is the
+    property that makes the pin a claim rather than a decoration.
+    """
+    workspace, kit, log = city
+    default = workspace.city_dir / ".gc" / "factory-kit" / "src"
+    default.mkdir(parents=True)
+    checker = default / "factory_check.py"
+    checker.write_text((kit / "src" / "factory_check.py").read_text())
+    checker.chmod(0o755)
+
+    env = {**workspace.env, "FACTORY_STUB_LOG": str(log)}
+    result = subprocess.run(
+        [str(gc_test_bin), BINDING, "factory", "derive"],
+        cwd=workspace.rig_dir, env=env, text=True, capture_output=True, timeout=300,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "FACTORY_KIT_HOME" not in result.stdout, (
+        "no override is in use and the banner named one anyway:\n" + result.stdout
+    )
+    assert "(pinned)" not in result.stdout, result.stdout

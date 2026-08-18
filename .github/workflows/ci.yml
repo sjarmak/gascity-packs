@@ -41,7 +41,13 @@ jobs:
         run: python3 validate_registry.py --require-git
 
       - name: Run Python pack tests
-        run: python3 -m pytest tests contributing/tests gascity/tests discord/tests github/tests oversight-rig/tests slack-full/tests slack-channel/tests pr-pipeline/tests profiler/tests factory-audit/tests -q
+        # Pack roots, not `<pack>/tests`. A pack is free to put a suite beside
+        # the code it tests, and oversight-rig does: four suites under
+        # skills/city-executive-status/ and one under assets/scripts/ had never
+        # run here while this line said `oversight-rig/tests`. Naming the root
+        # collects whatever the pack ships, so a suite added in a new place runs
+        # without anyone remembering to edit this line.
+        run: python3 -m pytest tests contributing gascity discord github oversight-rig slack-full slack-channel pr-pipeline profiler factory-audit -q
 
       - name: Lint and exercise shared role prompt composition
         run: |
