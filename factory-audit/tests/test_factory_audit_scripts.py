@@ -82,6 +82,7 @@ def write_contract(city: Path) -> None:
 
 ORDER = PACK / "assets" / "scripts" / "factory-drift-check.sh"
 AUDIT = PACK / "commands" / "factory" / "audit" / "run.sh"
+DERIVE = PACK / "commands" / "factory" / "derive" / "run.sh"
 RECONCILE = PACK / "commands" / "factory" / "reconcile" / "run.sh"
 SETUP = PACK / "commands" / "factory" / "setup" / "run.sh"
 
@@ -122,6 +123,10 @@ def test_the_order_is_green_when_the_checker_reports_no_drift(tmp_path: Path) ->
     write_contract(tmp_path)
     result = run(ORDER, tmp_path)
     assert result.returncode == 0, result.stdout + result.stderr
+    # Without this line, deleting the checker invocation entirely and exiting 0
+    # passes. Green because nothing ran and green because nothing is wrong are
+    # the same exit status and must not be the same assertion.
+    assert "stub checker ran: reconcile" in result.stdout
 
 
 def test_a_checkout_that_is_not_the_pinned_commit_says_so(tmp_path: Path) -> None:
@@ -131,17 +136,32 @@ def test_a_checkout_that_is_not_the_pinned_commit_says_so(tmp_path: Path) -> Non
     every run prints which commit it actually used, so the stub kit -- which is
     never the pinned commit -- must produce a DRIFT line.
     """
-    install_stub_kit(tmp_path)
+    kit = install_stub_kit(tmp_path)
     write_contract(tmp_path)
     result = run(ORDER, tmp_path)
     assert "DRIFT: pack pins" in result.stdout
     assert pinned_commit()[:12] in result.stdout
+    # And the commit it reports as ACTUAL has to be this checkout's, not a
+    # constant. A banner that prints the pin twice would satisfy the two
+    # assertions above while telling the reader nothing about what ran.
+    head = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=kit, capture_output=True, text=True, check=True
+    ).stdout.strip()
+    assert f"kit {head[:12]} at " in result.stdout
+    # And the checker still ran; a banner is not a check.
+    assert "stub checker ran: reconcile" in result.stdout
 
 
 def test_audit_without_a_contract_gives_an_instruction_not_a_traceback(
     tmp_path: Path,
 ) -> None:
     install_stub_kit(tmp_path)
+    # probes.yaml present, factory.yaml absent: the fixture isolates the file
+    # under test. With both absent this test passes against a command that
+    # checks the wrong one.
+    out = tmp_path / ".gc" / "factory-audit"
+    out.mkdir(parents=True)
+    out.joinpath("probes.yaml").write_text("effects: []\n")
     result = run(AUDIT, tmp_path)
     assert result.returncode == 2
     assert "factory derive" in result.stderr
@@ -150,8 +170,15 @@ def test_audit_without_a_contract_gives_an_instruction_not_a_traceback(
 
 def test_reconcile_without_probes_gives_an_instruction(tmp_path: Path) -> None:
     install_stub_kit(tmp_path)
+    # Contract present, probes absent. Written this way because with both
+    # absent the command exits on the contract and this test would pass with
+    # the probes check deleted outright.
+    out = tmp_path / ".gc" / "factory-audit"
+    out.mkdir(parents=True)
+    out.joinpath("factory.yaml").write_text("version: factory.reliability/v1\n")
     result = run(RECONCILE, tmp_path)
     assert result.returncode == 2
+    assert "probes.yaml" in result.stderr
     assert "factory derive" in result.stderr
 
 
@@ -159,7 +186,7 @@ def test_every_command_refuses_to_run_without_pack_context(tmp_path: Path) -> No
     """gc sets GC_PACK_DIR. Run by hand from a shell it is absent, and every
     path below it resolves against whatever directory happened to be current.
     """
-    for script in (AUDIT, RECONCILE, SETUP):
+    for script in (AUDIT, DERIVE, RECONCILE, SETUP):
         env = {k: v for k, v in os.environ.items() if k != "GC_PACK_DIR"}
         result = subprocess.run(
             ["bash", str(script)],
@@ -177,8 +204,10 @@ def test_setup_refuses_while_an_override_points_elsewhere(tmp_path: Path) -> Non
     """Installing into the city while FACTORY_KIT_HOME wins would report success
     for a checkout no other command in the pack is going to read.
     """
+    # Deliberately not created. An implementation that refused only an
+    # existing override directory would pass with `other.mkdir()` here, and the
+    # property is about the variable being set, not about what it points at.
     other = tmp_path / "elsewhere"
-    other.mkdir()
     result = run(SETUP, tmp_path, FACTORY_KIT_HOME=str(other))
     assert result.returncode == 2
     assert "FACTORY_KIT_HOME" in result.stderr
@@ -199,7 +228,16 @@ def test_setup_refuses_a_pin_the_remote_does_not_carry(tmp_path: Path) -> None:
     seed = tmp_path / "seed"
     seed.mkdir()
     subprocess.run(["git", "init", "-q"], cwd=seed, check=True)
-    seed.joinpath("README").write_text("not the kit\n")
+    # The seed carries a checker at the path the resolver looks for, and a
+    # DIFFERENT one. Without this the final assertion below is vacuous: a seed
+    # with no `src/` makes "no unverified checker was left on disk" true no
+    # matter what setup did, and the first version of this test passed that way
+    # against an implementation that really did leave the default branch
+    # checked out.
+    seed.joinpath("src").mkdir()
+    seed.joinpath("src", "factory_check.py").write_text(
+        'raise SystemExit("the default branch checker ran")\n'
+    )
     subprocess.run(["git", "add", "-A"], cwd=seed, check=True)
     subprocess.run(
         ["git", "-c", "user.email=t@t", "-c", "user.name=t", "commit", "-qm", "seed"],
@@ -231,7 +269,142 @@ def test_setup_refuses_a_pin_the_remote_does_not_carry(tmp_path: Path) -> None:
 
     assert result.returncode == 4, result.stdout + result.stderr
     assert "no commit" in result.stderr
-    # The clone happened; what must not have happened is a checkout of some
-    # other commit. The seed repository has no `src/`, so the kit resolver will
-    # refuse this checkout rather than run whatever landed.
+
+    # The property: no working tree was materialized. A plain `git clone`
+    # checks out the remote's default branch BEFORE anything verifies the pin,
+    # so this used to leave an executable checker behind while the message said
+    # nothing had been checked out -- and every later command would have run
+    # it, because a commit mismatch is a warning rather than a refusal.
     assert not (city / ".gc" / "factory-kit" / "src").exists()
+
+    # And the resolver refuses that directory rather than running whatever is
+    # in it, which is the second half of the same property.
+    followup = subprocess.run(
+        ["bash", str(pack / "commands" / "factory" / "audit" / "run.sh")],
+        env=env, cwd=city, capture_output=True, text=True, timeout=60,
+    )
+    assert followup.returncode == 2, followup.stdout + followup.stderr
+    assert "no reliability kit" in followup.stderr
+    assert "default branch checker ran" not in followup.stdout + followup.stderr
+
+
+@pytest.mark.parametrize("script", ["audit", "derive", "reconcile", "setup"])
+def test_help_does_not_require_the_kit(script: str, tmp_path: Path) -> None:
+    """Help is not a checker result.
+
+    Every command used to call `kit_require` before parsing its arguments, so
+    the one command a person runs to find out how to install the kit failed
+    because the kit was not installed.
+    """
+    result = run(PACK / "commands" / "factory" / script / "run.sh", tmp_path, "--help")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert result.stdout.strip()
+
+
+@pytest.mark.parametrize(
+    "script,flag",
+    [("audit", "--contract"), ("reconcile", "--probes"), ("derive", "--template")],
+)
+def test_a_flag_without_its_value_is_a_usage_error(
+    script: str, flag: str, tmp_path: Path
+) -> None:
+    """Under `set -u` a bare $2 aborts with bash's own diagnostic and exit 1,
+    so a typo in a flag reads as an internal error rather than as bad input.
+    """
+    install_stub_kit(tmp_path)
+    result = run(PACK / "commands" / "factory" / script / "run.sh", tmp_path, flag)
+    assert result.returncode == 64, result.stdout + result.stderr
+    assert "needs a value" in result.stderr
+    assert "unbound variable" not in result.stderr
+
+
+def test_a_modified_checkout_is_not_reported_as_pinned(tmp_path: Path) -> None:
+    """The checker runs from the working tree, not from the commit.
+
+    A tree edited at the pinned commit reported `(pinned)` until the tree state
+    was read too, which made the pin a decoration: the banner named a commit
+    that was not what executed.
+    """
+    kit = install_stub_kit(tmp_path)
+    write_contract(tmp_path)
+    subprocess.run(
+        ["git", "-c", "user.email=t@t", "-c", "user.name=t", "tag", "-f", "pin"],
+        cwd=kit, check=True, capture_output=True,
+    )
+    head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=kit,
+                          capture_output=True, text=True, check=True).stdout.strip()
+
+    pack = tmp_path / "pack"
+    subprocess.run(["cp", "-r", str(PACK), str(pack)], check=True)
+    pack.joinpath("kit.pin").write_text(
+        f"KIT_REPO='unused'\nKIT_COMMIT='{head}'\nKIT_COMMIT_SUMMARY='the pin'\n"
+    )
+
+    env = dict(os.environ)
+    env.pop("FACTORY_KIT_HOME", None)
+    env.update(GC_PACK_DIR=str(pack), GC_PACK_NAME="factory-audit",
+               GC_CITY_PATH=str(tmp_path))
+
+    def order() -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["bash", str(pack / "assets" / "scripts" / "factory-drift-check.sh")],
+            env=env, cwd=tmp_path, capture_output=True, text=True, timeout=60,
+        )
+
+    clean = order()
+    assert "(pinned)" in clean.stdout, clean.stdout + clean.stderr
+
+    # The mutation, applied to the checkout rather than to the code: same
+    # commit, different bytes.
+    kit.joinpath("src", "factory_check.py").write_text("print('edited')\n")
+    dirty = order()
+    assert "(pinned)" not in dirty.stdout
+    assert "local modifications" in dirty.stdout
+
+
+def test_an_override_checkout_is_not_reported_as_pinned(tmp_path: Path) -> None:
+    """FACTORY_KIT_HOME is a deliberate escape hatch, and saying so is the
+    entire reason it is safe to have one.
+    """
+    kit = install_stub_kit(tmp_path)
+    write_contract(tmp_path)
+    result = run(ORDER, tmp_path, FACTORY_KIT_HOME=str(kit))
+    assert "(pinned)" not in result.stdout
+    assert "FACTORY_KIT_HOME is set" in result.stdout
+
+
+def test_derive_from_a_template_installs_it_and_will_not_clobber_it(
+    tmp_path: Path,
+) -> None:
+    """The probe pack is hand-edited after the first run, so a second `derive
+    --template` from the README must not silently discard that work.
+    """
+    install_stub_kit(tmp_path)
+    first = run(DERIVE, tmp_path, "--template", "gc-city")
+    assert first.returncode == 0, first.stdout + first.stderr
+
+    probes = tmp_path / ".gc" / "factory-audit" / "probes.yaml"
+    assert "factory_name" in probes.read_text()
+    probes.write_text(probes.read_text() + "\n# a hand edit\n")
+
+    second = run(DERIVE, tmp_path, "--template", "gc-city")
+    assert second.returncode == 3, second.stdout + second.stderr
+    assert "a hand edit" in probes.read_text()
+
+
+def test_derive_names_the_templates_it_has_when_asked_for_one_it_does_not(
+    tmp_path: Path,
+) -> None:
+    install_stub_kit(tmp_path)
+    result = run(DERIVE, tmp_path, "--template", "no-such-city")
+    assert result.returncode == 64
+    assert "gc-city" in result.stderr
+
+
+def test_the_pack_ships_the_order_its_readme_promises(tmp_path: Path) -> None:
+    """The live-gc suite asserts that every order a pack ships loads in a real
+    city, and skips a pack that ships none. Deleting this pack's only order
+    would turn that assertion into a skip, so the file's existence is pinned
+    here where it is a fact about this pack rather than a shape shared by five.
+    """
+    assert (PACK / "orders" / "factory-drift.toml").is_file()

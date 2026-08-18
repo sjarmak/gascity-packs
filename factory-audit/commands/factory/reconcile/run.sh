@@ -27,7 +27,16 @@ fi
 
 # shellcheck disable=SC1091
 . "$GC_PACK_DIR/assets/scripts/kit.sh"
-kit_require
+
+need_operand() {
+  # Under `set -u` a bare $2 aborts with bash's own message and exit 1, so a
+  # typo in a flag reads as an internal error rather than as bad input.
+  if [ "$#" -lt 2 ]; then
+    printf '%s: %s needs a value\n' "$0" "$1" >&2
+    exit 64
+  fi
+}
+
 
 city=${GC_CITY_PATH:-$PWD}
 out="$city/.gc/factory-audit"
@@ -36,13 +45,15 @@ probes="$out/probes.yaml"
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --contract) contract=$2; shift ;;
-    --probes) probes=$2; shift ;;
+    --contract) need_operand "$@"; contract=$2; shift ;;
+    --probes) need_operand "$@"; probes=$2; shift ;;
     -h|--help) sed -n '2,19p' "$0"; exit 0 ;;
     *) echo "gc factory reconcile: unknown argument $1" >&2; exit 64 ;;
   esac
   shift
 done
+
+kit_require
 
 for f in "$contract" "$probes"; do
   if [ ! -f "$f" ]; then
@@ -60,7 +71,18 @@ printf 'contract: %s\nprobes:   %s\n\n' "$contract" "$probes"
 
 set +e
 kit_run reconcile "$contract" "$city" --probes "$probes" | tee "$out/reconcile.txt"
-status=${PIPESTATUS[0]}
+# One statement. Reading ${PIPESTATUS[0]} into a variable is itself a command,
+# and it replaces PIPESTATUS -- so a second line reading ${PIPESTATUS[1]} aborts
+# under `set -u` instead of reporting the pipe's status.
+pipe=("${PIPESTATUS[@]}")
+status=${pipe[0]}
+wrote=${pipe[1]}
 set -e
+
+if [ "$wrote" -ne 0 ]; then
+  printf '\ngc factory reconcile: could not write %s (tee exited %d)\n' \
+    "$out/reconcile.txt" "$wrote" >&2
+  exit 5
+fi
 printf '\nwrote %s\n' "$out/reconcile.txt"
 exit "$status"

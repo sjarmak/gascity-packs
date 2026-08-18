@@ -2,5 +2,8 @@
 description = "Reconcile the factory contract against the installation; go actionable when the document has drifted from the code."
 trigger = "cooldown"
 interval = "24h"
-exec = "bash $GC_PACK_DIR/assets/scripts/factory-drift-check.sh"
+# Quoted: a city or pack path with a space in it splits into two arguments
+# otherwise, and the order fails with a message about a file that does not
+# exist rather than about the path that does.
+exec = 'bash "$GC_PACK_DIR/assets/scripts/factory-drift-check.sh"'
 timeout = "10m"

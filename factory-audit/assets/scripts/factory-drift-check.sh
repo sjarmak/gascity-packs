@@ -33,6 +33,25 @@ if [ ! -f "$out/factory.yaml" ] || [ ! -f "$out/probes.yaml" ]; then
 fi
 
 kit_banner
+
+# `set -e` with pipefail exits on the failing pipeline before any line after it
+# runs, so the explicit propagation this used to end with was unreachable. It
+# happened to produce the right status while `tee` succeeded, which is the kind
+# of accident that survives until the day it does not.
+set +e
 kit_run reconcile "$out/factory.yaml" "$city" --probes "$out/probes.yaml" \
   | tee "$out/reconcile.txt"
-exit "${PIPESTATUS[0]}"
+# One statement. Reading ${PIPESTATUS[0]} into a variable is itself a command,
+# and it replaces PIPESTATUS -- so a second line reading ${PIPESTATUS[1]} aborts
+# under `set -u` instead of reporting the pipe's status.
+pipe=("${PIPESTATUS[@]}")
+status=${pipe[0]}
+wrote=${pipe[1]}
+set -e
+
+if [ "$wrote" -ne 0 ]; then
+  printf 'factory-audit: could not write %s (tee exited %d)\n' \
+    "$out/reconcile.txt" "$wrote" >&2
+  exit 5
+fi
+exit "$status"

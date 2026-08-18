@@ -74,6 +74,24 @@ are not happy with. Edit it into what you are willing to stand behind, and let
 Nobody is going to hand-author a contract to try a tool. That is the design
 constraint the whole pack is built around.
 
+`derive` needs to know which call sites in your tree are the outbound effects.
+That part is per-installation, and the pack ships one starting point:
+
+```bash
+gc <binding> factory derive --template gc-city
+```
+
+`gc-city` describes a Gas City built the way ours is: `gc slack`, `git push`,
+`gh pr create`, `gh pr merge`, `gc session nudge`. It is not a guess about what
+such a city looks like. It is the probe pack we corrected against a real one,
+finding each pattern by reading the call sites it missed. Copy it, run `derive`,
+read the site counts, and fix the patterns that are obviously wrong for your
+tree before you trust a single number out of it. A probe pack that matches
+nothing reports a clean factory.
+
+`--template` refuses to overwrite an existing `probes.yaml`; pass
+`--rewrite-probes` when you mean to discard your edits.
+
 ## What it can and cannot bind
 
 Three kinds of call site, and the distinction is the difference between a
@@ -125,6 +143,7 @@ It posts nothing, files nothing, and pushes nothing.
 
 1. Add the pack to `city.toml`.
 2. `gc <binding> factory setup`
-3. `gc <binding> factory derive`
+3. `gc <binding> factory derive --template gc-city`, then read the probe
+   pack it installed and correct it for your tree.
 4. Copy the derived contract to `factory.yaml` and edit it.
 5. `gc supervisor reload`
