@@ -1,0 +1,14 @@
+# The reliability kit this pack runs. Pinned by commit, not vendored.
+#
+# Vendoring the kit into the pack would put a second copy of ~2,100 lines of
+# checker source in every city that installs it, and those copies drift from
+# the one being maintained. A pin is the opposite failure mode: it can be out
+# of date, and it says so out loud, because `gc factory setup` checks out this
+# exact commit and every command reports which commit it ran.
+#
+# To move the pin: change KIT_COMMIT, re-run `gc factory setup --force`, and
+# record in the pack CHANGELOG what changed in the kit and why it matters here.
+
+KIT_REPO='https://github.com/sjarmak/software-factory-reliability.git'
+KIT_COMMIT='e74411ef2c93024d8dfbdb99847da0bb2f155b79'
+KIT_COMMIT_SUMMARY='fix(infer) an instructed site must not hide the scripted sites'

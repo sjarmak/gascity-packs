@@ -1,0 +1,130 @@
+# factory-audit
+
+Check what your city claims about its outbound effects against what its code
+actually does.
+
+## What it found in the city that wrote it
+
+Our own installation, which has more orders, formulas and reapers than anything
+we would be advising, still reads:
+
+```
+3 drift, 0 unverified, 0 confirmed, 2 open (of 5 declared)
+14 FAIL, 8 WARN
+```
+
+The specific things it surfaced, each one checkable:
+
+- **A squash merge that could lie about itself.** The merge path recorded a
+  commit that was not the one the forge produced, so a retry had no way to tell
+  a completed merge from an unstarted one. Fenced afterwards.
+- **30 of 30 agent-nudge call sites carry no `nudge_id`.** The contract said
+  they did. Every nudge redelivery in this city is free to run finished work a
+  second time, and one of them did, three times in a day.
+- **15 of 15 `git push` call sites carry no expected remote ref.** Nobody had
+  decided what identity a push should carry here, so the contract left it
+  undecided and the code matched, which is the only reason this reads as an
+  open question rather than as drift.
+- **A Slack idempotency key accepted and discarded at 0 of 16 call sites.** The
+  parameter existed, the plumbing accepted it, and nothing downstream used it.
+- **Four effects this city performs on the outside world with nothing written
+  down about half-success**, found because reconcile reported them as
+  UNDECLARED against a contract their authors believed was complete.
+
+We have not finished fixing these. That is the point of publishing the number:
+a factory with this much machinery still fails its own check, so the check is
+not a formality you pass by having good practices.
+
+## The two halves, and why one alone is worthless
+
+```bash
+gc <binding> factory audit        # reads your contract
+gc <binding> factory reconcile    # reads your code
+```
+
+`audit` runs a rule catalog over the contract you maintain. It cannot tell
+whether the contract is true. A document asserting that every effect is
+idempotent and every gate enforced scores perfectly, which is exactly how a
+reliability document becomes a liability.
+
+`reconcile` runs probes against the real tree and reports where the contract
+and the call sites disagree. This is the half that can catch you lying to
+yourself, and the half a hand-written contract will never give you.
+
+The first version of this had only the first half. Editing the contract to a
+value we had decided on turned findings green and fixed nothing, and the score
+moved by one when we declared four previously invisible effects and by zero
+when we shipped the real merge fence. A checker that reads only a declaration
+measures your prose.
+
+## Getting a contract without writing one
+
+```bash
+gc <binding> factory setup     # clone the pinned checker into the city, once
+gc <binding> factory derive    # read the installation, write what it does
+cp .gc/factory-audit/factory.derived.yaml .gc/factory-audit/factory.yaml
+```
+
+`derive` walks your tree, finds the call sites that perform outbound effects,
+and reports per effect whether they carry an identity a retry could dedupe on.
+The derived file records what the code does **today**, including the parts you
+are not happy with. Edit it into what you are willing to stand behind, and let
+`reconcile` keep showing you the gap until you close it.
+
+Nobody is going to hand-author a contract to try a tool. That is the design
+constraint the whole pack is built around.
+
+## What it can and cannot bind
+
+Three kinds of call site, and the distinction is the difference between a
+report you can trust and one you cannot:
+
+| Kind | What it is | Counted? |
+| --- | --- | --- |
+| scripted | a line of code a static check can read | yes, and identity is checked |
+| instructed | a sentence in a formula or prompt telling an agent to do it | reported, never counted as carrying an identity |
+| harness | test and checker code | subtracted, but printed |
+
+An instructed site has no argv until runtime, so no matcher can bind it. It
+withdraws the identity rather than being ignored, because the errors are not
+symmetric: a **missed** call site confirms an identity that does not hold, and
+a **spurious** one withdraws an identity that might have held. The matcher is
+allowed to err only in the second direction, and every judgment call in it
+went that way.
+
+That is also why `open` is a verdict rather than a failure. Some effects have
+no identity to look for because nobody decided what one would be; reporting
+that as a failed search is a false reading, since the search had no target.
+
+## The checker is pinned, not vendored
+
+`kit.pin` names a repository and a commit. `gc factory setup` clones it into
+`<city>/.gc/factory-kit` and checks out that exact commit.
+
+Copying the checker into the pack would put a second copy in every city that
+installs it, and those copies drift from the one being maintained, quietly. A
+pin goes stale loudly: every command prints the commit it ran and prints a
+`DRIFT` line when that is not the pinned one.
+
+`setup` is the only command that writes outside the report directory or reaches
+the network. Everything else fails with an instruction when the kit is missing,
+so the scheduled order can never pull code onto the machine on its own. Set
+`FACTORY_KIT_HOME` to use a checkout you already have.
+
+## The order
+
+`orders/factory-drift.toml` reconciles once a day and goes actionable only when
+the contract has gone out of date with the code. It is deliberately not the
+audit: audit reads the contract alone, so a scheduled version reports the same
+findings every run until someone edits a document, which is a reminder rather
+than a check. Reconcile's result changes when the code changes.
+
+It posts nothing, files nothing, and pushes nothing.
+
+## Install
+
+1. Add the pack to `city.toml`.
+2. `gc <binding> factory setup`
+3. `gc <binding> factory derive`
+4. Copy the derived contract to `factory.yaml` and edit it.
+5. `gc supervisor reload`

@@ -158,6 +158,40 @@ def discover_formulas(pack_dir: Path) -> set[str]:
     return {path.name.split(".", 1)[0] for path in formulas_dir.glob("*.formula.toml")}
 
 
+def discover_orders(pack_dir: Path) -> set[str]:
+    """The order names a pack ships, from its `orders/` directory.
+
+    Read from the filenames rather than from the `[order]` tables, because the
+    name gc registers is the filename stem -- a pack whose TOML parses and
+    whose file is named something gc will not register is exactly the failure
+    this discovery exists to expose.
+    """
+    orders_dir = pack_dir / "orders"
+    if not orders_dir.is_dir():
+        return set()
+    return {path.stem for path in orders_dir.glob("*.toml")}
+
+
+def registered_orders(gc_test_bin: Path, workspace: Workspace) -> set[str]:
+    """Order names a running gc actually loaded in this city.
+
+    `gc order list --json` is used rather than `order check` because check
+    reads each order's last run out of the bead store, and the scratch city has
+    none. Loading is the property under test; scheduling is not.
+    """
+    result = run_gc(gc_test_bin, workspace, "order", "list", "--json")
+    assert result.returncode == 0, (
+        "gc order list --json exited %d; an absent name in this output is a "
+        "failed command, not an unregistered order. Output:\n%s"
+        % (result.returncode, result.stdout + result.stderr)
+    )
+    # stdout only. gc writes advisory warnings for the scratch city (no builtin
+    # packs, no bead store) to stderr, and concatenating the two streams the way
+    # `gc_output` does leaves the payload followed by prose.
+    payload = json.loads(result.stdout)
+    return {order["name"] for order in payload.get("orders") or []}
+
+
 def write_canary_pack(root: Path) -> Path:
     """A pack whose one formula declares the deprecated contract on purpose."""
     pack_dir = root / "canary-pack"

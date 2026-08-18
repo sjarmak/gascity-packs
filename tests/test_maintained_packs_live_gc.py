@@ -37,8 +37,10 @@ from gc_live_city import (
     discover_agents,
     discover_command_words,
     discover_formulas,
+    discover_orders,
     gc_output,
     gc_test_bin,  # noqa: F401 -- pytest fixture, used by name
+    registered_orders,
     write_canary_pack,
     write_city,
 )
@@ -48,6 +50,7 @@ from gc_live_city import (
 # cost of bringing it under live-gc coverage; everything below derives from the
 # pack's own contents.
 MAINTAINED_PACKS = (
+    "factory-audit",
     "oversight-rig",
     "pr-pipeline",
     "slack-channel",
@@ -61,6 +64,7 @@ MAINTAINED_PACKS = (
 # Anything not written down is a regression, and removing an entry without
 # removing its cause is caught too, because the assertion is equality.
 EXPECTED_DOCTOR_DELTA: dict[str, frozenset[str]] = {
+    "factory-audit": frozenset(),
     "oversight-rig": frozenset(),
     "pr-pipeline": frozenset(),
     "slack-channel": frozenset(),
@@ -239,4 +243,36 @@ def test_pack_agents_resolve_through_a_city(
         f"agent roles {pack} ships did not resolve in a city that imports it: "
         + ", ".join(sorted(missing))
         + f"\nOutput:\n{listed}"
+    )
+
+
+@pytest.mark.parametrize("pack", MAINTAINED_PACKS)
+def test_pack_orders_load_in_a_running_city(
+    pack: str, tmp_path: Path, gc_test_bin: Path  # noqa: F811
+) -> None:
+    """An order file that parses as TOML is not an order gc will run.
+
+    `gc lint` reports `ok` on a pack whose order sets `cooldown = "24h"` under a
+    cooldown trigger; the running binary refuses the same file with `cooldown
+    trigger requires interval` and drops it. Nothing else in this suite would
+    notice, because a dropped order changes no command, no agent, and no doctor
+    finding -- the scheduled surface simply is not there.
+
+    Measured on factory-audit while it was being written, which is why this test
+    exists at all.
+    """
+    shipped = discover_orders(pack_dir(pack))
+    if not shipped:
+        pytest.skip(f"{pack} ships no orders")
+
+    imports, rig_imports = wiring(pack)
+    workspace = write_city(tmp_path, imports, rig_imports)
+    loaded = registered_orders(gc_test_bin, workspace)
+
+    missing = shipped - loaded
+    assert not missing, (
+        f"{pack} ships orders/ files that a running gc did not register: "
+        f"{sorted(missing)}. It loaded {sorted(loaded)}. Run `gc order list` in "
+        f"a city importing {pack} to read why -- a rejected order is reported "
+        f"there and nowhere else."
     )
