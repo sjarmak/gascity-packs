@@ -391,7 +391,8 @@ def load_directory() -> dict[str, Any]:
     path = company_directory_path()
     if not path.exists():
         raise DirectoryError(
-            f"no company directory at {path}; run `gc slack import-company-directory` first")
+            f"no company directory at {path}; run "
+            f"`{common.command_prog('import-company-directory')}` first")
     raw = _read_registry_bytes(path, "company directory")
     try:
         data = json.loads(raw.decode("utf-8"))
@@ -900,7 +901,7 @@ def cmd_peers(args: argparse.Namespace) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="slack_company_directory",
+        prog=common.command_prog(),
         description="Company-directory CLI surface for the slack-full pack.",
     )
     sub = parser.add_subparsers(dest="command", required=True)
@@ -966,4 +967,4 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    sys.exit(common.run(main, sys.argv[1:]))

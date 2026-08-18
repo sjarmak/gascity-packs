@@ -191,6 +191,7 @@ def _maybe_company_reply(args: argparse.Namespace) -> int | None:
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
+        prog=common.command_prog("reply-current"),
         description="Reply to the latest Slack inbound event seen by the current session",
     )
     parser.add_argument("--session", default="", help="Override session id")
@@ -324,4 +325,4 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    sys.exit(common.run(main, sys.argv[1:], "reply-current"))

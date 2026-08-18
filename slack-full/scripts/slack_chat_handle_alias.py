@@ -23,6 +23,7 @@ import slack_intake_common as common
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
+        prog=common.command_prog("handle-alias"),
         description="Register a handle -> session alias with the slack adapter",
     )
     parser.add_argument("--handle", required=True,
@@ -70,4 +71,4 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    sys.exit(common.run(main, sys.argv[1:], "handle-alias"))

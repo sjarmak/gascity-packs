@@ -1,0 +1,56 @@
+# Commands tests/test_pack_instructions_live_gc.py may EXECUTE against a real
+# gc in a throwaway city, one per line, as the words that follow the binding.
+#
+# The bar for a line here is that running the command in a city that has
+# nothing set up performs no effect outside that city: no network, no writes
+# beyond the scratch city, nothing published. It is hand-written because that
+# is not a property of the directory tree -- this pack's 26 verbs sit on two
+# backends, six on a Go CLI and twenty on python scripts, and what separates
+# the safe ones is where each stops validating.
+
+# Go-backed. The pack ships its binaries as source, so on any install that has
+# not built them these six stop in sf_require_cli, which is the first thing a
+# new user meets and is the reason it now says so.
+enable-room-launch   # `the operator CLI is not built`, exit 1
+import-app           # same
+map-channel          # same
+map-rig              # same
+post-message         # same
+sync-commands        # same
+
+# Python-backed, dying inside argparse. A change that gives one of these a
+# default for the argument it currently demands takes it off this list.
+bind-company-agent   # `--room, --agent, --session are required`, exit 2
+bind-dm              # `conversation_id, session_name are required`, exit 2
+bind-room            # `conversation_id, session_names are required`, exit 2
+company-redact       # `one of --receipt --origin is required`, exit 2
+company-redrive      # `one of --receipt --origin is required`, exit 2
+delegate             # `--to is required`, exit 2
+handle-alias         # `--handle is required`, exit 2
+import-company-directory  # `--file is required`, exit 2
+publish-to-channel   # `--conversation-id is required`, exit 2
+register-agent-app   # `--team-id, --api-app-id are required`, exit 2
+upload               # `--file is required`, exit 2
+
+# Python-backed, dying in their own checks after argparse but before any call.
+bind-company-dm      # `--agent is required`, exit 1
+identity             # `no identity fields supplied`, exit 1
+peers                # `no company directory at ...`, exit 1
+publish              # `either --body or --body-file is required`, exit 1
+reply-current        # `either --body or --body-file is required`, exit 1
+
+# NOT here, and each for a stated reason rather than for being untried:
+#
+# status, company-status
+#             -- both are safe: they query a local adapter that is not
+#                running and report the refusal. They exit 0 and print no
+#                instruction at all, so listing them would assert nothing.
+# react       -- the one verb that would reach Slack with no arguments at all.
+#                Run bare in a scratch city it does not decline; it dials out
+#                and dies in urllib with a traceback. That traceback is itself
+#                a defect worth fixing, and fixing it does not make the command
+#                safe to run, so it stays off this list either way.
+# retry-peer-fanout
+#             -- redelivers failed peer fanouts. It reported zero candidates
+#                here because the scratch city has no events, which is a
+#                property of the fixture and not of the command.

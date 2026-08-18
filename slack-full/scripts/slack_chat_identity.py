@@ -55,6 +55,7 @@ def _read_brief(path: pathlib.Path) -> dict[str, str]:
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
+        prog=common.command_prog("identity"),
         description="Register a per-session Slack identity override (chat:write.customize)",
     )
     parser.add_argument("--session", default="",
@@ -138,4 +139,4 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    sys.exit(common.run(main, sys.argv[1:], "identity"))

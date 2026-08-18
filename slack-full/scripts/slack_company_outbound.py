@@ -35,6 +35,8 @@ import urllib.request
 from datetime import datetime, timezone
 from typing import Any
 
+import slack_intake_common as common
+
 SCHEMA_VERSION = 1
 
 DEFAULT_SLACK_API_BASE = "https://slack.com/api"
@@ -1968,8 +1970,8 @@ def run_delegate(
             raise OutboundError(
                 f"a pending delegation to {to!r} already exists for this thread "
                 f"(record {delegation_filename(team, channel, rec['ts'])}); "
-                f"await its result or `gc slack delegate{turn_flag} "
-                f"--cancel --to {to}`")
+                f"await its result or `{common.command_prog('delegate')}"
+                f"{turn_flag} --cancel --to {to}`")
 
         tuple8 = (
             src["app_id"], requester_bot, to, responder_bot,
@@ -2310,7 +2312,8 @@ def _synthesis_gate(turn: dict[str, Any], *, allow_partial: bool) -> dict[str, A
         "delegations have durably claimed a result. Still pending:\n"
         f"{pending_lines}\n"
         "remedies: wait for the remaining sibling result wake, or "
-        f"`gc slack delegate{turn_flag} --cancel --to <agent>` for a dead sibling "
+        f"`{common.command_prog('delegate')}{turn_flag} --cancel --to <agent>` "
+        "for a dead sibling "
         "(expires it out of the compatible set, so the next claim freezes "
         "ready); or pass --allow-partial to synthesize the partial set now.")
 
@@ -2510,7 +2513,7 @@ def _load_body_arg(body: str, body_file: str) -> str:
 
 def cmd_delegate(argv: list[str]) -> int:
     import argparse
-    parser = argparse.ArgumentParser(prog="slack delegate")
+    parser = argparse.ArgumentParser(prog=common.command_prog("delegate"))
     parser.add_argument("--to", required=True, help="Target agent name (slug)")
     parser.add_argument("--body", default="")
     parser.add_argument("--body-file", default="")
@@ -2558,4 +2561,4 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    sys.exit(common.run(main, sys.argv[1:]))

@@ -50,7 +50,8 @@ def _resolve_conversation(session_id: str) -> dict[str, str]:
     if not binding:
         raise SystemExit(
             f"session {session_id!r} has no active extmsg binding; "
-            f"run `gc slack bind-dm` or `gc slack bind-room` first")
+            f"run `{common.command_prog('bind-dm')}` or "
+            f"`{common.command_prog('bind-room')}` first")
     return {
         "scope_id": binding.get("scope_id", common.gc_city_name()),
         "provider": binding.get("provider", "slack"),
@@ -63,6 +64,7 @@ def _resolve_conversation(session_id: str) -> dict[str, str]:
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
+        prog=common.command_prog("publish"),
         description="Publish a message into the conversation bound to a session",
     )
     parser.add_argument("--session", default="",
@@ -140,4 +142,4 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    sys.exit(common.run(main, sys.argv[1:], "publish"))

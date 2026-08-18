@@ -24,6 +24,76 @@ _LEGACY_ADAPTER_PUBLISH = "http://127.0.0.1:8766/publish"  # legacy nohup mode (
 DEFAULT_ADAPTER_ENV = pathlib.Path.home() / ".config" / "gc-slack-adapter" / "env"
 
 
+def command_prog(verb: str = "") -> str:
+    """What a user types to reach this command, for use as an argparse ``prog``.
+
+    argparse prints the prog on every usage line and every argument error, so it
+    is the pack's highest-traffic instruction surface -- and it was wrong in two
+    different ways. Scripts that set no prog leaked the file argparse found in
+    ``sys.argv[0]`` (``usage: slack_chat_upload.py ...``), a path the user was
+    never given and cannot invoke. Scripts that set one hardcoded ``slack``,
+    which is this city's import name and nobody else's: the pack is named
+    ``slack-full``, and the word a user types is whichever key the operator put
+    under ``[imports.<name>]``.
+
+    The resolver ships in the pack's own assets so this works from a checkout
+    with nothing installed; when it cannot name the binding it yields the
+    ``<binding>`` placeholder, which reads as a placeholder rather than as a
+    command that does not exist.
+
+    An empty ``verb`` gives the bare ``gc <binding>`` prefix, which is what a
+    parser with subcommands wants: argparse appends the subcommand name to the
+    parent prog, and those names are already the gc verbs.
+    """
+    here = pathlib.Path(__file__).resolve().parent.parent / "assets" / "scripts"
+    if str(here) not in sys.path:
+        # Appended, not inserted: this directory is the pack's, and prepending it
+        # would let a future file in it shadow a stdlib or site module for every
+        # import the running command makes after this one.
+        sys.path.append(str(here))
+    try:
+        import gc_binding
+    except ImportError:  # a checkout missing assets/ still gets a usable prog
+        return f"gc <binding> {verb}".rstrip()
+    return f"gc {gc_binding.binding_or_placeholder()} {verb}".rstrip()
+
+
+def run(entry, argv: list[str], verb: str | None = None) -> int:
+    """Run a command body, and make any failure say where its own help is.
+
+    Every failure path in this pack printed what was wrong and none of them
+    said where to look, so a user who got an argument wrong had to already know
+    the command's name to ask it for help -- and the name they would have
+    guessed is this pack's, not whatever their city bound it as.
+
+    Doing it once here rather than at each ``raise`` is deliberate: the sites
+    that print a bare sentence are spread across fifteen scripts and several
+    exception types, and a pointer added only at the ones a test happens to
+    reach is a fix shaped to the test rather than to the user. This catches
+    every shape a failure takes here -- ``SystemExit`` with a message,
+    ``SystemExit`` with a code from argparse, and a plain nonzero return.
+
+    ``verb`` defaults to the first word of ``argv``, which is what the
+    multi-verb scripts are handed by their wrappers.
+    """
+    if verb is None:
+        verb = argv[0] if argv else ""
+    pointer = f"Run: {command_prog(verb)} --help"
+    try:
+        code = entry(argv)
+    except SystemExit as stop:
+        if isinstance(stop.code, str):
+            print(stop.code, file=sys.stderr)
+            print(pointer, file=sys.stderr)
+            raise SystemExit(1) from None
+        if stop.code:
+            print(pointer, file=sys.stderr)
+        raise
+    if code:
+        print(pointer, file=sys.stderr)
+    return code
+
+
 def _maybe_load_adapter_env() -> None:
     """Load SLACK_* keys from the adapter's env file if not in os.environ.
 

@@ -49,7 +49,8 @@ def _resolve_conversation(session_id: str) -> dict[str, str]:
     if not binding:
         raise SystemExit(
             f"session {session_id!r} has no active extmsg binding; "
-            f"run `gc slack bind-dm` or `gc slack bind-room` first")
+            f"run `{common.command_prog('bind-dm')}` or "
+            f"`{common.command_prog('bind-room')}` first")
     return {
         "scope_id": binding.get("scope_id", common.gc_city_name()),
         "provider": binding.get("provider", "slack"),
@@ -62,6 +63,7 @@ def _resolve_conversation(session_id: str) -> dict[str, str]:
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
+        prog=common.command_prog("upload"),
         description="Upload a file to a session's bound Slack channel "
                     "via the local adapter (files-upload-v2)",
     )
@@ -83,7 +85,7 @@ def main(argv: list[str]) -> int:
                              "exclusive with --thread-current.")
     parser.add_argument("--thread-current", action="store_true",
                         help="Thread under the latest inbound for this session "
-                             "(same logic as `gc slack reply-current`). "
+                             f"(same logic as `{common.command_prog('reply-current')}`). "
                              "Mutually exclusive with --thread-ts.")
     parser.add_argument("--idempotency-key", default="",
                         help="Caller-supplied idempotency key for retries.")
@@ -168,4 +170,4 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    sys.exit(common.run(main, sys.argv[1:], "upload"))

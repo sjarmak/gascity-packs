@@ -32,6 +32,8 @@ import sys
 import tempfile
 from typing import Any
 
+import slack_intake_common as common
+
 SCHEMA_VERSION = 1
 
 # Slack identifier shapes. api_app_id and team_id are opaque uppercase Slack ids
@@ -259,7 +261,7 @@ def _resolve_secret(args: argparse.Namespace) -> str:
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
-        prog="slack register-agent-app",
+        prog=common.command_prog("register-agent-app"),
         description="Register a per-agent Slack app's signing secret for "
                     "app-bound DM signature verification.",
     )
@@ -287,4 +289,4 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    sys.exit(common.run(main, sys.argv[1:], "register-agent-app"))

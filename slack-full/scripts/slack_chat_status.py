@@ -153,6 +153,7 @@ def format_status(status: dict[str, Any]) -> str:
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
+        prog=common.command_prog("status"),
         description="Show slack pack status: adapters, bindings, recent traffic",
     )
     parser.add_argument("--session", default="",
@@ -185,4 +186,4 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    sys.exit(common.run(main, sys.argv[1:], "status"))

@@ -27,6 +27,7 @@ def _slack_workspace_id() -> str:
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
+        prog=common.command_prog("bind-dm"),
         description="Bind a Slack conversation to one or more named gc sessions",
     )
     parser.add_argument("--kind", required=True, choices=("dm",))
@@ -71,4 +72,4 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    sys.exit(common.run(main, sys.argv[1:], "bind-dm"))

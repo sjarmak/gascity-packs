@@ -1,9 +1,8 @@
 #!/bin/sh
 set -eu
 
-if [ -z "${GC_PACK_DIR:-}" ]; then
-  echo "gc slack company-redact: missing Gas City pack context" >&2
-  exit 1
-fi
+. "$(dirname "$0")/_lib.sh"
+
+sf_require_pack_context company-redact
 
 exec python3 "$GC_PACK_DIR/scripts/slack_company_admin.py" company-redact "$@"

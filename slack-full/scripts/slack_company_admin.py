@@ -35,6 +35,7 @@ import time
 from typing import Any
 
 import slack_company_outbound as outbound
+import slack_intake_common as common
 
 DEFAULT_INTERNAL_LISTEN = "127.0.0.1:8766"
 
@@ -203,7 +204,7 @@ def _collect_local_state(
 
 
 def cmd_company_status(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(prog="slack company-status")
+    parser = argparse.ArgumentParser(prog=common.command_prog("company-status"))
     parser.add_argument("--receipt", default="", help="Scope receipts to one receipt id")
     parser.add_argument("--origin", default="", help="<team>:<channel>:<ts>")
     parser.add_argument("--root", default="", help="<team>:<channel>:<root_ts>")
@@ -292,7 +293,7 @@ def _warn_unresolvable_targets(unresolvable: Any) -> None:
 
 
 def cmd_company_redrive(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(prog="slack company-redrive")
+    parser = argparse.ArgumentParser(prog=common.command_prog("company-redrive"))
     selector = parser.add_mutually_exclusive_group(required=True)
     selector.add_argument("--receipt", default="", help="Receipt id to redrive")
     selector.add_argument("--origin", default="", help="<team>:<channel>:<ts>")
@@ -356,7 +357,7 @@ def cmd_company_redrive(argv: list[str]) -> int:
 # --- company-redact --------------------------------------------------------
 
 def cmd_company_redact(argv: list[str]) -> int:
-    parser = argparse.ArgumentParser(prog="slack company-redact")
+    parser = argparse.ArgumentParser(prog=common.command_prog("company-redact"))
     selector = parser.add_mutually_exclusive_group(required=True)
     selector.add_argument("--receipt", default="", help="Receipt id whose body to redact")
     selector.add_argument("--origin", default="", help="<team>:<channel>:<ts>")
@@ -428,4 +429,4 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    sys.exit(common.run(main, sys.argv[1:]))

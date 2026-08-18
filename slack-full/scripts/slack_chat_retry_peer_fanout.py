@@ -120,6 +120,7 @@ def _cooldown(seconds: float) -> None:
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
+        prog=common.command_prog("retry-peer-fanout"),
         description="Retry failed Slack peer-fanout deliveries.",
     )
     parser.add_argument("--since", default=DEFAULT_SINCE,
@@ -226,4 +227,4 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    sys.exit(common.run(main, sys.argv[1:], "retry-peer-fanout"))

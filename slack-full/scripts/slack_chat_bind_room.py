@@ -29,6 +29,12 @@ import slack_intake_common as common
 # bind (idempotent — duplicate nudges are harmless). Without this, a
 # participant session that respawned after the original bind would lose
 # the protocol contract and revert to its baseline prompt's reply path.
+#
+# `{gc}` is filled in at send time with the word this city reaches the pack by.
+# It is the highest-stakes instruction surface in the pack: the reader is an
+# autonomous agent that will run what this text says, and `gc slack react` is
+# not a command on any city that bound the pack under another name. `gc
+# transcript read --ack` below is a gc builtin and is correct verbatim.
 PROTOCOL_NUDGE_TEMPLATE = """<system-reminder>
 Slack channel binding established for {conversation_id}.
 You are a slack-bound agent in this conversation.
@@ -37,7 +43,7 @@ Reply protocol when you receive a `New message in shared conversation slack/...`
 
   1. **FIRST**: react with writing_hand — BEFORE you compose anything, BEFORE you
      read context, BEFORE you think about the reply.
-       gc slack react --emoji writing_hand
+       {gc} react --emoji writing_hand
      This signals to the human that you are actively working on the message.
      The adapter already placed 👀 on the message when it enqueued the inbound
      (transport-level ack: "queued for the agent"). Your ✍️ is the agent-level
@@ -47,7 +53,7 @@ Reply protocol when you receive a `New message in shared conversation slack/...`
   2. THEN compose your reply to a tmpfile.
 
   3. THEN publish as a threaded reply (NOT publish-to-channel):
-       gc slack reply-current --body-file <tmpfile> --thread-current
+       {gc} reply-current --body-file <tmpfile> --thread-current
 
   4. THEN ack so the inbound is marked read:
        gc transcript read --ack
@@ -56,7 +62,7 @@ The order is non-negotiable even when you have an instant answer. Even
 when the inbound is a re-ping of an active thread. Even when it's a
 "ping" or "ack". React first, every time.
 
-Use `gc slack publish-to-channel --conversation-id ... --no-thread` ONLY
+Use `{gc} publish-to-channel --conversation-id ... --no-thread` ONLY
 for explicit top-level status broadcasts initiated by you, never as a
 reply to an inbound. The writing_hand react is for inbound-replies only —
 proactive posts (e.g. surfacing slung work completion) skip the react and
@@ -72,7 +78,8 @@ def deliver_protocol_nudge(session_id: str, conversation_id: str) -> None:
     missing) are logged to stderr and do not abort the bind. The nudge is
     idempotent so re-delivery on every bind is safe.
     """
-    body = PROTOCOL_NUDGE_TEMPLATE.format(conversation_id=conversation_id)
+    body = PROTOCOL_NUDGE_TEMPLATE.format(
+        conversation_id=conversation_id, gc=common.command_prog())
     try:
         result = subprocess.run(
             ["gc", "session", "nudge", session_id, body],
@@ -200,6 +207,7 @@ def build_participants(
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
+        prog=common.command_prog("bind-room"),
         description="Bind a Slack room/channel to one or more named gc sessions",
     )
     parser.add_argument("conversation_id", help="Slack channel id (e.g. C0123ROOM01)")
@@ -340,4 +348,4 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    sys.exit(common.run(main, sys.argv[1:], "bind-room"))

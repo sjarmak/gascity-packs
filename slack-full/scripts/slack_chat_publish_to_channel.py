@@ -35,6 +35,7 @@ def _load_body(args: argparse.Namespace) -> str:
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
+        prog=common.command_prog("publish-to-channel"),
         description="Publish into a Slack channel by id, bypassing gc binding lookup",
     )
     parser.add_argument("--conversation-id", required=True,
@@ -97,4 +98,4 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    sys.exit(common.run(main, sys.argv[1:], "publish-to-channel"))

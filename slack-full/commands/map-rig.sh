@@ -1,9 +1,9 @@
 #!/bin/sh
 set -eu
 
-if [ -z "${GC_PACK_DIR:-}" ]; then
-  echo "gc slack map-rig: missing Gas City pack context" >&2
-  exit 1
-fi
+. "$(dirname "$0")/_lib.sh"
+
+sf_require_pack_context map-rig
+sf_require_cli map-rig
 
 exec "$GC_PACK_DIR/cli/gc-slack-cli" map-rig "$@"

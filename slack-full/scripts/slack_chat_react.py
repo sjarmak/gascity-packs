@@ -24,6 +24,7 @@ import slack_intake_common as common
 
 def main(argv: list[str]) -> int:
     parser = argparse.ArgumentParser(
+        prog=common.command_prog("react"),
         description=(
             "Add an emoji reaction to the latest inbound Slack message "
             "for this session, or to an explicit (channel, ts) pair."
@@ -100,4 +101,4 @@ def main(argv: list[str]) -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    sys.exit(common.run(main, sys.argv[1:], "react"))

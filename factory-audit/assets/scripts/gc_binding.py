@@ -14,6 +14,11 @@ nothing and exits 1 so the caller can fall back to the `<binding>` placeholder
 the README uses. A guess would be worse than the placeholder: a placeholder is
 visibly a placeholder, and a wrong concrete name is not.
 
+Shell callers run this as a script and read stdout. Python callers import it
+and call `binding_or_placeholder()`, which is the same answer without a
+subprocess -- slack-full needs it inside argparse, where a `prog` is built
+before any command runs.
+
 Environment: GC_CITY_PATH, GC_PACK_DIR (both set by gc).
 Exit: 0 printed one binding; 1 could not determine exactly one.
 """
@@ -27,7 +32,7 @@ import sys
 try:
     import tomllib
 except ModuleNotFoundError:  # Python < 3.11: no parser, so no answer.
-    sys.exit(1)
+    tomllib = None  # type: ignore[assignment]
 
 
 def import_tables(manifest: dict) -> list[dict]:
@@ -70,24 +75,33 @@ def bindings_for(manifest: dict, city: str, pack_dir: str) -> set[str]:
 TYPEABLE = re.compile(r"\A[A-Za-z0-9][A-Za-z0-9._-]*\Z")
 
 
-def main() -> int:
+# What an instruction prints when the binding is not knowable. A placeholder
+# reads as a placeholder; a concrete guess reads as a command, and is wrong on
+# every city that bound the pack under some other name.
+PLACEHOLDER = "<binding>"
+
+
+def resolve() -> str | None:
+    """The single word this pack is reached by, or None if that is not knowable."""
+    if tomllib is None:
+        return None
     city = os.environ.get("GC_CITY_PATH") or ""
     pack_dir = os.environ.get("GC_PACK_DIR") or ""
     if not city or not pack_dir:
-        return 1
+        return None
     try:
         with open(os.path.join(city, "pack.toml"), "rb") as handle:
             manifest = tomllib.load(handle)
     except (OSError, ValueError):
-        return 1
+        return None
     if not isinstance(manifest, dict):
-        return 1
+        return None
 
     names = bindings_for(manifest, city, pack_dir)
     # A pack bound twice has two correct answers and no way to pick between
     # them, so it gets the placeholder rather than whichever one sorted first.
     if len(names) != 1:
-        return 1
+        return None
     binding = next(iter(names))
     # TOML permits a quoted key holding anything, including a slash, an
     # ampersand or a newline. A name like that cannot be typed as `gc <word>`
@@ -96,6 +110,18 @@ def main() -> int:
     # where those characters would break the substitution rather than being
     # printed. Refuse it and let the caller fall back to the placeholder.
     if not TYPEABLE.match(binding):
+        return None
+    return binding
+
+
+def binding_or_placeholder() -> str:
+    """`resolve()` with the fallback every caller wants, for use in a message."""
+    return resolve() or PLACEHOLDER
+
+
+def main() -> int:
+    binding = resolve()
+    if binding is None:
         return 1
     print(binding)
     return 0
