@@ -18,7 +18,7 @@ multi-rig routing — those live in `slack-channel` (Tier 2) and `slack-full`
 
 - **Inbound:** `@gc-mayor what's the convoy status?` in any channel the bot
   is in → delivered to your gc mayor session.
-- **Outbound:** `gc slack-mini post-message --channel C0123 --text "…"` →
+- **Outbound:** `gc <binding> post-message --channel C0123 --text "…"` →
   posts to a channel, optionally in a thread.
 
 ## Install in 3 minutes
@@ -84,7 +84,7 @@ When the mayor session handles an inbound mention, the conversation carries
 the Slack message `ts` as its reply-to id. Answer in the same thread with:
 
 ```sh
-gc slack-mini post-message --channel C0123 \
+gc <binding> post-message --channel C0123 \
   --thread-ts 1700000000.0001 --text "on it — see PR #42"
 ```
 

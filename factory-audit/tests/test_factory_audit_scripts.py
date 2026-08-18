@@ -169,6 +169,37 @@ def test_the_placeholder_stands_in_when_the_binding_cannot_be_read(
     assert "gc <binding> factory setup" in result.stdout, result.stdout
 
 
+def test_a_binding_that_cannot_be_typed_gets_the_placeholder(
+    tmp_path: Path,
+) -> None:
+    """A quoted TOML key can hold a slash, and this one is a single match.
+
+    So the count check the test above exercises passes, and the name still is
+    not an answer: nobody reaches a pack by typing `gc weird/name`. It matters
+    beyond tidiness because every caller interpolates this value into a `sed`
+    expression to fill the placeholder in its help text, where a slash ends the
+    substitution and the help stops printing at all. The resolver refuses it
+    and the caller falls back, so the failure is a visible placeholder rather
+    than a missing page.
+    """
+    tmp_path.joinpath("pack.toml").write_text(
+        textwrap.dedent(
+            f"""\
+            [pack]
+            name = "city-under-test"
+            schema = 2
+
+            [imports."weird/name"]
+            source = {str(PACK)!r}
+            """
+        )
+    )
+    result = run(ORDER, tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "gc <binding> factory setup" in result.stdout, result.stdout
+    assert "weird/name" not in result.stdout, result.stdout
+
+
 def test_the_order_goes_red_when_the_checker_reports_drift(tmp_path: Path) -> None:
     """The other rail. Without this, the two greens above are indistinguishable
     from a wrapper that swallows every exit status it is handed.

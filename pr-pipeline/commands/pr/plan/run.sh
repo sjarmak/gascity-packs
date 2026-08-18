@@ -13,13 +13,14 @@
 
 set -eu
 
+. "$(dirname "$0")/../../_lib.sh"
+
 if [ -z "${GC_PACK_DIR:-}" ]; then
-    echo "gc pr-pipeline pr plan: missing Gas City pack context" >&2
-    exit 1
+    pr_die plan "missing Gas City pack context" 1
 fi
 
 if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ] || [ -z "${1:-}" ]; then
-    cat "$GC_PACK_DIR/commands/pr/plan/help.md"
+    pr_help plan
     [ -z "${1:-}" ] && exit 2 || exit 0
 fi
 
@@ -28,8 +29,7 @@ shift
 
 case "$ISSUE" in
     ''|*[!0-9]*)
-        echo "gc pr-pipeline pr plan: <issue> must be a positive integer (got: $ISSUE)" >&2
-        exit 2
+        pr_die plan "<issue> must be a positive integer (got: $ISSUE)" 2
         ;;
 esac
 
@@ -43,8 +43,7 @@ while [ $# -gt 0 ]; do
         --agent)      AGENT="$2"; shift 2 ;;
         --agent=*)    AGENT="${1#--agent=}"; shift ;;
         *)
-            echo "gc pr-pipeline pr plan: unknown argument: $1" >&2
-            exit 2
+            pr_die plan "unknown argument: $1" 2
             ;;
     esac
 done
@@ -54,21 +53,22 @@ if [ -z "$RIG" ]; then
 fi
 
 if [ -z "$RIG" ]; then
+    echo "pr-pipeline pr plan: rig is required." >&2
     cat >&2 <<'EOF'
-gc pr-pipeline pr plan: rig is required.
 
 Pass --rig <name> or run inside a rig session where GC_RIG is set.
 
 The planner formula needs to run inside a rig's git worktree to read the
 issue and produce the structured plan. Pick the rig whose repository
 contains the issue's code.
+
 EOF
+    pr_hint plan
     exit 2
 fi
 
 if ! command -v gc >/dev/null 2>&1; then
-    echo "gc pr-pipeline pr plan: gc binary not in PATH" >&2
-    exit 1
+    pr_die plan "gc binary not in PATH" 1
 fi
 
 exec gc sling "$RIG/$AGENT" mol-pr-start --formula --var "issue=$ISSUE"

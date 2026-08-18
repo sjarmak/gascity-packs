@@ -1,5 +1,5 @@
 #!/bin/sh
-# gc slack-channel react — add an emoji reaction to the latest inbound Slack
+# gc <binding> react — add an emoji reaction to the latest inbound Slack
 # message for this session, or to an explicit (channel, ts) pair.
 set -eu
 . "$(dirname "$0")/_lib.sh"

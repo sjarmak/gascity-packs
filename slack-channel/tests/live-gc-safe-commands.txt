@@ -1,0 +1,28 @@
+# Commands tests/test_pack_instructions_live_gc.py may EXECUTE against a real
+# gc in a throwaway city, one per line, as the words that follow the binding.
+#
+# The bar for a line here is that running the command in a city that has
+# nothing set up performs no effect outside that city: no network, no writes
+# beyond the scratch city, nothing published. It is hand-written because that
+# is not a property of the directory tree: every verb below ends in `sc_call`,
+# which POSTs to the adapter, and the only thing separating the safe ones from
+# the rest is where each stops validating.
+#
+# Each line below dies inside its own argument handling, before sc_call. A
+# change that gives one of them a default for the argument it currently
+# demands takes it off this list.
+
+bind-dm              # `usage: bind-dm <channel_id> <session_id>...`, exit 2
+bind-room            # `usage: bind-room <channel_id> <session_id>...`, exit 2
+handle-alias         # `--handle is required`, exit 2
+identity             # `supply at least one of --as, --avatar-url, --avatar-emoji`
+publish              # `either --body or --body-file is required`, exit 2
+publish-to-channel   # `--channel is required`, exit 2
+reply-current        # `either --body or --body-file is required`, exit 2
+
+# react is NOT here, and it is the one verb in this pack that would POST with
+# no arguments at all: every flag it takes has a default or is optional, so
+# with GC_SESSION_ID set it falls straight through to `sc_call POST react`.
+# In a scratch city GC_SESSION_ID is unset and it happens to die in
+# sc_session, but that is a property of the test environment rather than of
+# the command, and a declaration that relies on one is not a declaration.

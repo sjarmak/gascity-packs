@@ -1,5 +1,5 @@
 #!/bin/sh
-# gc slack-channel publish — post into the channel a session is bound to.
+# gc <binding> publish — post into the channel a session is bound to.
 #
 # Resolves the session's channel binding (run bind-dm/bind-room first) and
 # posts there, applying the session's identity override if one is set.

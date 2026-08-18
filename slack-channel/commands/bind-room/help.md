@@ -11,15 +11,15 @@ Single-rig only at Tier 2 — binding a channel to a whole rig (and
 channel-name patterns) is Tier 3 (slack-full).
 
 Usage:
-  gc slack-channel bind-room <channel_id> <session_id> [session_id...]
+  gc <binding> bind-room <channel_id> <session_id> [session_id...]
 
 Arguments:
   channel_id   Slack channel id (e.g. C0123ABCD or G0123ABCD).
   session_id   One or more gc session ids to deliver inbound messages to.
 
 Examples:
-  gc slack-channel bind-room C0123ABCD sess-pl
-  gc slack-channel bind-room C0123ABCD sess-pl sess-cos sess-reviewer
+  gc <binding> bind-room C0123ABCD sess-pl
+  gc <binding> bind-room C0123ABCD sess-pl sess-cos sess-reviewer
 
 On success, prints the stored binding as JSON. The binding is persisted to
 <city>/.gc/slack-channel/channel_mappings.json.

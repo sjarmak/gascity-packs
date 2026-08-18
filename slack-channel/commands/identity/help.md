@@ -11,9 +11,9 @@ for the override to take effect — without it, Slack ignores the
 username/icon and the post falls through under the default bot identity.
 
 Usage:
-  gc slack-channel identity [--session <id>] --as <name>
+  gc <binding> identity [--session <id>] --as <name>
                             [--avatar-url <url> | --avatar-emoji <name>]
-  gc slack-channel identity [--session <id>] --remove
+  gc <binding> identity [--session <id>] --remove
 
 Flags:
   --session       Session to set identity for (default: $GC_SESSION_ID).
@@ -27,9 +27,9 @@ At least one of --as / --avatar-url / --avatar-emoji is required unless
 --remove is given.
 
 Examples:
-  gc slack-channel identity --as "Gas City PL" --avatar-emoji robot_face
-  gc slack-channel identity --session sess-pl --as "Reviewer"
-  gc slack-channel identity --remove
+  gc <binding> identity --as "Gas City PL" --avatar-emoji robot_face
+  gc <binding> identity --session sess-pl --as "Reviewer"
+  gc <binding> identity --remove
 
 On success, prints the adapter's JSON receipt.
 

@@ -14,13 +14,14 @@
 
 set -eu
 
+. "$(dirname "$0")/../../_lib.sh"
+
 if [ -z "${GC_PACK_DIR:-}" ]; then
-    echo "gc pr-pipeline pr blast-radius: missing Gas City pack context" >&2
-    exit 1
+    pr_die blast-radius "missing Gas City pack context" 1
 fi
 
 if [ "${1:-}" = "--help" ] || [ "${1:-}" = "-h" ] || [ -z "${1:-}" ]; then
-    cat "$GC_PACK_DIR/commands/pr/blast-radius/help.md"
+    pr_help blast-radius
     [ -z "${1:-}" ] && exit 2 || exit 0
 fi
 
@@ -40,8 +41,7 @@ while [ $# -gt 0 ]; do
         --key)        KEY="$2"; shift 2 ;;
         --key=*)      KEY="${1#--key=}"; shift ;;
         *)
-            echo "gc pr-pipeline pr blast-radius: unknown argument: $1" >&2
-            exit 2
+            pr_die blast-radius "unknown argument: $1" 2
             ;;
     esac
 done
@@ -51,13 +51,11 @@ if [ -z "$RIG" ]; then
 fi
 
 if [ -z "$RIG" ]; then
-    echo "gc pr-pipeline pr blast-radius: --rig <name> required (or set GC_RIG)" >&2
-    exit 2
+    pr_die blast-radius "--rig <name> required (or set GC_RIG)" 2
 fi
 
 if ! command -v gc >/dev/null 2>&1; then
-    echo "gc pr-pipeline pr blast-radius: gc binary not in PATH" >&2
-    exit 1
+    pr_die blast-radius "gc binary not in PATH" 1
 fi
 
 if [ -n "$KEY" ]; then

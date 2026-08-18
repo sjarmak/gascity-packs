@@ -8,15 +8,15 @@ any channel. This lets humans address a session by name from anywhere
 "@handle" token stripped.
 
 Typical use: at startup register the well-known sessions —
-  gc slack-channel handle-alias --handle mayor --session <mayor session id>
-  gc slack-channel handle-alias --handle cos   --session <chief-of-staff id>
+  gc <binding> handle-alias --handle mayor --session <mayor session id>
+  gc <binding> handle-alias --handle cos   --session <chief-of-staff id>
 
 Single-workspace at Tier 2 — aliases are not scoped per workspace. The
 adapter persists them to <city>/.gc/slack-channel/handle_aliases.json.
 
 Usage:
-  gc slack-channel handle-alias --handle <handle> --session <id>
-  gc slack-channel handle-alias --handle <handle> --remove
+  gc <binding> handle-alias --handle <handle> --session <id>
+  gc <binding> handle-alias --handle <handle> --remove
 
 Flags:
   --handle    Handle to alias (e.g. "mayor"); a leading "@" is stripped and
@@ -25,8 +25,8 @@ Flags:
   --remove    Remove the alias. Idempotent.
 
 Examples:
-  gc slack-channel handle-alias --handle mayor --session sess-mayor
-  gc slack-channel handle-alias --handle mayor --remove
+  gc <binding> handle-alias --handle mayor --session sess-mayor
+  gc <binding> handle-alias --handle mayor --remove
 
 On success, prints the adapter's JSON receipt.
 

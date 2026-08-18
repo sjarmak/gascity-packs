@@ -1,5 +1,5 @@
 #!/bin/sh
-# gc slack-channel bind-room — bind a Slack channel to one or more sessions.
+# gc <binding> bind-room — bind a Slack channel to one or more sessions.
 #
 # A message arriving in the bound channel is delivered to every listed
 # session. Single-rig at Tier 2 (multi-rig routing is Tier 3).

@@ -1,5 +1,5 @@
 #!/bin/sh
-# gc slack-channel handle-alias — register (or remove) a handle → session
+# gc <binding> handle-alias — register (or remove) a handle → session
 # alias for address-by-handle routing from any channel.
 set -eu
 . "$(dirname "$0")/_lib.sh"

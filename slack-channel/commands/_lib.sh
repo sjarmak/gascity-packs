@@ -6,8 +6,21 @@
 # proxy and relays a JSON request. The adapter holds SLACK_BOT_TOKEN and
 # owns the on-disk registries, so secrets never enter the command env.
 
+SC_PACK_DIR=${GC_PACK_DIR:-$(cd "$(dirname "$0")/.." && pwd)}
+
+gc_binding() {
+  if _gc_binding_name=$(python3 "$SC_PACK_DIR/assets/scripts/gc_binding.py" 2>/dev/null) \
+     && [ -n "$_gc_binding_name" ]; then
+    printf '%s' "$_gc_binding_name"
+  else
+    printf '<binding>'
+  fi
+}
+
 sc_die() {
-  echo "gc slack-channel: $1" >&2
+  echo "slack-channel: $1" >&2
+  _sc_verb=${0##*/}
+  echo "Run: gc $(gc_binding) ${_sc_verb%.sh} --help" >&2
   exit "${2:-1}"
 }
 
@@ -76,7 +89,7 @@ sc_session() {
 # sc_help VERB — print the verb's help.md (relative to the verb script) and
 # exit 0.
 sc_help() {
-  cat "$(dirname "$0")/$1/help.md"
+  sed 's/<binding>/'"$(gc_binding)"'/g' "$(dirname "$0")/$1/help.md"
   exit 0
 }
 

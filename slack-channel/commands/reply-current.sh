@@ -1,5 +1,5 @@
 #!/bin/sh
-# gc slack-channel reply-current — reply into the conversation of the latest
+# gc <binding> reply-current — reply into the conversation of the latest
 # inbound message delivered to this session.
 set -eu
 . "$(dirname "$0")/_lib.sh"

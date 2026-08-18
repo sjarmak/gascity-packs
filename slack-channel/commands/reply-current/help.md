@@ -12,7 +12,7 @@ it falls back to the session's single channel binding. If there is neither a
 recent inbound nor a single binding, use `publish-to-channel`.
 
 Usage:
-  gc slack-channel reply-current [--session <id>]
+  gc <binding> reply-current [--session <id>]
                                  (--body <text> | --body-file <path>)
                                  [--thread-current | --reply-to <ts>]
                                  [--idempotency-key <key>]
@@ -31,8 +31,8 @@ Flags:
                     posting a duplicate after a delivered-but-timed-out POST.
 
 Examples:
-  gc slack-channel reply-current --body "on it" --thread-current
-  gc slack-channel reply-current --body "see PR #42"
+  gc <binding> reply-current --body "on it" --thread-current
+  gc <binding> reply-current --body "see PR #42"
 
 On success, prints the adapter's JSON receipt {"ok":true,"ts":...}.
 

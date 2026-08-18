@@ -74,7 +74,7 @@ func slackKindFromChannelType(channelType, channelID string) string {
 // optionally followed by a colon, then the rest of the message. Handles
 // are lowercase letters, digits, '_' and '-'. The capture groups are the
 // handle and the remaining text. Mirrors the alias syntax documented for
-// `gc slack-channel handle-alias`.
+// `gc <binding> handle-alias`.
 var handleAliasRE = regexp.MustCompile(`^@([a-z0-9_-]+):?\s*(.*)$`)
 
 // parseLeadingHandle extracts a leading "@handle[:]" address token. It

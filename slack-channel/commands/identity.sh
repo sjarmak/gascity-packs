@@ -1,5 +1,5 @@
 #!/bin/sh
-# gc slack-channel identity — register (or remove) a per-session Slack
+# gc <binding> identity — register (or remove) a per-session Slack
 # identity override: the username + avatar a session posts under.
 set -eu
 . "$(dirname "$0")/_lib.sh"

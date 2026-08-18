@@ -29,7 +29,7 @@ multi-rig routing, slash-command intake, peer fanout, or file upload of
 
 ## Verbs
 
-All verbs are `gc slack-channel <verb>`. Run any with `--help` for full
+All verbs are `gc <binding> <verb>`. Run any with `--help` for full
 flags.
 
 | Verb | Purpose |
@@ -110,23 +110,23 @@ gc supervises the adapter as a `proxy_process` service (named
 
 ```sh
 # Bind a channel to the PL and reviewer sessions.
-gc slack-channel bind-room C0123 sess-pl sess-reviewer
+gc <binding> bind-room C0123 sess-pl sess-reviewer
 
 # Give the PL session its own identity (call once at session start).
-gc slack-channel identity --session sess-pl --as "Gas City PL" --avatar-emoji robot_face
+gc <binding> identity --session sess-pl --as "Gas City PL" --avatar-emoji robot_face
 
 # Let humans address the mayor from any channel.
-gc slack-channel handle-alias --handle mayor --session sess-mayor
+gc <binding> handle-alias --handle mayor --session sess-mayor
 
 # A human posts in C0123 → both bound sessions receive it. The PL replies
 # in-thread:
-gc slack-channel reply-current --body "on it — see PR #42" --thread-current
+gc <binding> reply-current --body "on it — see PR #42" --thread-current
 
 # Drop a receipt on the message that just arrived.
-gc slack-channel react --emoji eyes
+gc <binding> react --emoji eyes
 
 # Unprompted status post into the bound channel.
-gc slack-channel publish --body "nightly build is green"
+gc <binding> publish --body "nightly build is green"
 ```
 
 ## Registries

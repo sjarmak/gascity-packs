@@ -4,10 +4,22 @@ A pack command is reached as `gc <binding> <verbs...>`, where the binding is the
 key the city wrote under `[imports.<name>]`. It is the city's choice, not the
 pack's: `[imports.fa] source = ".../factory-audit"` makes the pack answer to
 `fa`. Gas City hands a command `GC_PACK_NAME`, which is the PACK's name, and
-supplies nothing carrying the binding -- measured against the binary with a
-scrubbed environment, the whole `GC_*` set a command receives is `GC_BIN`,
-`GC_CITY`, `GC_CITY_NAME`, `GC_CITY_PATH`, `GC_CITY_RUNTIME_DIR`, `GC_PACK_DIR`,
-`GC_PACK_NAME`, `GC_PACK_STATE_DIR`.
+nothing carrying the binding. Measured by replacing a command's run.sh with
+`env | grep -E '^GC_' | sort` and invoking it through this file's own scratch
+city: twelve `GC_*` variables arrive (GC_BIN, GC_CITY, GC_CITY_NAME,
+GC_CITY_PATH, GC_CITY_ROOT, GC_CITY_RUNTIME_DIR, GC_CONTROL_DISPATCHER_TRACE_
+DEFAULT, GC_DISABLE_USAGE_METRICS, GC_HOME, GC_PACK_DIR, GC_PACK_NAME,
+GC_PACK_STATE_DIR, GC_RIG), some of them set by this harness rather than by
+gc, and none of them the binding. Re-run that probe rather than trusting the
+list; it is the enumeration that decays, not the conclusion.
+
+A pack therefore resolves the binding itself, out of the city's pack.toml --
+see `factory-audit/assets/scripts/gc_binding.py`, copied into each pack that
+needs it. There is one place a pack cannot reach: `gc <binding> <verb> --help`
+is answered by gc, which renders the command's `help.md` directly, so the
+script never runs and its substitution never happens. Those files keep the
+literal `<binding>`, which is visibly a placeholder rather than a wrong
+command, and fixing it needs a change in gc.
 
 So a pack that prints `Run: gc factory setup`, or that reaches for
 `GC_PACK_NAME` to build the instruction, is right on exactly one installation:
@@ -339,4 +351,60 @@ def test_the_packs_under_test_are_the_packs_this_repository_holds() -> None:
     for pack in MAINTAINED_PACKS:
         assert read_pack_manifest(pack_dir(pack)).get("pack", {}).get("name"), (
             f"{pack} has no [pack] name in {REPO_ROOT / pack / 'pack.toml'}"
+        )
+
+
+# Every pack that resolves its own binding carries its own copy of the
+# resolver, because a pack is imported on its own and cannot reach a sibling.
+RESOLVER = Path("assets") / "scripts" / "gc_binding.py"
+RESOLVER_ORIGIN = "factory-audit"
+RESOLVER_NOTE = "This file is a copy of factory-audit/assets/scripts/gc_binding.py."
+
+
+def content(text: str) -> list[str]:
+    """A file's lines with blanks and the copy note removed."""
+    return [
+        line
+        for line in text.splitlines()
+        if line.strip() and RESOLVER_NOTE not in line
+    ]
+
+
+def resolver_packs() -> list[str]:
+    return sorted(p for p in MAINTAINED_PACKS if (pack_dir(p) / RESOLVER).is_file())
+
+
+def test_the_resolver_copies_have_not_drifted_from_the_original() -> None:
+    """Four copies of one file is the price of packs being independently
+    importable, and the bill comes due when one of them is fixed alone.
+
+    The failure this catches is quiet: a pack whose copy lags is not broken,
+    it just resolves bindings by the old rule, and nothing about its own test
+    suite notices. So the copies are compared here rather than trusted, and
+    the only permitted difference is the note saying where the original lives
+    -- which is also asserted, so a copy cannot pass by being byte-identical
+    and losing its provenance.
+    """
+    origin = (pack_dir(RESOLVER_ORIGIN) / RESOLVER).read_text(encoding="utf-8")
+    copies = [p for p in resolver_packs() if p != RESOLVER_ORIGIN]
+    assert copies, (
+        "no pack outside "
+        f"{RESOLVER_ORIGIN} carries {RESOLVER}, so this test is asserting "
+        "nothing; either the copies moved or the packs stopped resolving "
+        "their binding"
+    )
+    for pack in copies:
+        text = (pack_dir(pack) / RESOLVER).read_text(encoding="utf-8")
+        assert RESOLVER_NOTE in text, (
+            f"{pack}/{RESOLVER} does not say it is a copy, so the next person "
+            f"to edit it has no way to know {RESOLVER_ORIGIN} holds the original"
+        )
+        # Compared line by line with blanks dropped, because the note sits in
+        # its own paragraph inside the docstring and the blank line around it
+        # is not drift. Every other difference is.
+        assert content(text) == content(origin), (
+            f"{pack}/{RESOLVER} has drifted from {RESOLVER_ORIGIN}'s copy. "
+            "Fix the original and re-copy it, rather than patching one pack: "
+            "a resolver that answers differently per pack is worse than one "
+            "that is wrong everywhere, because only one of those is visible."
         )

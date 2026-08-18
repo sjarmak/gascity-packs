@@ -16,6 +16,8 @@ visibly a placeholder, and a wrong concrete name is not.
 
 Environment: GC_CITY_PATH, GC_PACK_DIR (both set by gc).
 Exit: 0 printed one binding; 1 could not determine exactly one.
+
+This file is a copy of factory-audit/assets/scripts/gc_binding.py.
 """
 
 from __future__ import annotations

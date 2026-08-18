@@ -13,7 +13,7 @@ Use `reply-current` instead when you want to thread under a message that
 just arrived.
 
 Usage:
-  gc slack-channel publish [--session <id>] (--body <text> | --body-file <path>)
+  gc <binding> publish [--session <id>] (--body <text> | --body-file <path>)
                            [--reply-to <ts>]
 
 Flags:
@@ -24,8 +24,8 @@ Flags:
   --reply-to   Slack message ts to thread under (optional).
 
 Examples:
-  gc slack-channel publish --body "build is green"
-  gc slack-channel publish --session sess-pl --body-file /tmp/status.md
+  gc <binding> publish --body "build is green"
+  gc <binding> publish --session sess-pl --body-file /tmp/status.md
 
 On success, prints the adapter's JSON receipt {"ok":true,"ts":...}.
 

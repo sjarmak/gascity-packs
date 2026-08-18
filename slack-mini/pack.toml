@@ -2,7 +2,7 @@
 #
 # The minimum viable Slack→gc surface: add a bot to your workspace,
 # @-mention it from any channel, and the mention bridges to your gc mayor
-# session. One outbound verb (`gc slack-mini post-message`) posts plain
+# session. One outbound verb (`gc <binding> post-message`) posts plain
 # text back to a channel/thread.
 #
 # Pack-shipped binary:

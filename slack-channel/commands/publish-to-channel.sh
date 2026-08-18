@@ -1,5 +1,5 @@
 #!/bin/sh
-# gc slack-channel publish-to-channel — post to a channel by id, bypassing
+# gc <binding> publish-to-channel — post to a channel by id, bypassing
 # the binding lookup. The session id (if any) still drives the identity
 # override.
 set -eu

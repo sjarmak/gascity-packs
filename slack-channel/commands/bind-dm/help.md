@@ -7,15 +7,15 @@ that session) so `reply-current` and `react` can resolve "the message I
 just received".
 
 Usage:
-  gc slack-channel bind-dm <channel_id> <session_id> [session_id...]
+  gc <binding> bind-dm <channel_id> <session_id> [session_id...]
 
 Arguments:
   channel_id   Slack DM id (e.g. D0123ABCD).
   session_id   One or more gc session ids to deliver inbound messages to.
 
 Examples:
-  gc slack-channel bind-dm D0123ABCD sess-mayor
-  gc slack-channel bind-dm D0123ABCD sess-pl sess-cos
+  gc <binding> bind-dm D0123ABCD sess-mayor
+  gc <binding> bind-dm D0123ABCD sess-pl sess-cos
 
 On success, prints the stored binding as JSON. The binding is persisted to
 <city>/.gc/slack-channel/channel_mappings.json.

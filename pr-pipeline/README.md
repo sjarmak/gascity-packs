@@ -65,7 +65,7 @@ source = "../packs/pr-pipeline"   # path; or git URL when published
 ### Plan a PR for an issue
 
 ```sh
-gc pr-pipeline pr plan 1234 --rig api-server
+gc <binding> pr plan 1234 --rig api-server
 ```
 
 The formula reads the issue, runs BLOCKING gates (competing-PR and
@@ -77,7 +77,7 @@ recurring review findings. **No code is written.**
 ### Map blast radius for a freeform scope
 
 ```sh
-gc pr-pipeline pr blast-radius "FuncXYZ in pkg/foo" --rig api-server
+gc <binding> pr blast-radius "FuncXYZ in pkg/foo" --rig api-server
 ```
 
 For changes that don't start from an issue — refactors, hotfixes,
@@ -87,7 +87,7 @@ with the same analysis shape the planner runs inline.
 ### Self-review an outgoing PR
 
 ```sh
-gc pr-pipeline pr review 1234 --rig api-server
+gc <binding> pr review 1234 --rig api-server
 ```
 
 Scorecard against 11 categories (behavioral correctness, contract
@@ -99,7 +99,7 @@ debuggability). Pre-flags 7 recurring fixup themes. Verdict: `block`,
 ### Run the pre-push gate
 
 ```sh
-gc pr-pipeline pr ship --rig api-server
+gc <binding> pr ship --rig api-server
 ```
 
 Four-stage pipeline: simplify → iterate an adversarial multi-reviewer
@@ -113,7 +113,7 @@ never performs.
 Default agent for all wrappers is `polecat`. Override with `--agent`:
 
 ```sh
-gc pr-pipeline pr plan 1234 --rig api-server --agent claude
+gc <binding> pr plan 1234 --rig api-server --agent claude
 ```
 
 Or sling directly without the wrapper:

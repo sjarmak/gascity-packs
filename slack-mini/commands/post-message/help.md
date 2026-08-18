@@ -13,9 +13,9 @@ Flags:
                reply-to id) to answer in-thread.
 
 Examples:
-  gc slack-mini post-message --channel C0123 --text "build is green"
+  gc <binding> post-message --channel C0123 --text "build is green"
 
-  gc slack-mini post-message --channel C0123 \
+  gc <binding> post-message --channel C0123 \
     --thread-ts 1700000000.0001 --text "done — see PR #42"
 
 On success, prints Slack's JSON response: {"ok":true,"ts":...,"channel":...}.

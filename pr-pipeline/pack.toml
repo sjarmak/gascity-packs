@@ -29,16 +29,16 @@
 #   source = "../packs/pr-pipeline"
 #
 # Plan a PR for an issue:
-#   gc pr-pipeline pr plan 1234 --rig <rig-name>
+#   gc <binding> pr plan 1234 --rig <rig-name>
 #
 # Map blast radius:
-#   gc pr-pipeline pr blast-radius "FuncXYZ in pkg/foo" --rig <rig>
+#   gc <binding> pr blast-radius "FuncXYZ in pkg/foo" --rig <rig>
 #
 # Self-review an outgoing PR:
-#   gc pr-pipeline pr review 1234 --rig <rig>
+#   gc <binding> pr review 1234 --rig <rig>
 #
 # Run the pre-push gate:
-#   gc pr-pipeline pr ship --rig <rig>
+#   gc <binding> pr ship --rig <rig>
 
 [pack]
 name = "pr-pipeline"

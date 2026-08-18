@@ -5,8 +5,8 @@ Default mode reacts on the latest inbound message delivered to this session
 and message ts directly.
 
 Usage:
-  gc slack-channel react [--session <id>] [--emoji <name>]
-  gc slack-channel react --conversation-id <id> --message-id <ts> [--emoji <name>]
+  gc <binding> react [--session <id>] [--emoji <name>]
+  gc <binding> react --conversation-id <id> --message-id <ts> [--emoji <name>]
 
 Flags:
   --session          Override the session id (default: $GC_SESSION_ID).
@@ -17,9 +17,9 @@ Flags:
                      --conversation-id).
 
 Examples:
-  gc slack-channel react
-  gc slack-channel react --emoji white_check_mark
-  gc slack-channel react --conversation-id C0123 --message-id 1700000000.0001 --emoji tada
+  gc <binding> react
+  gc <binding> react --emoji white_check_mark
+  gc <binding> react --conversation-id C0123 --message-id 1700000000.0001 --emoji tada
 
 already_reacted is treated as success. On success, prints the adapter's
 JSON receipt.

@@ -1,5 +1,5 @@
 #!/bin/sh
-# gc slack-mini post-message — post plain text to a Slack channel/thread.
+# gc <binding> post-message — post plain text to a Slack channel/thread.
 #
 # Tier 1 has no operator CLI binary: this wrapper relays to the running
 # slack-mini adapter through gc's /svc/slack-mini reverse proxy. The
@@ -7,10 +7,41 @@
 # token never has to be present in the command environment.
 #
 # Usage:
-#   gc slack-mini post-message --channel C0123 --text "build is green"
-#   gc slack-mini post-message --channel C0123 --thread-ts 1700000000.0001 \
+#   gc <binding> post-message --channel C0123 --text "build is green"
+#   gc <binding> post-message --channel C0123 --thread-ts 1700000000.0001 \
 #       --text "follow-up in thread"
 set -eu
+
+PACK_DIR=${GC_PACK_DIR:-$(cd "$(dirname "$0")/.." && pwd)}
+
+# gc_binding prints the word a user types after `gc` to reach this pack, or
+# the literal `<binding>` when that cannot be determined. See
+# assets/scripts/gc_binding.py for why a placeholder beats a guess.
+gc_binding() {
+  if _gc_binding_name=$(python3 "$PACK_DIR/assets/scripts/gc_binding.py" 2>/dev/null) \
+     && [ -n "$_gc_binding_name" ]; then
+    printf '%s' "$_gc_binding_name"
+  else
+    printf '<binding>'
+  fi
+}
+
+# hint — the "how to read the help" line. Every failure prints it, not the
+# ones whose text happens to read like a usage error: which error path an
+# author was looking at is not a property a user can see.
+hint() {
+  echo "Run: gc $(gc_binding) post-message --help" >&2
+}
+
+# die MESSAGE [EXIT] — say which command failed, then how to read its help.
+# The message deliberately does not start with `gc `: it names the failing
+# command rather than something to type, which is what makes any `gc ` this
+# pack prints an instruction that has to carry the binding.
+die() {
+  echo "slack-mini post-message: $1" >&2
+  hint
+  exit "${2:-2}"
+}
 
 channel=""
 text=""
@@ -19,8 +50,7 @@ thread_ts=""
 require_value() {
   # $1 = flag name, $2 = arg count remaining (including the flag itself)
   if [ "$2" -lt 2 ]; then
-    echo "gc slack-mini post-message: $1 requires a value" >&2
-    exit 2
+    die "$1 requires a value" 2
   fi
 }
 
@@ -33,31 +63,27 @@ while [ $# -gt 0 ]; do
     --text=*)      text="${1#*=}"; shift ;;
     --thread-ts=*) thread_ts="${1#*=}"; shift ;;
     -h|--help)
-      cat "$(dirname "$0")/post-message/help.md"
+      sed 's/<binding>/'"$(gc_binding)"'/g' "$(dirname "$0")/post-message/help.md"
       exit 0
       ;;
     *)
-      echo "gc slack-mini post-message: unknown argument: $1" >&2
-      exit 2
+      die "unknown argument: $1" 2
       ;;
   esac
 done
 
 if [ -z "$channel" ]; then
-  echo "gc slack-mini post-message: --channel is required" >&2
-  exit 2
+  die "--channel is required" 2
 fi
 if [ -z "$text" ]; then
-  echo "gc slack-mini post-message: --text is required" >&2
-  exit 2
+  die "--text is required" 2
 fi
 
 api_base="${GC_API_BASE_URL:-http://127.0.0.1:9443}"
 api_base="${api_base%/}"
 city="${GC_CITY_NAME:-}"
 if [ -z "$city" ]; then
-  echo "gc slack-mini post-message: GC_CITY_NAME is not set" >&2
-  exit 1
+  die "GC_CITY_NAME is not set" 1
 fi
 
 # Resolve the adapter endpoint: gc proxies /svc/slack-mini/* to the
@@ -80,8 +106,9 @@ response=$(curl -sS -X POST "$url" \
   -H 'X-GC-Request: gc-slack-mini' \
   -d "$body" \
   -w '\n%{http_code}') || {
-  echo "gc slack-mini post-message: request to adapter failed" >&2
+  echo "slack-mini post-message: request to adapter failed" >&2
   echo "$response" >&2
+  hint
   exit 1
 }
 
@@ -92,7 +119,6 @@ printf '%s\n' "$payload"
 case "$http_code" in
   2*) exit 0 ;;
   *)
-    echo "gc slack-mini post-message: adapter returned HTTP $http_code" >&2
-    exit 1
+    die "adapter returned HTTP $http_code" 1
     ;;
 esac

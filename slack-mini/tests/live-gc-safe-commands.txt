@@ -1,0 +1,13 @@
+# Commands tests/test_pack_instructions_live_gc.py may EXECUTE against a real
+# gc in a throwaway city, one per line, as the words that follow the binding.
+#
+# The bar for a line here is that running the command in a city that has
+# nothing set up performs no effect outside that city: no network, no writes
+# beyond the scratch city, nothing published. It is hand-written because that
+# is not a property of the directory tree -- every command in this pack is
+# named for posting to Slack, and only reading the argument handling tells you
+# which of them refuses before it gets there.
+
+post-message   # exits 2 on `--channel is required`, before it builds a request
+
+# There is no second line: post-message is the only command this pack ships.

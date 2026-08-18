@@ -6,7 +6,7 @@ several channels, or for one-off posts. The session id (defaulting to the
 current session) still selects the identity override applied to the post.
 
 Usage:
-  gc slack-channel publish-to-channel --channel <id>
+  gc <binding> publish-to-channel --channel <id>
                                       (--body <text> | --body-file <path>)
                                       [--session <id>] [--thread-ts <ts>]
 
@@ -19,8 +19,8 @@ Flags:
   --thread-ts  Slack message ts to thread under (optional).
 
 Examples:
-  gc slack-channel publish-to-channel --channel C0123 --body "deploy started"
-  gc slack-channel publish-to-channel --channel C0123 \
+  gc <binding> publish-to-channel --channel C0123 --body "deploy started"
+  gc <binding> publish-to-channel --channel C0123 \
     --thread-ts 1700000000.0001 --body "done"
 
 On success, prints the adapter's JSON receipt {"ok":true,"ts":...}.
