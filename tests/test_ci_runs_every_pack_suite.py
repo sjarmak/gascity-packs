@@ -81,3 +81,53 @@ def test_the_check_notices_a_pack_that_is_absent_from_the_workflow() -> None:
     absent = "a-pack-no-workflow-mentions"
     assert absent not in pytest_targets_in_ci()
     assert absent not in packs_shipping_python_tests()
+
+
+def suites_needing_a_real_gc() -> set[str]:
+    """Test files that reach for the live-city harness.
+
+    Derived from the import statement rather than from a list, because the
+    property is "this file needs a gc binary" and the import is where that
+    becomes true.
+
+    Matched as an import and not as a substring: this file names the harness in
+    the line above, so a substring test flags the check itself. An instrument
+    that reports on its own source is the failure this repository keeps hitting,
+    and it costs nothing to close here.
+    """
+    imports = re.compile(r"^\s*(from|import)\s+gc_live_city\b", re.MULTILINE)
+    return {
+        path.name
+        for path in (REPO / "tests").glob("test_*.py")
+        if imports.search(path.read_text())
+    }
+
+
+def suites_run_with_a_gc_binary() -> set[str]:
+    """Files named on a CI step that supplies GC_TEST_BIN.
+
+    A step that runs them without it is not coverage: the fixture skips, the
+    step is green, and the output says `s` where it would have said `F`.
+    """
+    workflow = yaml.safe_load(CI.read_text())
+    named: set[str] = set()
+    for job in workflow.get("jobs", {}).values():
+        for step in job.get("steps", []):
+            run = step.get("run") or ""
+            supplies = "GC_TEST_BIN" in run or "GC_TEST_BIN" in (step.get("env") or {})
+            if not supplies or "pytest" not in run:
+                continue
+            named.update(re.findall(r"test_[\w.]+\.py", run))
+    return named
+
+
+def test_every_live_gc_suite_is_run_with_a_gc_binary() -> None:
+    needing = suites_needing_a_real_gc()
+    assert needing, "the derivation found no live-gc suites, which is the "\
+                    "instrument failing rather than the repository being empty"
+
+    missing = sorted(needing - suites_run_with_a_gc_binary())
+    assert not missing, (
+        "these suites need a real gc and no CI step gives them one, so they "
+        "skip silently and their step still passes: " + ", ".join(missing)
+    )

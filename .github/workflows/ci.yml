@@ -71,7 +71,8 @@ jobs:
       - name: Stand each maintained pack up against gc
         run: |
           GC_TEST_BIN="$(go env GOPATH)/bin/gc" \
-            python3 -m pytest tests/test_maintained_packs_live_gc.py -q
+            python3 -m pytest tests/test_maintained_packs_live_gc.py \
+                              tests/test_factory_audit_end_to_end.py -q
 
       # gastown is not in the lint loop above because seven of its findings are
       # defects in gc's linter rather than in the pack; see
