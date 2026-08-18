@@ -2,8 +2,8 @@
 # Resolve the reliability kit this pack runs against, and say which one it is.
 #
 # Sourced by every command in the pack. Sets KIT_DIR and KIT_ACTUAL_COMMIT, or
-# exits non-zero with an instruction. It never installs anything: `gc factory
-# setup` is the only thing that writes, so a scheduled order can never
+# exits non-zero with an instruction. It never installs anything: `gc <binding>
+# factory setup` is the only thing that writes, so a scheduled order can never
 # silently pull code onto the machine.
 
 set -euo pipefail
@@ -12,6 +12,21 @@ PACK_DIR=${GC_PACK_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}
 
 # shellcheck disable=SC1091
 . "$PACK_DIR/kit.pin"
+
+# The word a user types after `gc` to reach this pack. gc sets GC_PACK_NAME to
+# the PACK's name and exposes nothing carrying the BINDING, so a pack bound as
+# `[imports.fa]` was told to run `gc factory-audit factory setup`, which exits
+# with `unknown command`. Recovered from the city's pack.toml, with the README's
+# placeholder as the answer when it cannot be determined. See gc_binding.py.
+gc_binding() {
+  local name
+  if name=$(python3 "$PACK_DIR/assets/scripts/gc_binding.py" 2>/dev/null) \
+     && [ -n "$name" ]; then
+    printf '%s' "$name"
+  else
+    printf '<binding>'
+  fi
+}
 
 kit_default_dir() {
   printf '%s\n' "${GC_CITY_PATH:-$PWD}/.gc/factory-kit"
@@ -34,7 +49,7 @@ kit_require() {
     cat >&2 <<MSG
 factory-audit: no reliability kit at $KIT_DIR
 
-  Run:  gc factory setup
+  Run:  gc $(gc_binding) factory setup
 
   That clones $KIT_REPO at the commit pinned in the pack (kit.pin) into the
   city, once. Nothing else in this pack writes to disk or reaches the network.

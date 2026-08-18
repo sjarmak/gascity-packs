@@ -53,8 +53,8 @@ gc factory audit: no contract at $contract
 
 Start from what your city actually does rather than from a blank file:
 
-  gc ${GC_PACK_NAME:-factory-audit} factory setup
-  gc ${GC_PACK_NAME:-factory-audit} factory derive
+  gc $(gc_binding) factory setup
+  gc $(gc_binding) factory derive
   cp $out/factory.derived.yaml $contract
 
 Then edit it. The derived file records what the code does today, including the

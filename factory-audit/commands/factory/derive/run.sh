@@ -110,6 +110,6 @@ wrote $out/factory.derived.yaml   what this installation actually does
 
 The derived contract is a description, not a target. Copy the lines you agree
 with into your own factory.yaml, argue with the ones you do not, then run
-  gc ${GC_PACK_NAME:-factory-audit} factory reconcile
+  gc $(gc_binding) factory reconcile
 to see where the two disagree.
 MSG

@@ -92,4 +92,4 @@ fi
 git -C "$dest" checkout --quiet --detach --force "$KIT_COMMIT"
 
 printf 'kit %s installed at %s\n' "${KIT_COMMIT:0:12}" "$dest"
-printf 'next: gc %s factory derive\n' "${GC_PACK_NAME:-factory-audit}"
+printf 'next: gc %s factory derive\n' "$(gc_binding)"

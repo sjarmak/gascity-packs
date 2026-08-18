@@ -6,6 +6,32 @@ changed in the kit and what a city sees differently because of it.
 
 ## Unreleased
 
+### Every instruction the pack printed named a command that does not exist
+
+`gc <binding> factory setup` is how a pack command is reached, and the binding
+is the key under `[imports.<name>]` in the city's pack.toml. Gas City hands a
+pack command `GC_PACK_NAME`, which is the PACK's name, and exposes nothing
+carrying the binding. So a city that imported this pack as `[imports.fa]` ran
+`gc fa factory audit`, was told `Run: gc factory setup`, and got `gc: unknown
+command "factory"`. The two places that already tried to name it used
+`GC_PACK_NAME` and were right only when an operator happened to bind the pack
+under its own name.
+
+The binding is now recovered from the city's own pack.toml, by matching the
+import whose source resolves to `GC_PACK_DIR`
+(`assets/scripts/gc_binding.py`). Zero or several matches print the README's
+`<binding>` placeholder rather than a guess: a wrong concrete name reads as an
+instruction, a placeholder does not.
+
+Verified against a real `gc`, not a stub. Bound as `fa`: `Run: gc fa factory
+setup`. Bound as `factory-audit`: `Run: gc factory-audit factory setup`. The
+whole chain (`setup`, `derive`, `audit`) runs through `gc` with the pinned kit
+in place and names the binding in every hint.
+
+Error-message prefixes (`gc factory audit: no contract at ...`) still say the
+pack's own name. They identify which command failed rather than telling anyone
+what to type, so they were left alone.
+
 ### Kit pin moved to `ca66097` (from `37c873d`, 12 commits)
 
 `docs(readme): the front page sent people to the hand-written contract`

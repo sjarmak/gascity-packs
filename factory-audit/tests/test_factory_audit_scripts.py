@@ -97,14 +97,76 @@ def test_the_order_stays_green_when_the_kit_is_not_installed(tmp_path: Path) -> 
     """
     result = run(ORDER, tmp_path)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "gc factory setup" in result.stdout
+    assert "factory setup" in result.stdout
 
 
 def test_the_order_stays_green_when_no_contract_has_been_written(tmp_path: Path) -> None:
     install_stub_kit(tmp_path)
     result = run(ORDER, tmp_path)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "gc factory derive" in result.stdout
+    assert "factory derive" in result.stdout
+
+
+def bind_pack_in(city: Path, name: str) -> None:
+    """Write a city pack.toml importing this pack under `name`."""
+    city.joinpath("pack.toml").write_text(
+        textwrap.dedent(
+            f"""\
+            [pack]
+            name = "city-under-test"
+            schema = 2
+
+            [imports.{name}]
+            source = {str(PACK)!r}
+            """
+        )
+    )
+
+
+def test_an_instruction_names_the_binding_the_city_actually_used(
+    tmp_path: Path,
+) -> None:
+    """gc sets GC_PACK_NAME to the PACK's name and exposes nothing carrying the
+    BINDING. Every "run gc factory-audit factory setup" this pack printed was
+    therefore a command that exits `unknown command` for anyone who bound it as
+    anything else, and that could not be seen on an installation that happened
+    to bind it under its own name. Measured against a real gc before this was
+    written: bound as `fa`, `gc fa factory audit` printed `Run: gc factory
+    setup`, and `gc factory setup` is not a command.
+    """
+    bind_pack_in(tmp_path, "fa")
+    result = run(ORDER, tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "gc fa factory setup" in result.stdout, result.stdout
+    assert "<binding>" not in result.stdout
+
+
+def test_the_placeholder_stands_in_when_the_binding_cannot_be_read(
+    tmp_path: Path,
+) -> None:
+    """The other rail, and the reason the resolver returns nothing rather than
+    guessing: a pack bound twice has two correct answers, so it gets the
+    README's placeholder instead of whichever one sorted first. A concrete name
+    that is wrong reads as an instruction; a placeholder reads as a placeholder.
+    """
+    tmp_path.joinpath("pack.toml").write_text(
+        textwrap.dedent(
+            f"""\
+            [pack]
+            name = "city-under-test"
+            schema = 2
+
+            [imports.fa]
+            source = {str(PACK)!r}
+
+            [imports.factory-audit]
+            source = {str(PACK)!r}
+            """
+        )
+    )
+    result = run(ORDER, tmp_path)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "gc <binding> factory setup" in result.stdout, result.stdout
 
 
 def test_the_order_goes_red_when_the_checker_reports_drift(tmp_path: Path) -> None:

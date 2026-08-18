@@ -59,7 +59,7 @@ for f in "$contract" "$probes"; do
   if [ ! -f "$f" ]; then
     printf 'gc factory reconcile: missing %s\n\n' "$f" >&2
     printf 'Run `gc %s factory derive` first; it writes the probe pack and a\n' \
-      "${GC_PACK_NAME:-factory-audit}" >&2
+      "$(gc_binding)" >&2
     printf 'derived contract you can start from.\n' >&2
     exit 2
   fi
