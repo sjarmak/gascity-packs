@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""instrument-contract-check — the gate from docs/conventions/instrument-contract.md.
+"""untested-orders-check — the gate from docs/conventions/instrument-contract.md.
 
 Run this before trusting a new instrument's green.
 
@@ -44,10 +44,10 @@ GC_INSTALL_RECEIPT and GC_SOURCE_REMOTE describe where gc itself was built,
 for the installed-binary attestation path only.
 
 Usage:
-  bin/instrument-contract-check <path>...        one or more instruments
-  bin/instrument-contract-check --changed        every modified/staged file
-  bin/instrument-contract-check --order <name>   resolve every target in an order exec
-  bin/instrument-contract-check --enabled-local-orders
+  bin/untested-orders-check <path>...        one or more instruments
+  bin/untested-orders-check --changed        every modified/staged file
+  bin/untested-orders-check --order <name>   resolve every target in an order exec
+  bin/untested-orders-check --enabled-local-orders
                                                 audit the live local order population
 
 Exit 0 when every instrument in the corpus has a test and the positive control
@@ -96,7 +96,7 @@ CITY = _city_root()
 # The pack directory, when gc supplied one. The positive control below ships
 # with the pack, so it has to be found relative to the pack and not the city.
 # The fallback is parents[2] because this file sits at
-# <pack>/assets/scripts/instrument-contract-check: parent is scripts/, and
+# <pack>/assets/scripts/untested-orders-check: parent is scripts/, and
 # parents[1] is assets/, which is one level short of the pack root and makes
 # the control resolve to <pack>/assets/assets/fixtures/... — a path that never
 # exists, so the control silently reads as unprotected.
@@ -595,7 +595,7 @@ def main() -> int:
         try:
             population = enabled_local_order_population()
         except RuntimeError as exc:
-            print("instrument-contract-check")
+            print("untested-orders-check")
             print(f"COULD-NOT-CHECK: {exc}")
             return 2
         candidates.extend(population.paths)
@@ -679,7 +679,7 @@ def main() -> int:
         records.append(record)
 
     generated_at = datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-    print("instrument-contract-check")
+    print("untested-orders-check")
     if population is not None:
         print(f"  generated_at={generated_at}")
         print("  source=gc order list --json + git ls-files orders/*.toml")

@@ -58,7 +58,7 @@ REQUIRES_GC_BINARY = True
 
 MAINTAINED_PACKS = (
     "factory-audit",
-    "instrument-contract",
+    "untested-orders",
     "oversight-rig",
     "pr-pipeline",
     "slack-channel",
@@ -73,7 +73,7 @@ MAINTAINED_PACKS = (
 # removing its cause is caught too, because the assertion is equality.
 EXPECTED_DOCTOR_DELTA: dict[str, frozenset[str]] = {
     "factory-audit": frozenset(),
-    "instrument-contract": frozenset(),
+    "untested-orders": frozenset(),
     "oversight-rig": frozenset(),
     "pr-pipeline": frozenset(),
     "slack-channel": frozenset(),

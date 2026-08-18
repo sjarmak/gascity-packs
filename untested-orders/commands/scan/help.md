@@ -1,4 +1,4 @@
-# gc instruments check
+# untested-orders scan
 
 Audit this city's instruments against the mechanically checkable half of the
 instrument contract.
@@ -6,10 +6,10 @@ instrument contract.
 ## Usage
 
 ```bash
-gc <binding> instruments check                 # the whole enabled-order population
-gc <binding> instruments check bin/my-reaper   # named files
-gc <binding> instruments check --changed       # every modified or staged file
-gc <binding> instruments check --order reaper  # everything one order runs
+gc <binding> scan                 # the whole enabled-order population
+gc <binding> scan bin/my-reaper   # named files
+gc <binding> scan --changed       # every modified or staged file
+gc <binding> scan --order reaper  # everything one order runs
 ```
 
 ## What the exit code means

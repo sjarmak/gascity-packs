@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Hermetic coverage for instrument-contract-check.
+"""Hermetic coverage for untested-orders-check.
 
 This suite exists to satisfy C3 for the checker itself. Each RED case below is
 a way the checker could pass falsely, which is the failure mode the contract
@@ -36,8 +36,8 @@ from unittest import mock
 
 HERE = pathlib.Path(__file__).resolve().parent
 spec = importlib.util.spec_from_file_location(
-    "icc", HERE / "instrument-contract-check",
-    loader=importlib.machinery.SourceFileLoader("icc", str(HERE / "instrument-contract-check")))
+    "icc", HERE / "untested-orders-check",
+    loader=importlib.machinery.SourceFileLoader("icc", str(HERE / "untested-orders-check")))
 icc = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(icc)
 
@@ -55,7 +55,7 @@ def eq(name, got, want):
 def run(argv):
     """Run main() with argv, returning (exit_code, stdout)."""
     old = sys.argv
-    sys.argv = ["instrument-contract-check"] + argv
+    sys.argv = ["untested-orders-check"] + argv
     buf = io.StringIO()
     try:
         with contextlib.redirect_stdout(buf):
@@ -750,7 +750,7 @@ eq("legacy --order partial exits could-not-check", rc, 2)
 # the pack's own orders/ directory.
 PACK_ROOT = HERE.parent.parent
 audit_order = tomllib.loads(
-    (PACK_ROOT / "orders" / "instrument-contract-audit.toml").read_text())
+    (PACK_ROOT / "orders" / "untested-orders-audit.toml").read_text())
 eq("standing meta-audit order is exact", audit_order["order"], {
     "description": (
         "Daily: audit every enabled local order against the mechanically "
@@ -762,7 +762,7 @@ eq("standing meta-audit order is exact", audit_order["order"], {
     # path is quoted because a pack directory containing a space would
     # otherwise split into two arguments.
     "exec": (
-        'python3 "$GC_PACK_DIR/assets/scripts/instrument-contract-check"'
+        'python3 "$GC_PACK_DIR/assets/scripts/untested-orders-check"'
         " --enabled-local-orders"
     ),
     "timeout": "5m",

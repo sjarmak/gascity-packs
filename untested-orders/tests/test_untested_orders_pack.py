@@ -26,7 +26,7 @@ import pytest
 
 
 PACK = Path(__file__).resolve().parents[1]
-CHECK_RUN = PACK / "commands" / "instruments" / "check" / "run.sh"
+CHECK_RUN = PACK / "commands" / "scan" / "run.sh"
 
 
 def run_wrapper(*args: str, pack_dir: Path | None = None, city: Path | None = None,
@@ -38,7 +38,7 @@ def run_wrapper(*args: str, pack_dir: Path | None = None, city: Path | None = No
         env.pop(var, None)
     if pack_dir is not None:
         env["GC_PACK_DIR"] = str(pack_dir)
-        env["GC_PACK_NAME"] = "instrument-contract"
+        env["GC_PACK_NAME"] = "untested-orders"
     if city is not None:
         env["GC_CITY_PATH"] = str(city)
     env.update(env_extra)
@@ -63,7 +63,7 @@ def stub_pack(tmp_path: Path, exit_code: int) -> Path:
     pack = tmp_path / "stub-pack"
     scripts = pack / "assets" / "scripts"
     scripts.mkdir(parents=True)
-    checker = scripts / "instrument-contract-check"
+    checker = scripts / "untested-orders-check"
     checker.write_text(
         textwrap.dedent(
             f"""\
@@ -81,7 +81,7 @@ def stub_pack(tmp_path: Path, exit_code: int) -> Path:
 
 def test_pack_declares_its_identity():
     pack = tomllib.loads((PACK / "pack.toml").read_text())["pack"]
-    assert pack["name"] == "instrument-contract"
+    assert pack["name"] == "untested-orders"
     assert pack["schema"] == 2
     assert pack["version"]
 
@@ -144,13 +144,13 @@ def test_missing_checker_names_the_path_it_looked_for(tmp_path):
 
 def test_audit_order_runs_a_script_the_pack_ships():
     order = tomllib.loads(
-        (PACK / "orders" / "instrument-contract-audit.toml").read_text())["order"]
+        (PACK / "orders" / "untested-orders-audit.toml").read_text())["order"]
     assert order["trigger"] == "cooldown"
     assert order["idempotent"] is True
     # Quoted, because a pack directory containing a space otherwise splits into
     # two arguments and the order fails naming a file that does not exist
     # rather than the path that does.
-    assert '"$GC_PACK_DIR/assets/scripts/instrument-contract-check"' in order["exec"]
+    assert '"$GC_PACK_DIR/assets/scripts/untested-orders-check"' in order["exec"]
     assert "--enabled-local-orders" in order["exec"]
     relative = order["exec"].split('"')[1].replace("$GC_PACK_DIR/", "")
     assert (PACK / relative).is_file()
@@ -158,7 +158,7 @@ def test_audit_order_runs_a_script_the_pack_ships():
 
 def test_audit_order_names_no_absolute_path():
     """A path from the city this came from would run somewhere else, or nowhere."""
-    text = (PACK / "orders" / "instrument-contract-audit.toml").read_text()
+    text = (PACK / "orders" / "untested-orders-audit.toml").read_text()
     assert "/home/" not in text
     assert "$GC_PACK_DIR" in text
 
@@ -182,7 +182,7 @@ def test_negative_control_fixture_has_no_test_on_purpose():
 
 
 def test_checker_ships_no_path_from_the_city_it_came_from():
-    text = (PACK / "assets" / "scripts" / "instrument-contract-check").read_text()
+    text = (PACK / "assets" / "scripts" / "untested-orders-check").read_text()
     assert "/home/" not in text
 
 
@@ -190,7 +190,7 @@ def test_checker_ships_no_path_from_the_city_it_came_from():
 
 def test_vendored_checker_suite_passes():
     """C3 applied to this pack: the checker it ships is itself under test."""
-    suite = PACK / "assets" / "scripts" / "instrument-contract-check.test"
+    suite = PACK / "assets" / "scripts" / "untested-orders-check.test"
     result = subprocess.run(
         ["python3", str(suite)], capture_output=True, text=True, timeout=600)
     assert result.returncode == 0, result.stdout + result.stderr

@@ -368,8 +368,8 @@ by producing a confident value.
 Before an instrument is merged, or before its output is trusted:
 
 ```bash
-bin/instrument-contract-check <path-to-instrument> [more...]
-bin/instrument-contract-check --changed        # everything staged/modified
+bin/untested-orders-check <path-to-instrument> [more...]
+bin/untested-orders-check --changed        # everything staged/modified
 ```
 
 It reports on every run including a clean one, prints the corpus it examined,
@@ -423,7 +423,7 @@ playbook wins and this file is the bug.
 
 - `docs/conventions/distributed-systems-optimization.md` — the parent playbook
 - `bin/instrument-inventory`, `bin/instrument-inventory.test`
-- `bin/instrument-contract-check`, `bin/instrument-contract-check.test`
+- `bin/untested-orders-check`, `bin/untested-orders-check.test`
 - `docs/conventions/store-sandbox-isolation.md` — C7/C8 worked example
 - `docs/conventions/scanners.md` — reaper and surfacer rules
 - Program bead: dr-zdx10 (observability lane)

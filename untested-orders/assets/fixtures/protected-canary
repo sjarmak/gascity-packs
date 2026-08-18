@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """protected-canary — the checker's positive control, and nothing else.
 
-This file exists so that instrument-contract-check has one instrument it is
+This file exists so that untested-orders-check has one instrument it is
 KNOWN to be right about. A checker whose only failure mode is silence can be
 broken into permanent silence and still read as clean; re-checking a known-good
 instrument on every run is what makes that failure visible.

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# gc <binding> instruments check — audit instruments against the contract.
+# gc <binding> scan — audit your orders for instruments that have no test.
 #
 # With no arguments this audits the city's whole enabled-order population,
 # which is the standing reading. With paths, it audits exactly those files,
@@ -10,13 +10,13 @@
 set -euo pipefail
 
 if [ -z "${GC_PACK_DIR:-}" ]; then
-  echo "gc instruments check: missing Gas City pack context" >&2
+  echo "untested-orders scan: missing Gas City pack context" >&2
   exit 1
 fi
 
-checker="$GC_PACK_DIR/assets/scripts/instrument-contract-check"
+checker="$GC_PACK_DIR/assets/scripts/untested-orders-check"
 if [ ! -f "$checker" ]; then
-  echo "gc instruments check: checker missing at $checker" >&2
+  echo "untested-orders scan: checker missing at $checker" >&2
   exit 1
 fi
 

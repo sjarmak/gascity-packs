@@ -1,4 +1,4 @@
-# instrument-contract — check that your city's own instruments can go red.
+# untested-orders — find the scheduled checks in your city that have no test.
 #
 # The problem this exists for. A city accumulates instruments: reapers,
 # sweepers, health checks, canaries, scanners. Each one reports, and each
@@ -45,6 +45,6 @@
 # ours: report it as unprotected because it was written in its own words.
 
 [pack]
-name = "instrument-contract"
+name = "untested-orders"
 version = "0.1.0"
 schema = 2

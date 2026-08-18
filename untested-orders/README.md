@@ -1,6 +1,6 @@
-# instrument-contract
+# untested-orders
 
-Check that your city's own instruments are capable of going red.
+Find the scheduled checks in your city that have never been shown able to fail.
 
 ## What it found in the city that wrote it
 
@@ -107,14 +107,14 @@ and "examined everything and found it clean" must not render identically.
 
 ## The order
 
-`orders/instrument-contract-audit.toml` runs the population audit daily. It is
+`orders/untested-orders-audit.toml` runs the population audit daily. It is
 read-only, posts nothing, and goes actionable when an instrument in your live
 schedule has no test or the population stops resolving.
 
 ## Install
 
 1. Add the pack to `city.toml`.
-2. `gc <binding> instruments check` — audits the whole enabled-order
+2. `gc <binding> scan` — audits the whole enabled-order
    population. With paths, it audits exactly those files, which is what you
    want in a pre-commit or on a branch.
 3. Set `INSTRUMENT_CONTRACT_ISSUE_PREFIXES` for your tracker.

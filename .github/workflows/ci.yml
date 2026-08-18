@@ -47,7 +47,7 @@ jobs:
         # run here while this line said `oversight-rig/tests`. Naming the root
         # collects whatever the pack ships, so a suite added in a new place runs
         # without anyone remembering to edit this line.
-        run: python3 -m pytest tests contributing gascity discord github oversight-rig slack-full slack-channel pr-pipeline profiler factory-audit instrument-contract -q
+        run: python3 -m pytest tests contributing gascity discord github oversight-rig slack-full slack-channel pr-pipeline profiler factory-audit untested-orders -q
 
       - name: Lint and exercise shared role prompt composition
         run: |
@@ -65,7 +65,7 @@ jobs:
           # Refute: gc lint oversight-rig  (0 findings on main, 4 on v1.4.1)
           for pack in gascity gascity/roles bmad compound-engineering gstack superpowers profiler \
                       pr-pipeline slack-channel slack-full slack-mini factory-audit \
-                      instrument-contract; do
+                      untested-orders; do
             "$GC_BIN" lint "$pack"
           done
           GC_TEST_BIN="$GC_BIN" python3 -m pytest tests/test_gc_role_prompt_integration.py -q
