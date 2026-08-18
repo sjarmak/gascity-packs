@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Order body: reconcile the contract against the installation, and report.
 #
-# Deliberately NOT `factory audit`. Audit reads the contract alone, so it
+# Deliberately NOT `audit`. Audit reads the contract alone, so it
 # reports the same findings every run until someone edits a document — a
 # scheduled version of that is a reminder, not a check. Reconcile reads the
 # code, so its result changes when the code changes, which is the only thing
@@ -24,11 +24,11 @@ out="$city/.gc/factory-audit"
 # an order that goes red because a human has not run a one-time command trains
 # people to ignore it.
 if ! kit_require 2>/dev/null; then
-  printf 'factory-audit: kit not installed; run `gc %s factory setup` to enable this check\n' "$(gc_binding)"
+  printf 'factory-audit: kit not installed; run `gc %s setup` to enable this check\n' "$(gc_binding)"
   exit 0
 fi
 if [ ! -f "$out/factory.yaml" ] || [ ! -f "$out/probes.yaml" ]; then
-  printf 'factory-audit: no contract yet; run `gc %s factory derive` to enable this check\n' "$(gc_binding)"
+  printf 'factory-audit: no contract yet; run `gc %s derive` to enable this check\n' "$(gc_binding)"
   exit 0
 fi
 
@@ -57,5 +57,6 @@ fi
 # Same receipt the interactive command writes. The order is the reconcile most
 # cities actually run, so an audit that ignored it would report "never verified"
 # on a city that checks itself daily.
-receipt_write "$out" "$out/factory.yaml" "$out/probes.yaml" "$city" "$status"
+receipt_write "$out" "$out/factory.yaml" "$out/probes.yaml" "$city" "$status" \
+  "$out/reconcile.txt"
 exit "$status"

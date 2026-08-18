@@ -3,10 +3,10 @@
 # Vendoring the kit into the pack would put a second copy of ~2,100 lines of
 # checker source in every city that installs it, and those copies drift from
 # the one being maintained. A pin is the opposite failure mode: it can be out
-# of date, and it says so out loud, because `gc factory setup` checks out this
-# exact commit and every command reports which commit it ran.
+# of date, and it says so out loud, because `gc <binding> setup` checks out
+# this exact commit and every command reports which commit it ran.
 #
-# To move the pin: change KIT_COMMIT, re-run `gc factory setup --force`, and
+# To move the pin: change KIT_COMMIT, re-run `gc <binding> setup --force`, and
 # record in the pack CHANGELOG what changed in the kit and why it matters here.
 
 KIT_REPO='https://github.com/sjarmak/software-factory-reliability.git'

@@ -11,29 +11,29 @@
 #
 # So this pack ships two halves and insists on both:
 #
-#   gc factory audit       reads your contract and checks it against a rule
+#   gc <binding> audit       reads your contract and checks it against a rule
 #                          catalog. It cannot tell whether the contract is TRUE.
 #                          A document claiming everything is idempotent scores
 #                          perfectly.
 #
-#   gc factory reconcile   reads the CODE and reports where the contract and
+#   gc <binding> reconcile   reads the CODE and reports where the contract and
 #                          the call sites disagree. This is the half that can
 #                          catch you lying to yourself, and the half a
 #                          hand-written contract alone will never give you.
 #
-# `gc factory derive` writes the first draft of the contract by reading your
+# `gc <binding> derive` writes the first draft of the contract by reading your
 # installation, so you start from what your factory does rather than from a
 # blank file full of aspirations.
 #
 # The checker itself is pinned by commit (see kit.pin) and installed once by
-# `gc factory setup`, not vendored. Vendoring would put a second copy of the
+# `gc <binding> setup`, not vendored. Vendoring would put a second copy of the
 # checker in every city and let it drift silently; a pin goes stale loudly,
 # because every command prints the commit it ran.
 #
 # Install:
 #   1. Add the pack to city.toml.
-#   2. gc <binding> factory setup      (clones the pinned kit into the city)
-#   3. gc <binding> factory derive     (writes probes.yaml + factory.derived.yaml)
+#   2. gc <binding> setup      (clones the pinned kit into the city)
+#   3. gc <binding> derive     (writes probes.yaml + factory.derived.yaml)
 #   4. cp .gc/factory-audit/factory.derived.yaml .gc/factory-audit/factory.yaml
 #      then edit it into what you are willing to stand behind
 #   5. gc supervisor reload            (picks up the daily drift order)

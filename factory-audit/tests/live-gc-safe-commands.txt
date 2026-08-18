@@ -4,11 +4,11 @@
 # The bar for a line here is that running the command in a city that has
 # nothing set up performs no effect outside that city: no network, no writes
 # beyond the scratch city, nothing published. It is hand-written because that
-# is not a property of the directory tree -- `factory setup` is the same shape
+# is not a property of the directory tree -- `setup` is the same shape
 # as the three below and clones a repository.
 
-factory audit       # reads the contract, or says there is none
-factory derive      # reads the city, or says the kit is missing
-factory reconcile   # compares two local files, or says one is missing
+audit             # reads the contract, or says there is none
+derive            # reads the city, or says the kit is missing
+reconcile         # compares two local files, or says one is missing
 
-# factory setup is NOT here: it clones the pinned kit over the network.
+# setup is NOT here: it clones the pinned kit over the network.

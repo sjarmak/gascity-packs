@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# gc <binding> factory derive — read this installation and write what it does.
+# gc <binding> derive — read this installation and write what it does.
 #
 # Two steps, both read-only against the city:
 #
@@ -9,14 +9,14 @@
 #                 sites actually carry an identity a retry could dedupe on
 #
 # The output is a description of the installation, not a decision about it.
-# `gc factory reconcile` is what compares it to a contract you wrote.
+# `gc <binding> reconcile` is what compares it to a contract you wrote.
 #
 # Environment (set by gc): GC_CITY_PATH, GC_PACK_DIR, GC_PACK_NAME
 
 set -euo pipefail
 
 if [ -z "${GC_PACK_DIR:-}" ]; then
-  echo "gc factory derive: missing Gas City pack context" >&2
+  echo "factory-audit derive: missing Gas City pack context" >&2
   exit 1
 fi
 
@@ -46,7 +46,7 @@ while [ $# -gt 0 ]; do
     --template) need_operand "$@"; template=$2; shift ;;
     --exclude) need_operand "$@"; extra+=(--exclude "$2"); shift ;;
     -h|--help) sed -n '2,14p' "$0"; exit 0 ;;
-    *) echo "gc factory derive: unknown argument $1" >&2; exit 64 ;;
+    *) echo "factory-audit derive: unknown argument $1" >&2; exit 64 ;;
   esac
   shift
 done
@@ -64,7 +64,7 @@ kit_banner
 if [ -n "$template" ]; then
   source_file="$GC_PACK_DIR/templates/$template-probes.yaml"
   if [ ! -f "$source_file" ]; then
-    printf 'gc factory derive: no template %s\n\n' "$template" >&2
+    printf 'factory-audit derive: no template %s\n\n' "$template" >&2
     printf 'Available:\n' >&2
     for candidate in "$GC_PACK_DIR"/templates/*-probes.yaml; do
       [ -e "$candidate" ] || continue
@@ -91,7 +91,7 @@ elif [ -n "$template" ]; then
   # Refusing rather than overwriting: --template on an existing probe pack is
   # most likely someone re-running the setup line from the README, and their
   # hand-edits are the expensive part of this file.
-  printf 'gc factory derive: %s already exists; --template will not overwrite it\n' \
+  printf 'factory-audit derive: %s already exists; --template will not overwrite it\n' \
     "$probes" >&2
   printf 'Add --rewrite-probes to replace it (your version is kept as a .bak).\n' >&2
   exit 3
@@ -110,6 +110,6 @@ wrote $out/factory.derived.yaml   what this installation actually does
 
 The derived contract is a description, not a target. Copy the lines you agree
 with into your own factory.yaml, argue with the ones you do not, then run
-  gc $(gc_binding) factory reconcile
+  gc $(gc_binding) reconcile
 to see where the two disagree.
 MSG

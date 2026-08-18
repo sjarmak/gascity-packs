@@ -1,11 +1,11 @@
-# gc factory derive
+# gc <binding> derive
 
 Read the installation and write down what it actually does.
 
 ## Usage
 
 ```bash
-gc <binding> factory derive [--rewrite-probes] [--exclude <dir>]...
+gc <binding> derive [--rewrite-probes] [--exclude <dir>]...
 ```
 
 Two passes, both read-only against the city:
@@ -38,5 +38,5 @@ right — so the file is written once and then hand-edited. Later runs keep it.
 
 It records what the code does today, including the parts you are not happy
 with. Copy the lines you agree with into your own `factory.yaml`; leave the
-ones you intend to change, and let `gc factory reconcile` keep showing you the
+ones you intend to change, and let `gc <binding> reconcile` keep showing you the
 gap until you close it.

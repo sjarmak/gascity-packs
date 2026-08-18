@@ -1,11 +1,11 @@
-# gc factory setup
+# gc <binding> setup
 
 Clone the pinned reliability kit into the city, once.
 
 ## Usage
 
 ```bash
-gc <binding> factory setup [--force]
+gc <binding> setup [--force]
 ```
 
 Reads `kit.pin` from the pack, clones that repository into
@@ -19,7 +19,7 @@ other commit.
 
 Vendoring the checker would put a second copy of it in every city that installs
 this pack, and those copies drift from the one being maintained. A pin can also
-go stale, but it says so: `factory audit`, `derive`, and `reconcile` each print
+go stale, but it says so: `audit`, `derive`, and `reconcile` each print
 the commit they ran, and print a `DRIFT` line when it is not the pinned one.
 
 ## The only command here that writes outside the report directory

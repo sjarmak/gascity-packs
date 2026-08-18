@@ -1,11 +1,11 @@
-# gc factory reconcile
+# gc <binding> reconcile
 
 Check the contract against the installation it describes.
 
 ## Usage
 
 ```bash
-gc <binding> factory reconcile [--contract <path>] [--probes <path>]
+gc <binding> reconcile [--contract <path>] [--probes <path>]
 ```
 
 Runs the probe pack against the real tree and compares what it finds to what

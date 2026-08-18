@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# gc <binding> factory reconcile — check the contract against the installation.
+# gc <binding> reconcile — check the contract against the installation.
 #
-# This is the command that can catch you lying to yourself. `factory audit`
+# This is the command that can catch you lying to yourself. `audit`
 # reads only the contract, so a contract that says every effect is idempotent
 # scores perfectly whether or not that is true. Reconcile runs the probes
 # against the real tree and reports, per effect:
@@ -21,7 +21,7 @@
 set -euo pipefail
 
 if [ -z "${GC_PACK_DIR:-}" ]; then
-  echo "gc factory reconcile: missing Gas City pack context" >&2
+  echo "factory-audit reconcile: missing Gas City pack context" >&2
   exit 1
 fi
 
@@ -48,7 +48,7 @@ while [ $# -gt 0 ]; do
     --contract) need_operand "$@"; contract=$2; shift ;;
     --probes) need_operand "$@"; probes=$2; shift ;;
     -h|--help) sed -n '2,19p' "$0"; exit 0 ;;
-    *) echo "gc factory reconcile: unknown argument $1" >&2; exit 64 ;;
+    *) echo "factory-audit reconcile: unknown argument $1" >&2; exit 64 ;;
   esac
   shift
 done
@@ -57,8 +57,8 @@ kit_require
 
 for f in "$contract" "$probes"; do
   if [ ! -f "$f" ]; then
-    printf 'gc factory reconcile: missing %s\n\n' "$f" >&2
-    printf 'Run `gc %s factory derive` first; it writes the probe pack and a\n' \
+    printf 'factory-audit reconcile: missing %s\n\n' "$f" >&2
+    printf 'Run `gc %s derive` first; it writes the probe pack and a\n' \
       "$(gc_binding)" >&2
     printf 'derived contract you can start from.\n' >&2
     exit 2
@@ -80,15 +80,15 @@ wrote=${pipe[1]}
 set -e
 
 if [ "$wrote" -ne 0 ]; then
-  printf '\ngc factory reconcile: could not write %s (tee exited %d)\n' \
+  printf '\nfactory-audit reconcile: could not write %s (tee exited %d)\n' \
     "$out/reconcile.txt" "$wrote" >&2
   exit 5
 fi
-# The receipt is what `factory audit` reads to say whether its score has been
+# The receipt is what `audit` reads to say whether its score has been
 # checked against the code. Written on the drift path too: a reconcile that
 # found drift is a completed check with a bad answer, and the audit needs to be
 # able to say so rather than fall back to "never verified".
-receipt_write "$out" "$contract" "$probes" "$city" "$status"
+receipt_write "$out" "$contract" "$probes" "$city" "$status" "$out/reconcile.txt"
 
 printf '\nwrote %s and %s\n' "$out/reconcile.txt" "$(receipt_path "$out")"
 exit "$status"

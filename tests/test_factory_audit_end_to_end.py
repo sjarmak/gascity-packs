@@ -44,6 +44,11 @@ BINDING = "factory-audit"
 # wrapper promises the user. `--exit` lets a single fixture play both the clean
 # run and the drift, so the failure path is exercised by the same code that
 # proves the success path works.
+# The counts line the stub ends a reconcile with when FACTORY_STUB_DRIFT is
+# set. Named because two tests assert on it: one that the wrapper wrote this
+# run's report and not an appended one, and one that the receipt parsed it.
+DRIFT_REPORT = "1 drift, 0 unverified, 2 confirmed, 0 open (of 3 declared)"
+
 STUB = r'''#!/usr/bin/env python3
 import json, os, pathlib, sys
 
@@ -68,7 +73,15 @@ elif verb == "infer":
     pathlib.Path(value("--out"), "evidence.json").write_text("{}\n")
     print("inferred 0 effects")
 elif verb == "reconcile":
-    print("1 drift, 0 confirmed" if os.environ.get("FACTORY_STUB_DRIFT") else "0 drift")
+    # The full counts line the real checker ends a reconcile with. The receipt
+    # parses it, so an abbreviated stand-in reads as an unparsable report and
+    # every state derived from it is ERRORED -- a stub that measures the stub.
+    if os.environ.get("FACTORY_STUB_DRIFT"):
+        print("1 drift, 0 unverified, 2 confirmed, 0 open (of 3 declared)")
+    elif os.environ.get("FACTORY_STUB_VACUOUS"):
+        print("0 drift, 0 unverified, 0 confirmed, 5 open (of 5 declared)")
+    else:
+        print("0 drift, 0 unverified, 3 confirmed, 0 open (of 3 declared)")
 elif verb == "review":
     # `factory audit` runs the kit's `review`, not a verb named after itself.
     # This branch used to be spelled `audit` and was therefore dead: driving
@@ -136,7 +149,7 @@ def test_derive_through_gc_reaches_the_kit_and_writes_what_it_promises(
 ) -> None:
     workspace, kit, log = city
 
-    result = drive(gc_test_bin, workspace, kit, log, "factory", "derive")
+    result = drive(gc_test_bin, workspace, kit, log, "derive")
     assert result.returncode == 0, result.stdout + result.stderr
 
     # The whole argv of every call, in order. Checking the verb and the city
@@ -176,16 +189,16 @@ def test_reconcile_through_gc_reports_the_kits_failure_rather_than_swallowing_it
     status is a check that has stopped checking while still printing findings.
     """
     workspace, kit, log = city
-    assert drive(gc_test_bin, workspace, kit, log, "factory", "derive").returncode == 0
+    assert drive(gc_test_bin, workspace, kit, log, "derive").returncode == 0
 
     contract = workspace.city_dir / ".gc" / "factory-audit" / "factory.yaml"
     contract.write_text("factory_name: scratch\neffects: {}\n")
 
-    clean = drive(gc_test_bin, workspace, kit, log, "factory", "reconcile")
+    clean = drive(gc_test_bin, workspace, kit, log, "reconcile")
     assert clean.returncode == 0, clean.stdout + clean.stderr
 
     drifted = drive(
-        gc_test_bin, workspace, kit, log, "factory", "reconcile",
+        gc_test_bin, workspace, kit, log, "reconcile",
         FACTORY_STUB_EXIT="1", FACTORY_STUB_DRIFT="1",
     )
     assert drifted.returncode == 1, (
@@ -199,7 +212,7 @@ def test_reconcile_through_gc_reports_the_kits_failure_rather_than_swallowing_it
     # keeps both reports in the file, and a reader who greps it for drift is
     # answered by a run that has been superseded.
     written = workspace.city_dir / ".gc" / "factory-audit" / "reconcile.txt"
-    assert written.read_text().strip() == "1 drift, 0 confirmed", (
+    assert written.read_text().strip() == DRIFT_REPORT, (
         "the file the wrapper says it wrote does not hold exactly this run's "
         f"report. It holds:\n{written.read_text()}"
     )
@@ -225,9 +238,9 @@ def test_reconcile_before_derive_gives_an_instruction_not_a_traceback(
     out.mkdir(parents=True, exist_ok=True)
     (out / present).write_text("factory_name: scratch\neffects: {}\n")
 
-    result = drive(gc_test_bin, workspace, kit, log, "factory", "reconcile")
+    result = drive(gc_test_bin, workspace, kit, log, "reconcile")
     assert result.returncode == 2, result.stdout + result.stderr
-    assert "factory derive" in result.stderr
+    assert "gc factory-audit derive" in result.stderr
     assert missing in result.stderr, (
         f"{present} is present and {missing} is not; the error should name "
         f"{missing}. It said:\n{result.stderr}"
@@ -246,7 +259,7 @@ def test_the_banner_names_the_override_when_one_is_in_use(
     apart, so it is read from gc's own output.
     """
     workspace, kit, log = city
-    result = drive(gc_test_bin, workspace, kit, log, "factory", "derive")
+    result = drive(gc_test_bin, workspace, kit, log, "derive")
     assert result.returncode == 0, result.stdout + result.stderr
     assert "DRIFT: FACTORY_KIT_HOME is set" in result.stdout, result.stdout
     assert "(pinned)" not in result.stdout
@@ -275,7 +288,7 @@ def test_the_override_warning_is_not_printed_when_there_is_no_override(
 
     env = {**workspace.env, "FACTORY_STUB_LOG": str(log)}
     result = subprocess.run(
-        [str(gc_test_bin), BINDING, "factory", "derive"],
+        [str(gc_test_bin), BINDING, "derive"],
         cwd=workspace.rig_dir, env=env, text=True, capture_output=True, timeout=300,
     )
     assert result.returncode == 0, result.stdout + result.stderr
@@ -296,11 +309,11 @@ def test_audit_through_gc_states_that_nothing_has_checked_its_score(
     worth nothing if the command a user types never reaches it.
     """
     workspace, kit, log = city
-    assert drive(gc_test_bin, workspace, kit, log, "factory", "derive").returncode == 0
+    assert drive(gc_test_bin, workspace, kit, log, "derive").returncode == 0
     out = workspace.city_dir / ".gc" / "factory-audit"
     (out / "factory.yaml").write_text("factory_name: scratch\neffects: {}\n")
 
-    result = drive(gc_test_bin, workspace, kit, log, "factory", "audit")
+    result = drive(gc_test_bin, workspace, kit, log, "audit")
     assert result.returncode == 0, result.stdout + result.stderr
     assert "verification: NONE" in result.stdout, result.stdout
     assert "0 FAIL, 0 WARN" in result.stdout, (
@@ -324,12 +337,12 @@ def test_audit_through_gc_refuses_a_clean_score_over_a_contradicted_contract(
     that is the pair anyone would quote.
     """
     workspace, kit, log = city
-    assert drive(gc_test_bin, workspace, kit, log, "factory", "derive").returncode == 0
+    assert drive(gc_test_bin, workspace, kit, log, "derive").returncode == 0
     out = workspace.city_dir / ".gc" / "factory-audit"
     (out / "factory.yaml").write_text("factory_name: scratch\neffects: {}\n")
 
     drifted = drive(
-        gc_test_bin, workspace, kit, log, "factory", "reconcile",
+        gc_test_bin, workspace, kit, log, "reconcile",
         FACTORY_STUB_EXIT="1", FACTORY_STUB_DRIFT="1",
     )
     assert drifted.returncode == 1, drifted.stdout + drifted.stderr
@@ -338,7 +351,7 @@ def test_audit_through_gc_refuses_a_clean_score_over_a_contradicted_contract(
         f"to read:\n{drifted.stdout}{drifted.stderr}"
     )
 
-    result = drive(gc_test_bin, workspace, kit, log, "factory", "audit")
+    result = drive(gc_test_bin, workspace, kit, log, "audit")
     assert "0 FAIL, 0 WARN" in result.stdout, (
         "the rules did not pass, so a nonzero exit here would not be the "
         f"finding under test:\n{result.stdout}{result.stderr}"
@@ -362,17 +375,50 @@ def test_the_verification_state_reads_the_receipt_and_not_the_report_text(
     is free to rewrite, in a repository this pack only pins.
     """
     workspace, kit, log = city
-    assert drive(gc_test_bin, workspace, kit, log, "factory", "derive").returncode == 0
+    assert drive(gc_test_bin, workspace, kit, log, "derive").returncode == 0
     out = workspace.city_dir / ".gc" / "factory-audit"
     (out / "factory.yaml").write_text("factory_name: scratch\neffects: {}\n")
 
     clean = drive(
-        gc_test_bin, workspace, kit, log, "factory", "reconcile",
+        gc_test_bin, workspace, kit, log, "reconcile",
         FACTORY_STUB_DRIFT="1",
     )
     assert clean.returncode == 0, clean.stdout + clean.stderr
     assert "1 drift" in clean.stdout, clean.stdout
 
-    result = drive(gc_test_bin, workspace, kit, log, "factory", "audit")
+    result = drive(gc_test_bin, workspace, kit, log, "audit")
     assert "verification: CONFIRMED" in result.stdout, result.stdout
     assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_audit_through_gc_refuses_to_call_an_unchecked_contract_confirmed(
+    city: tuple[Workspace, Path, Path], gc_test_bin: Path  # noqa: F811
+) -> None:
+    """Reconcile exits 0 when nothing contradicts the contract.
+
+    A contract that leaves every effect undecided has nothing for a probe to
+    contradict, so the first reconcile anyone runs after `derive` exits 0 while
+    confirming nothing. Read as a status alone that is CONFIRMED, which is this
+    pack telling a newcomer their unchecked document has been checked. Driven
+    through the real `gc` because the wrapper, the receipt and the state word
+    are three layers and the defect lived in the seam between them.
+    """
+    workspace, kit, log = city
+    assert drive(gc_test_bin, workspace, kit, log, "derive").returncode == 0
+    out = workspace.city_dir / ".gc" / "factory-audit"
+    (out / "factory.yaml").write_text("factory_name: scratch\neffects: {}\n")
+
+    clean = drive(
+        gc_test_bin, workspace, kit, log, "reconcile",
+        FACTORY_STUB_VACUOUS="1",
+    )
+    assert clean.returncode == 0, clean.stdout + clean.stderr
+
+    result = drive(gc_test_bin, workspace, kit, log, "audit")
+    assert "verification: VACUOUS" in result.stdout, result.stdout
+    assert "CONFIRMED" not in result.stdout, result.stdout
+    # A fresh contract is legitimately here, so it is not a failure by itself.
+    assert result.returncode == 0, result.stdout + result.stderr
+
+    strict = drive(gc_test_bin, workspace, kit, log, "audit", "--require-verified")
+    assert strict.returncode == 4, strict.stdout + strict.stderr

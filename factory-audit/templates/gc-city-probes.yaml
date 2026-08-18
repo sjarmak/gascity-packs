@@ -1,12 +1,12 @@
 # Probe pack template: a Gas City installation.
 #
-# This is the file `gc factory derive` scaffolds for you, except that this one
+# This is the file `gc <binding> derive` scaffolds for you, except that this one
 # was written by hand against a real city and then corrected against what it
 # actually found there. The scaffold guesses which flag carries a retry
 # identity; this has the answers for the effects a gc city performs, so a city
 # of this shape can start here rather than from a machine's first guess.
 #
-# Copy it into place and edit, or let `gc factory derive --template gc-city`
+# Copy it into place and edit, or let `gc <binding> derive --template gc-city`
 # do that for you:
 #
 #   cp $GC_PACK_DIR/templates/gc-city-probes.yaml \

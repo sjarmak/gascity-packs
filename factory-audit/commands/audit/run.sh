@@ -1,16 +1,18 @@
 #!/usr/bin/env bash
-# gc <binding> factory audit — run the rule catalog against your contract.
+# gc <binding> audit — run the rule catalog against your contract.
 #
 # Reads the contract you maintain (default <city>/.gc/factory-audit/factory.yaml)
 # and reports FAIL and WARN findings. This is the check that answers "is what we
 # say we do internally consistent and safe" — it does not look at the city.
 #
-# It cannot tell you whether the contract is TRUE. `gc <binding> factory
-# reconcile` does that, and it leaves a receipt behind; this command reads that
-# receipt and states, above the score, whether the score has been checked
-# against the code: NONE, STALE, DRIFTED, ERRORED or CONFIRMED. A DRIFTED
-# contract exits 4 however clean the findings are, because a perfect score over
-# a document the code contradicts is the failure this pack exists to catch.
+# It cannot tell you whether the contract is TRUE. `gc <binding> reconcile`
+# does that, and it leaves a receipt behind; this command reads that receipt and
+# states, above the score, whether the score has been checked against the code:
+# NONE, STALE, DRIFTED, ERRORED, VACUOUS or CONFIRMED. A DRIFTED contract exits
+# 4 however clean the findings are, because a perfect score over a document the
+# code contradicts is the failure this pack exists to catch. VACUOUS is the
+# quieter version of the same trap: reconcile ran, contradicted nothing, and
+# confirmed nothing either, because the contract left every effect undecided.
 #
 #   --strict            treat WARN findings as failures
 #   --require-verified  also exit 4 when the contract has never been reconciled,
@@ -21,7 +23,7 @@
 set -euo pipefail
 
 if [ -z "${GC_PACK_DIR:-}" ]; then
-  echo "gc factory audit: missing Gas City pack context" >&2
+  echo "factory-audit audit: missing Gas City pack context" >&2
   exit 1
 fi
 
@@ -50,7 +52,7 @@ while [ $# -gt 0 ]; do
     --strict) strict=(--strict) ;;
     --require-verified) require_verified=yes ;;
     -h|--help) sed -n '2,19p' "$0"; exit 0 ;;
-    *) echo "gc factory audit: unknown argument $1" >&2; exit 64 ;;
+    *) echo "factory-audit audit: unknown argument $1" >&2; exit 64 ;;
   esac
   shift
 done
@@ -59,12 +61,12 @@ kit_require
 
 if [ ! -f "$contract" ]; then
   cat >&2 <<MSG
-gc factory audit: no contract at $contract
+factory-audit audit: no contract at $contract
 
 Start from what your city actually does rather than from a blank file:
 
-  gc $(gc_binding) factory setup
-  gc $(gc_binding) factory derive
+  gc $(gc_binding) setup
+  gc $(gc_binding) derive
   cp $out/factory.derived.yaml $contract
 
 Then edit it. The derived file records what the code does today, including the
@@ -91,12 +93,12 @@ print_verification() {
     none)
       printf 'verification: NONE. Nothing has checked this contract against your code.\n'
       printf '              The score below is a property of the document alone.\n'
-      printf '              Run: gc %s factory reconcile\n' "$(gc_binding)"
+      printf '              Run: gc %s reconcile\n' "$(gc_binding)"
       ;;
     stale)
       printf 'verification: STALE. The contract or the probe pack changed after the\n'
       printf '              last reconcile (%s), so that result no longer applies.\n' "${when:-unknown}"
-      printf '              Run: gc %s factory reconcile\n' "$(gc_binding)"
+      printf '              Run: gc %s reconcile\n' "$(gc_binding)"
       ;;
     drifted)
       printf 'verification: DRIFTED. The last reconcile (%s) found the installation\n' "${when:-unknown}"
@@ -105,7 +107,22 @@ print_verification() {
     errored)
       printf 'verification: ERRORED. The last reconcile (%s) did not complete, so\n' "${when:-unknown}"
       printf '              nothing here has been compared against the code.\n'
-      printf '              Run: gc %s factory reconcile\n' "$(gc_binding)"
+      printf '              Run: gc %s reconcile\n' "$(gc_binding)"
+      ;;
+    vacuous)
+      # The breakdown rather than a summary word, because the two ways to reach
+      # zero confirmed want different work: an effect left undecided in the
+      # contract is yours to decide, and one the probes could not settle is a
+      # gap in what this pack can see. Reporting "undecided" for both sends
+      # half the readers to edit a file that is already correct.
+      printf 'verification: VACUOUS. The last reconcile (%s) contradicted nothing\n' "${when:-unknown}"
+      printf '              and confirmed nothing: 0 of %s declared effects\n' \
+        "$(receipt_field "$receipt" declared)"
+      printf '              confirmed, %s undecided in the contract, %s the\n' \
+        "$(receipt_field "$receipt" open)" "$(receipt_field "$receipt" unverified)"
+      printf '              probes could not settle.\n'
+      printf '              A clean exit over a contract that asserts nothing\n'
+      printf '              checkable is not evidence. Read %s.\n' "$out/reconcile.txt"
       ;;
     confirmed)
       printf 'verification: CONFIRMED. Reconciled against %s at %s, no drift.\n' \
@@ -135,7 +152,7 @@ set -e
 # anyway sends someone to read a file that is missing or truncated, and the
 # command that told them it existed exited 0.
 if [ "$wrote" -ne 0 ]; then
-  printf '\ngc factory audit: could not write %s (tee exited %d)\n' \
+  printf '\nfactory-audit audit: could not write %s (tee exited %d)\n' \
     "$out/audit.txt" "$wrote" >&2
   exit 5
 fi
@@ -146,12 +163,12 @@ printf '\nwrote %s and %s\n' "$out/audit.txt" "$out/findings.json"
 # this pack tells other people not to make.
 print_verification
 if [ "$state" = drifted ] && [ "$status" -eq 0 ]; then
-  printf '\ngc factory audit: clean findings over a contract the installation\n' >&2
+  printf '\nfactory-audit audit: clean findings over a contract the installation\n' >&2
   printf 'contradicts. Exiting 4; reconcile is the command that clears this.\n' >&2
   status=4
 elif [ "$require_verified" = yes ] && [ "$status" -eq 0 ] \
      && [ "$state" != confirmed ]; then
-  printf '\ngc factory audit: --require-verified and the contract is %s.\n' "$state" >&2
+  printf '\nfactory-audit audit: --require-verified and the contract is %s.\n' "$state" >&2
   printf 'Exiting 4.\n' >&2
   status=4
 fi

@@ -24,7 +24,24 @@ import pytest
 PACK = Path(__file__).resolve().parents[1]
 
 
+# Every city that can reach these scripts has imported the pack, and the name it
+# imported it under is the word users type. Binding it as `fa` rather than as
+# `factory-audit` here is deliberate: a test city bound under the pack's own
+# name cannot distinguish "resolved the binding" from "printed GC_PACK_NAME",
+# which is the defect this pack shipped at seven sites.
+BINDING = "fa"
+
+
+def bind_pack(city: Path, name: str = BINDING) -> None:
+    city.mkdir(parents=True, exist_ok=True)
+    city.joinpath("pack.toml").write_text(
+        f'[imports.{name}]\nsource = "{PACK}"\n'
+    )
+
+
 def run(script: Path, city: Path, *args: str, **env_extra: str):
+    if not city.joinpath("pack.toml").exists():
+        bind_pack(city)
     env = dict(os.environ)
     env.pop("FACTORY_KIT_HOME", None)
     env.update(
@@ -43,19 +60,34 @@ def run(script: Path, city: Path, *args: str, **env_extra: str):
     )
 
 
-def install_stub_kit(city: Path, exit_code: int = 0, commit: str | None = None) -> Path:
+# The real checker ends a reconcile with a counts line, and the receipt now
+# records those counts, so a stub that omits it produces `unparsed` and every
+# state derived from it reads ERRORED. Defaulting to a confirming shape keeps
+# the stub standing in for a checker rather than for a broken one.
+CONFIRMING = "0 drift, 0 unverified, 3 confirmed, 0 open (of 3 declared)"
+VACUOUS = "0 drift, 0 unverified, 0 confirmed, 5 open (of 5 declared)"
+
+
+def stub_source(exit_code: int, summary: str | None) -> str:
+    tail = "" if summary is None else f'print({summary!r})\n'
+    return (
+        "import sys\n"
+        'print("stub checker ran: " + " ".join(sys.argv[1:]))\n'
+        + tail
+        + f"sys.exit({exit_code})\n"
+    )
+
+
+def install_stub_kit(
+    city: Path,
+    exit_code: int = 0,
+    commit: str | None = None,
+    summary: str | None = CONFIRMING,
+) -> Path:
     """A checkout shaped like the kit, whose checker exits how the test says."""
     kit = city / ".gc" / "factory-kit"
     (kit / "src").mkdir(parents=True)
-    kit.joinpath("src", "factory_check.py").write_text(
-        textwrap.dedent(
-            f"""\
-            import sys
-            print("stub checker ran: " + " ".join(sys.argv[1:]))
-            sys.exit({exit_code})
-            """
-        )
-    )
+    kit.joinpath("src", "factory_check.py").write_text(stub_source(exit_code, summary))
     subprocess.run(["git", "init", "-q"], cwd=kit, check=True)
     subprocess.run(["git", "add", "-A"], cwd=kit, check=True)
     subprocess.run(
@@ -81,10 +113,10 @@ def write_contract(city: Path) -> None:
 
 
 ORDER = PACK / "assets" / "scripts" / "factory-drift-check.sh"
-AUDIT = PACK / "commands" / "factory" / "audit" / "run.sh"
-DERIVE = PACK / "commands" / "factory" / "derive" / "run.sh"
-RECONCILE = PACK / "commands" / "factory" / "reconcile" / "run.sh"
-SETUP = PACK / "commands" / "factory" / "setup" / "run.sh"
+AUDIT = PACK / "commands" / "audit" / "run.sh"
+DERIVE = PACK / "commands" / "derive" / "run.sh"
+RECONCILE = PACK / "commands" / "reconcile" / "run.sh"
+SETUP = PACK / "commands" / "setup" / "run.sh"
 
 
 def test_the_order_stays_green_when_the_kit_is_not_installed(tmp_path: Path) -> None:
@@ -97,14 +129,14 @@ def test_the_order_stays_green_when_the_kit_is_not_installed(tmp_path: Path) -> 
     """
     result = run(ORDER, tmp_path)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "factory setup" in result.stdout
+    assert "gc fa setup" in result.stdout
 
 
 def test_the_order_stays_green_when_no_contract_has_been_written(tmp_path: Path) -> None:
     install_stub_kit(tmp_path)
     result = run(ORDER, tmp_path)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "factory derive" in result.stdout
+    assert "gc fa derive" in result.stdout
 
 
 def bind_pack_in(city: Path, name: str) -> None:
@@ -127,17 +159,17 @@ def test_an_instruction_names_the_binding_the_city_actually_used(
     tmp_path: Path,
 ) -> None:
     """gc sets GC_PACK_NAME to the PACK's name and exposes nothing carrying the
-    BINDING. Every "run gc factory-audit factory setup" this pack printed was
-    therefore a command that exits `unknown command` for anyone who bound it as
-    anything else, and that could not be seen on an installation that happened
-    to bind it under its own name. Measured against a real gc before this was
-    written: bound as `fa`, `gc fa factory audit` printed `Run: gc factory
-    setup`, and `gc factory setup` is not a command.
+    BINDING. Every "run gc factory setup" this pack printed was therefore a
+    command that exits `unknown command` for anyone who bound it as anything
+    else, and that could not be seen on an installation that happened to bind
+    it under its own name. Measured against a real gc before this was written:
+    bound as `fa`, the order printed `Run: gc factory setup`, which is not a
+    command in that city or in any other.
     """
     bind_pack_in(tmp_path, "fa")
     result = run(ORDER, tmp_path)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "gc fa factory setup" in result.stdout, result.stdout
+    assert "gc fa setup" in result.stdout, result.stdout
     assert "<binding>" not in result.stdout
 
 
@@ -166,7 +198,7 @@ def test_the_placeholder_stands_in_when_the_binding_cannot_be_read(
     )
     result = run(ORDER, tmp_path)
     assert result.returncode == 0, result.stdout + result.stderr
-    assert "gc <binding> factory setup" in result.stdout, result.stdout
+    assert "gc <binding> setup" in result.stdout, result.stdout
 
 
 def test_the_order_goes_red_when_the_checker_reports_drift(tmp_path: Path) -> None:
@@ -226,7 +258,7 @@ def test_audit_without_a_contract_gives_an_instruction_not_a_traceback(
     out.joinpath("probes.yaml").write_text("effects: []\n")
     result = run(AUDIT, tmp_path)
     assert result.returncode == 2
-    assert "factory derive" in result.stderr
+    assert "gc fa derive" in result.stderr
     assert "Traceback" not in result.stderr
 
 
@@ -241,7 +273,7 @@ def test_reconcile_without_probes_gives_an_instruction(tmp_path: Path) -> None:
     result = run(RECONCILE, tmp_path)
     assert result.returncode == 2
     assert "probes.yaml" in result.stderr
-    assert "factory derive" in result.stderr
+    assert "gc fa derive" in result.stderr
 
 
 def test_every_command_refuses_to_run_without_pack_context(tmp_path: Path) -> None:
@@ -325,7 +357,7 @@ def test_setup_refuses_a_pin_the_remote_does_not_carry(tmp_path: Path) -> None:
     env.update(GC_PACK_DIR=str(pack), GC_PACK_NAME="factory-audit",
                GC_CITY_PATH=str(city))
     result = subprocess.run(
-        ["bash", str(pack / "commands" / "factory" / "setup" / "run.sh")],
+        ["bash", str(pack / "commands" / "setup" / "run.sh")],
         env=env, cwd=city, capture_output=True, text=True, timeout=120,
     )
 
@@ -342,7 +374,7 @@ def test_setup_refuses_a_pin_the_remote_does_not_carry(tmp_path: Path) -> None:
     # And the resolver refuses that directory rather than running whatever is
     # in it, which is the second half of the same property.
     followup = subprocess.run(
-        ["bash", str(pack / "commands" / "factory" / "audit" / "run.sh")],
+        ["bash", str(pack / "commands" / "audit" / "run.sh")],
         env=env, cwd=city, capture_output=True, text=True, timeout=60,
     )
     assert followup.returncode == 2, followup.stdout + followup.stderr
@@ -358,7 +390,7 @@ def test_help_does_not_require_the_kit(script: str, tmp_path: Path) -> None:
     the one command a person runs to find out how to install the kit failed
     because the kit was not installed.
     """
-    result = run(PACK / "commands" / "factory" / script / "run.sh", tmp_path, "--help")
+    result = run(PACK / "commands" / script / "run.sh", tmp_path, "--help")
     assert result.returncode == 0, result.stdout + result.stderr
     assert result.stdout.strip()
 
@@ -374,7 +406,7 @@ def test_a_flag_without_its_value_is_a_usage_error(
     so a typo in a flag reads as an internal error rather than as bad input.
     """
     install_stub_kit(tmp_path)
-    result = run(PACK / "commands" / "factory" / script / "run.sh", tmp_path, flag)
+    result = run(PACK / "commands" / script / "run.sh", tmp_path, flag)
     assert result.returncode == 64, result.stdout + result.stderr
     assert "needs a value" in result.stderr
     assert "unbound variable" not in result.stderr
@@ -541,13 +573,7 @@ def set_stub_exit(city: Path, code: int) -> None:
     the feature exists for.
     """
     city.joinpath(".gc", "factory-kit", "src", "factory_check.py").write_text(
-        textwrap.dedent(
-            f"""\
-            import sys
-            print("stub checker ran: " + " ".join(sys.argv[1:]))
-            sys.exit({code})
-            """
-        )
+        stub_source(code, CONFIRMING)
     )
 
 
@@ -658,7 +684,7 @@ def test_the_scheduled_order_writes_the_receipt_the_audit_reads(
     """The order is the reconcile most cities actually run.
 
     It shares no code path with the interactive command beyond the helper, so a
-    receipt written only by `factory reconcile` would report NONE forever on a
+    receipt written only by `reconcile` would report NONE forever on a
     city that checks itself every day, and nobody would look for the cause in
     the order.
     """
@@ -713,7 +739,7 @@ def test_moving_the_kit_ages_the_reading_that_kit_produced(tmp_path: Path) -> No
     # A second commit in the same checkout: same contract, same probes, same
     # files on disk, different checker.
     kit.joinpath("src", "factory_check.py").write_text(
-        "import sys\nprint('stub checker ran: ' + ' '.join(sys.argv[1:]))\nsys.exit(0)\n"
+        stub_source(0, CONFIRMING) + "# a second commit in the same checkout\n"
     )
     subprocess.run(["git", "add", "-A"], cwd=kit, check=True)
     subprocess.run(
@@ -724,3 +750,150 @@ def test_moving_the_kit_ages_the_reading_that_kit_produced(tmp_path: Path) -> No
     result = run(AUDIT, tmp_path)
     assert "verification: STALE" in result.stdout, result.stdout
     assert "CONFIRMED" not in result.stdout, result.stdout
+
+
+def test_a_reconcile_that_confirmed_nothing_is_not_a_confirmation(
+    tmp_path: Path,
+) -> None:
+    """The defect that a stand-up in a real city surfaced, not a reading of it.
+
+    Reconcile exits 0 when the installation contradicts nothing, and a contract
+    that leaves every effect undecided has nothing for a probe to contradict.
+    So the first reconcile anyone runs after `derive` exits 0 while confirming
+    nothing, and reading only the exit status turns an unchecked document into
+    a verified one. `0 drift` and `this contract is true` are different claims
+    and the receipt now carries enough to tell them apart.
+    """
+    install_stub_kit(tmp_path, summary=VACUOUS)
+    write_contract(tmp_path)
+    assert run(RECONCILE, tmp_path).returncode == 0
+    result = run(AUDIT, tmp_path)
+    assert "verification: VACUOUS" in result.stdout, result.stdout
+    assert "CONFIRMED" not in result.stdout, result.stdout
+    # Not a failure on its own. A contract fresh out of `derive` is legitimately
+    # in this state, and exiting nonzero for it would make the documented first
+    # run look broken.
+    assert result.returncode == 0, result.stdout + result.stderr
+
+
+def test_require_verified_refuses_a_vacuous_contract(tmp_path: Path) -> None:
+    """The flag's whole purpose is refusing an unchecked contract in CI.
+
+    A contract nothing could check is unchecked in the sense that matters, so
+    letting it through would leave the flag passing on precisely the input it
+    exists to catch.
+    """
+    install_stub_kit(tmp_path, summary=VACUOUS)
+    write_contract(tmp_path)
+    assert run(RECONCILE, tmp_path).returncode == 0
+    result = run(AUDIT, tmp_path, "--require-verified")
+    assert result.returncode == 4, result.stdout + result.stderr
+    assert "verification: VACUOUS" in result.stdout, result.stdout
+
+
+def test_counts_that_cannot_be_read_never_produce_a_green(tmp_path: Path) -> None:
+    """A checker whose output shape moved must not be read as a confirmation.
+
+    The counts are parsed out of the reconcile report, so a kit that renames or
+    reformats that line breaks the parse. Guessing a value there would invent a
+    confirmation out of a parse failure, which is worse than the state it
+    replaced.
+    """
+    install_stub_kit(tmp_path, summary=None)
+    write_contract(tmp_path)
+    assert run(RECONCILE, tmp_path).returncode == 0
+    assert "unparsed" in receipt_of(tmp_path).read_text()
+    result = run(AUDIT, tmp_path)
+    assert "verification: ERRORED" in result.stdout, result.stdout
+    assert "CONFIRMED" not in result.stdout, result.stdout
+
+
+def test_a_receipt_from_an_older_format_is_aged_rather_than_read(
+    tmp_path: Path,
+) -> None:
+    """A missing field and an empty field are indistinguishable.
+
+    Version 1 receipts carry no counts, so reading them under the version 2
+    rules would report ERRORED for every city that reconciled before this
+    change and then upgraded. Ageing them is the honest answer: reconcile costs
+    a second and produces a reading in the current shape.
+    """
+    install_stub_kit(tmp_path)
+    write_contract(tmp_path)
+    assert run(RECONCILE, tmp_path).returncode == 0
+    receipt = receipt_of(tmp_path)
+    receipt.write_text(
+        "\n".join(
+            line
+            for line in receipt.read_text().splitlines()
+            if not line.startswith(("receipt_version=", "drift=", "unverified=",
+                                    "confirmed=", "open=", "declared="))
+        )
+        + "\n"
+    )
+    result = run(AUDIT, tmp_path)
+    assert "verification: STALE" in result.stdout, result.stdout
+    assert "CONFIRMED" not in result.stdout, result.stdout
+
+
+def test_the_scheduled_order_records_the_counts_too(tmp_path: Path) -> None:
+    """The order is the reconcile most cities actually run.
+
+    It calls the same helper but assembles the arguments itself, so leaving the
+    report out of that one call site would write a version 2 receipt with
+    unparsed counts. Every audit in a city that only ever runs the order would
+    then read ERRORED, and the cause would be in a file nobody was looking at.
+    """
+    install_stub_kit(tmp_path, summary=VACUOUS)
+    write_contract(tmp_path)
+    assert run(ORDER, tmp_path).returncode == 0
+    assert "unparsed" not in receipt_of(tmp_path).read_text(), receipt_of(tmp_path).read_text()
+    assert "verification: VACUOUS" in run(AUDIT, tmp_path).stdout
+
+
+def test_a_receipt_with_an_empty_count_field_is_not_read_as_a_number(
+    tmp_path: Path,
+) -> None:
+    """A missing value and a zero are one character apart in this file.
+
+    The counts are checked one field at a time because concatenating them lets
+    an empty field hide behind a numeric one: `confirmed=0` with `declared=`
+    reads as "0", passes a digits-only test, and then aborts the comparison
+    with bash's own `integer expression expected` rather than reporting a
+    state. Anything that cannot be read is ERRORED.
+    """
+    install_stub_kit(tmp_path)
+    write_contract(tmp_path)
+    assert run(RECONCILE, tmp_path).returncode == 0
+    receipt = receipt_of(tmp_path)
+    receipt.write_text(
+        receipt.read_text().replace("confirmed=3", "confirmed=0").replace(
+            "declared=3", "declared="
+        )
+    )
+    result = run(AUDIT, tmp_path)
+    assert "verification: ERRORED" in result.stdout, result.stdout
+    assert "integer expression" not in result.stderr, result.stderr
+
+
+def test_the_reconcile_report_is_parsed_and_never_expanded(tmp_path: Path) -> None:
+    """The counts come out of the checker's own stdout.
+
+    The kit is pinned rather than vendored, so its output is text this pack does
+    not control, and it is read through a command substitution in a heredoc.
+    Raised in review as possibly expansion-sensitive; it is not, because the
+    OUTPUT of a substitution is not rescanned. This is the case that would show
+    it if that were wrong, and it also pins the answer so the next reader does
+    not have to re-derive it.
+    """
+    marker = tmp_path / "expanded"
+    install_stub_kit(
+        tmp_path,
+        summary=f"$(touch {marker}) `touch {marker}` ;touch {marker}",
+    )
+    write_contract(tmp_path)
+    assert run(RECONCILE, tmp_path).returncode == 0
+    assert not marker.exists(), "the checker's report was expanded, not parsed"
+    assert "confirmed=unparsed" in receipt_of(tmp_path).read_text()
+    result = run(AUDIT, tmp_path)
+    assert "verification: ERRORED" in result.stdout, result.stdout

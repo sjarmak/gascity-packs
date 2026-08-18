@@ -51,8 +51,8 @@ uncomfortable is hard to get.
 ## The two halves, and why one alone is worthless
 
 ```bash
-gc <binding> factory audit        # reads your contract
-gc <binding> factory reconcile    # reads your code
+gc <binding> audit        # reads your contract
+gc <binding> reconcile    # reads your code
 ```
 
 `audit` runs a rule catalog over the contract you maintain. It cannot tell
@@ -73,17 +73,23 @@ measures your prose.
 So `audit` will not print a bare score. `reconcile` leaves a receipt recording
 the SHA-256 of the contract and probe pack it read and what it found, and every
 audit states, above the number and again below it, one of `NONE`, `STALE`,
-`DRIFTED`, `ERRORED` or `CONFIRMED`. A contract the last reconcile contradicted
-exits 4 however clean the rules are, and editing the contract afterwards returns
-it to `STALE` rather than carrying the confirmation through the edit. Run
-`gc <binding> factory audit --require-verified` in CI to refuse an unchecked
-contract outright.
+`DRIFTED`, `ERRORED`, `VACUOUS` or `CONFIRMED`. A contract the last reconcile
+contradicted exits 4 however clean the rules are, and editing the contract
+afterwards returns it to `STALE` rather than carrying the confirmation through
+the edit. Run `gc <binding> audit --require-verified` in CI to refuse an
+unchecked contract outright.
+
+`VACUOUS` is the state that caught us. Reconcile exits 0 when the installation
+contradicts nothing, and a contract whose effects are all undecided asserts
+nothing to contradict, so a fresh derive reconciles clean and confirms nothing.
+The receipt carries the counts, so `0 drift` and `0 confirmed` are reported as
+what they are instead of collapsing into a green.
 
 ## Getting a contract without writing one
 
 ```bash
-gc <binding> factory setup     # clone the pinned checker into the city, once
-gc <binding> factory derive    # read the installation, write what it does
+gc <binding> setup     # clone the pinned checker into the city, once
+gc <binding> derive    # read the installation, write what it does
 cp .gc/factory-audit/factory.derived.yaml .gc/factory-audit/factory.yaml
 ```
 
@@ -100,7 +106,7 @@ constraint the whole pack is built around.
 That part is per-installation, and the pack ships one starting point:
 
 ```bash
-gc <binding> factory derive --template gc-city
+gc <binding> derive --template gc-city
 ```
 
 `gc-city` describes a Gas City built the way ours is: `gc slack`, `git push`,
@@ -138,7 +144,7 @@ that as a failed search is a false reading, since the search had no target.
 
 ## The checker is pinned, not vendored
 
-`kit.pin` names a repository and a commit. `gc factory setup` clones it into
+`kit.pin` names a repository and a commit. `gc <binding> setup` clones it into
 `<city>/.gc/factory-kit` and checks out that exact commit.
 
 Copying the checker into the pack would put a second copy in every city that
@@ -164,8 +170,8 @@ It posts nothing, files nothing, and pushes nothing.
 ## Install
 
 1. Add the pack to `city.toml`.
-2. `gc <binding> factory setup`
-3. `gc <binding> factory derive --template gc-city`, then read the probe
+2. `gc <binding> setup`
+3. `gc <binding> derive --template gc-city`, then read the probe
    pack it installed and correct it for your tree.
 4. Copy the derived contract to `factory.yaml` and edit it.
 5. `gc supervisor reload`
