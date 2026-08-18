@@ -1,0 +1,9 @@
+# NONE: this pack ships no commands at all -- it has no commands/ directory,
+# so there is nothing for a user to type and nothing for this suite to run.
+# It is wired through orders, agents and formulas, which the other live-gc
+# suites cover.
+#
+# The file exists rather than being absent so that "nothing to execute" is a
+# recorded decision instead of an omission nobody noticed. A command added to
+# this pack makes the declaration stale, and the shipped-commands check turns
+# that into a failure.

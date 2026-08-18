@@ -190,6 +190,51 @@ def test_declared_safe_commands_are_commands_the_pack_ships(pack: str) -> None:
     )
 
 
+# Packs whose instructions are wrong today, with the exact shape of the
+# wrongness. Every one was found by running the pack under a binding that is
+# not its own name, which is the only way any of them shows up: on the author's
+# own city the binding and the pack name are the same word and all four read
+# correctly.
+#
+# The shape is recorded rather than the failure merely being tolerated. An
+# `xfail` marker would swallow ANY failure of this test for these four packs --
+# a timeout, a parse regression, `gc` refusing to run the command at all -- and
+# report it as the known defect. So the expectation is asserted inline instead:
+# each pack names the set of misdirected words it prints today, or the sentinel
+# below when it prints no `gc ...` instruction at all. A fix in `gc` empties
+# that set and turns this file RED, which is the property `strict=True` was
+# there for, and an unrelated breakage no longer lands in the same bucket.
+#
+# The fix belongs in `gc`, which knows the binding and does not pass it to a
+# command; patching four packs around a missing environment variable would put
+# four copies of a workaround in the packs users install.
+NO_INSTRUCTION = "<prints no gc instruction at all>"
+
+KNOWN_UNBOUND = {
+    "pr-pipeline": (
+        {"<binding>"},
+        "prints the literal placeholder `gc <binding> pr ...` from its help "
+        "text, in a city where the binding is knowable",
+    ),
+    "slack-channel": (
+        {"slack-channel"},
+        "sc_die hardcodes `gc slack-channel: ` as the prefix on every error "
+        "message",
+    ),
+    "slack-full": (
+        NO_INSTRUCTION,
+        "its bind commands exit through argparse in an internal Python script, "
+        "so the error names `slack_chat_bind_room.py` and no `gc` command at "
+        "all",
+    ),
+    "slack-mini": (
+        {"slack-mini"},
+        "hardcodes `gc slack-mini post-message: ` as the prefix on every error "
+        "message",
+    ),
+}
+
+
 @pytest.mark.parametrize("pack", MAINTAINED_PACKS)
 def test_a_packs_instructions_name_the_binding_the_city_chose(
     pack: str, tmp_path: Path, gc_test_bin: Path  # noqa: F811
@@ -201,6 +246,9 @@ def test_a_packs_instructions_name_the_binding_the_city_chose(
             f"add {DECLARATION} naming commands that are safe to run in a "
             f"scratch city to bring it under this check"
         )
+
+    expected, reason = KNOWN_UNBOUND.get(pack, (set(), ""))
+    known = f" {pack} is a known-unbound pack: {reason}." if reason else ""
 
     _, rig_imports = wiring(pack)
     workspace = write_city(
@@ -214,6 +262,17 @@ def test_a_packs_instructions_name_the_binding_the_city_chose(
     for verbs in declared:
         output = run_declared(gc_test_bin, workspace, verbs)
         printed = INSTRUCTION.findall(output)
+
+        if expected is NO_INSTRUCTION:
+            assert not printed, (
+                f"gc {BINDING} {' '.join(verbs)} printed a `gc ...` "
+                f"instruction, and this pack is recorded as printing none."
+                f"{known} If that changed, replace its KNOWN_UNBOUND entry "
+                f"with the words it now misdirects to, or drop the entry if "
+                f"the instruction is correct.\nOutput:\n{output}"
+            )
+            continue
+
         assert printed, (
             f"gc {BINDING} {' '.join(verbs)} printed no `gc ...` instruction at "
             f"all, so listing it in {DECLARATION} asserts nothing. Either it "
@@ -221,13 +280,14 @@ def test_a_packs_instructions_name_the_binding_the_city_chose(
             f"Output:\n{output}"
         )
         wrong = misdirected(output, pack, shipped, builtins)
-        assert not wrong, (
-            f"gc {BINDING} {' '.join(verbs)} told the user to run a command "
-            f"that does not exist in this city: `gc {sorted(wrong)[0]} ...`. "
-            f"The city bound this pack as `{BINDING}`, so every instruction has "
-            f"to name that. GC_PACK_NAME is the pack's name and not the "
-            f"binding; read the binding out of the city's pack.toml.\n"
-            f"Output:\n{output}"
+        assert wrong == expected, (
+            f"gc {BINDING} {' '.join(verbs)} misdirected to {sorted(wrong)}, "
+            f"and {sorted(expected)} was expected.{known} The city bound this "
+            f"pack as `{BINDING}`, so a correct instruction names that; "
+            f"GC_PACK_NAME is the pack's name and not the binding. An EMPTY "
+            f"left side on a known-unbound pack means the defect is fixed -- "
+            f"drop its KNOWN_UNBOUND entry rather than widening this "
+            f"assertion.\nOutput:\n{output}"
         )
 
 
@@ -331,6 +391,76 @@ def test_at_least_one_maintained_pack_is_actually_executed() -> None:
     assert declaring, (
         "no maintained pack declares a safe command, so nothing in this file "
         "executes anything and every result in it is a skip"
+    )
+
+
+NONE_MARKER = "# NONE:"
+
+
+def none_reason(text: str) -> str:
+    """The reason on a declaration's `# NONE:` line, or "" if there is none.
+
+    Anchored to the start of a line and required to carry words after the
+    colon. A substring test would accept `#    a NONE: thing to note` in the
+    middle of a paragraph, and an unanchored one with no reason would accept a
+    bare `# NONE:` -- which is the empty placeholder this check exists to
+    reject, wearing the marker.
+    """
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith(NONE_MARKER):
+            return stripped[len(NONE_MARKER):].strip()
+    return ""
+
+
+@pytest.mark.parametrize(
+    "text,expected",
+    [
+        ("# NONE: this pack ships no commands", "this pack ships no commands"),
+        ("  # NONE: indented is fine", "indented is fine"),
+        ("# a line\n# NONE: on the second line", "on the second line"),
+        # The placeholder with the marker painted on it.
+        ("# NONE:", ""),
+        ("# NONE:   ", ""),
+        # Prose that happens to contain the token.
+        ("# there is NONE: of that here", ""),
+        ("", ""),
+    ],
+)
+def test_the_none_marker_wants_a_reason_on_its_own_line(text: str, expected: str) -> None:
+    assert none_reason(text) == expected
+
+
+@pytest.mark.parametrize("pack", MAINTAINED_PACKS)
+def test_every_maintained_pack_decides_what_is_safe_to_execute(pack: str) -> None:
+    """A missing declaration and a deliberate empty one are not the same thing.
+
+    Without this, both produce the identical `s` in a CI log: the pack nobody
+    ever wrote a declaration for reads exactly like the pack where somebody
+    read every command and concluded that none of them can be run without
+    performing an effect. The first is an omission and the second is a
+    decision, and only one of them wants doing something about.
+
+    So the file is required, and an empty one has to say why on a `# NONE:`
+    line. That line is prose and this does not try to judge it; what it
+    prevents is the file existing as an empty placeholder, which would put us
+    back where we started with an extra file.
+    """
+    path = pack_dir(pack) / DECLARATION
+    assert path.is_file(), (
+        f"{pack} has no {DECLARATION}. Every maintained pack decides which of "
+        f"its commands are safe to execute in a scratch city, including "
+        f"deciding that none are -- write the file with a `{NONE_MARKER} "
+        f"<reason>` line if that is the answer."
+    )
+    if safe_commands(pack):
+        return
+    assert none_reason(path.read_text(encoding="utf-8")), (
+        f"{pack}/{DECLARATION} declares no commands and gives no reason. An "
+        f"empty declaration is a decision that nothing in the pack can be run "
+        f"without performing an effect; say so on a `{NONE_MARKER} <reason>` "
+        f"line of its own so the next reader can check it rather than assume "
+        f"it."
     )
 
 

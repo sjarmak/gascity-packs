@@ -1,0 +1,27 @@
+# Commands tests/test_pack_instructions_live_gc.py may EXECUTE against a real
+# gc in a throwaway city, one per line, as the words that follow the binding.
+#
+# The bar for a line here is that running the command in a city that has
+# nothing set up performs no effect outside that city: no network, no writes
+# beyond the scratch city, nothing published.
+#
+# Every command in this pack ends at `sc_call`, which curls the adapter. The
+# two below are here because an argument check refuses BEFORE that: sc_bind
+# requires two positional arguments and exits 2 with a usage line, and nothing
+# between the entry point and that check touches the network. Verified by
+# running each script with no arguments and an empty environment.
+
+bind-room         # sc_bind: usage, exit 2, before sc_call
+bind-dm           # same shape, same guard
+
+# The other six are not here, and the reason is what stops them rather than
+# whether they stop. publish, publish-to-channel, react, reply-current,
+# handle-alias and identity do all exit before `sc_call` when invoked with no
+# arguments today, but what stops them is an ambient reading, not an argument:
+# `sc_load_body` refusing because neither --body nor --body-file was set,
+# `sc_session` refusing because GC_SESSION_ID is unset, `sc_require` refusing
+# because jq or curl is missing. Every one of those is a property of the
+# environment this suite happens to construct, and each command is one flag or
+# one exported variable away from reaching `sc_call` and posting to, or reading
+# from, whatever the adapter URL resolves to. The two above are refused by
+# their own positional-argument check, which is a property of the code.

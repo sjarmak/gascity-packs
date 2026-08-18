@@ -1,0 +1,11 @@
+# See slack-channel/tests/live-gc-safe-commands.txt for what this file is.
+#
+# This pack ships exactly one command, and it posts to Slack. It is on the list
+# anyway because its no-argument path exits 2 on "--channel is required" before
+# building a request, so the executed path is argument validation and nothing
+# else. Verified by running the script with no arguments and no adapter URL.
+#
+# The harness passes no arguments. A line here must never be extended with
+# flags: `post-message --channel X --text Y` under this suite would post.
+
+post-message      # no args: "--channel is required", exit 2, no request built

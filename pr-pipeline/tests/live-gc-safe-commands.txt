@@ -1,0 +1,20 @@
+# See slack-channel/tests/live-gc-safe-commands.txt for what this file is.
+#
+# The three below sling a coding agent when given real arguments. With no
+# arguments each one prints its own help.md and exits 2 from the same guard
+# (`[ "${1:-}" = "--help" ] || ... || [ -z "${1:-}" ]`), before it resolves a
+# rig, before it touches the bead store, and before it calls gc. That early
+# exit is exactly the path a new user meets first, which is the path whose
+# instructions this suite reads.
+
+pr blast-radius
+pr plan
+pr review
+
+# `pr ship` is NOT here, and the difference is one clause. Its guard covers
+# only `--help`/`-h` (commands/pr/ship/run.sh:23), because every one of its
+# flags is optional and a bare `pr ship` is a legitimate invocation. So with no
+# arguments it falls through, takes the rig from GC_RIG -- which this harness
+# sets to `demo` (tests/gc_live_city.py) -- and reaches
+# `exec gc sling "$RIG/polecat" mol-pr-ship` at run.sh:63. Declaring it would
+# make this suite dispatch a formula, not read a usage line.

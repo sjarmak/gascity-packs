@@ -1,0 +1,24 @@
+# See slack-channel/tests/live-gc-safe-commands.txt for what this file is.
+#
+# The one below exits 1 with "missing Gas City pack context" before doing
+# anything, and under a real gc that context IS set, so the run continues into
+# the pack's own argument handling. It is on this list because that handling
+# refuses a no-argument invocation, not because the context check catches it.
+# Verified by running it under the harness and reading the output.
+
+bind-room         # refuses without <channel_id> <session_id>
+
+# `bind-dm` is deliberately not here even though it has the same guard. One
+# command is enough to reach this pack's argparse path, and every extra line
+# is another command this suite executes for a result it already has.
+
+# `status` is safe to run and is NOT here. It exits 0 reporting local adapter
+# and event counts, and a successful readout has no reason to tell you what to
+# type next -- so it prints no `gc ...` line, and this suite reads instructions.
+# Listing it would assert nothing while looking like coverage. Verified by
+# running it under the harness: exit 0, "Adapters: (none registered)".
+
+# The other twenty-four are not here. This pack talks to Slack through a
+# built adapter binary rather than curl, which does not make execution safer:
+# post-message, publish, upload, react, delegate, company-redrive and
+# retry-peer-fanout all perform or replay an outbound effect.
