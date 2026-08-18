@@ -95,11 +95,11 @@ func NewPostMessageCmd(stdout, _ io.Writer) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "post-message",
 		Short: "Post a workflow-status payload to a Slack channel as Block Kit",
-		Long: `Post a structured workflow-status payload (milestone | progress | rollup)
+		Long: fmt.Sprintf(`Post a structured workflow-status payload (milestone | progress | rollup)
 to a Slack channel, rendered via Block Kit.
 
-This is the agent-driven status-projection surface. Unlike 'gc slack
-publish' (human-driven, binding-resolved) and 'gc slack reply-current'
+This is the agent-driven status-projection surface. Unlike '%s'
+(human-driven, binding-resolved) and '%s'
 (human-driven, inbound-anchored), post-message bypasses extmsg
 bindings and posts directly to the configured channel using
 SLACK_BOT_TOKEN. Use it for cron-driven rollups, milestone
@@ -114,7 +114,7 @@ Payload kinds:
 Pass --update <ts> with a previously-returned message ts to edit the
 post in place (Slack chat.update). Without --update we call
 chat.postMessage and print the new ts to stdout so callers can
-capture it for the next refresh.`,
+capture it for the next refresh.`, packCommand("publish"), packCommand("reply-current")),
 		Args: cobra.NoArgs,
 		RunE: func(c *cobra.Command, _ []string) error {
 			return runSlackPostMessage(c.Context(), opts)

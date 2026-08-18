@@ -484,11 +484,11 @@ func renderCompanyResponseContract(b *strings.Builder, kind, turnRef string) {
 		b.WriteString("response_contract: Follow the wake-kind response contract.\n")
 	}
 	if turnRef != "" {
-		fmt.Fprintf(b, "reply_command: Use gc slack reply-current --turn-ref %s --body-file <file> for human-visible Slack output.\n",
-			neutralizeMarkupBoundaries(turnRef))
+		fmt.Fprintf(b, "reply_command: Use %s --turn-ref %s --body-file <file> for human-visible Slack output.\n",
+			packCommand("reply-current"), neutralizeMarkupBoundaries(turnRef))
 		b.WriteString("reply_routing_contract: The reply command is bound to this exact Slack channel and thread. If responding, use that exact --turn-ref; never omit it or substitute another channel/thread.\n")
 	} else {
-		b.WriteString("reply_command: Use gc slack reply-current --body-file <file> for human-visible Slack output.\n")
+		fmt.Fprintf(b, "reply_command: Use %s --body-file <file> for human-visible Slack output.\n", packCommand("reply-current"))
 	}
 	b.WriteString("reply_identity_contract: Slack already attributes every reply to your agent identity; do not prefix the message with your name or handle.\n")
 }

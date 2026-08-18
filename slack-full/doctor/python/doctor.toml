@@ -1,2 +1,2 @@
-description = 'python3 3.11+ is available for the gc slack helper commands'
+description = "python3 3.11+ is available for this pack's helper commands"
 run = '../check-python.sh'

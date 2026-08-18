@@ -19,6 +19,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -26,10 +28,16 @@ import (
 )
 
 func newRootCmd() *cobra.Command {
+	displayName := rootCommandUse(os.Args[0])
+	binding := bindingPlaceholder
+	if strings.HasPrefix(displayName, "gc ") {
+		binding = strings.TrimPrefix(displayName, "gc ")
+	}
+	cmdpkg.SetPackBinding(binding)
 	cmd := &cobra.Command{
-		Use:   "gc-slack-cli",
-		Short: "Operator CLI for the gc slack-pack",
-		Long: "gc-slack-cli operates on the on-disk slack runtime state " +
+		Use:   filepath.Base(os.Args[0]),
+		Short: "Operator CLI for the slack-full pack",
+		Long: "This operator CLI manages the on-disk Slack runtime state " +
 			"under <city>/.gc/slack/ — the same files the slack-adapter " +
 			"reads at startup and on SIGHUP. Subcommands are added in " +
 			"Phase 1 of the slack-cli relocation.",
@@ -48,6 +56,9 @@ func newRootCmd() *cobra.Command {
 				return nil
 			}
 			return fmt.Errorf("unknown command %q for %q", args[0], cmd.CommandPath())
+		},
+		Annotations: map[string]string{
+			cobra.CommandDisplayNameAnnotation: displayName,
 		},
 		// RunE on no-args: print usage. The skeleton has nothing to
 		// run, but a bare invocation should be useful — show the help

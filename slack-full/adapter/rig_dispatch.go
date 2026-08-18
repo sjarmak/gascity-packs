@@ -129,7 +129,7 @@ func openRigFixModalForSlash(
 	if err != nil {
 		log.Printf("slack interactions: encode rig modal metadata rig=%q: %v", rigName, err)
 		writeEphemeral(w, http.StatusOK,
-			"Internal error preparing modal payload; please retry or use `gc slack map-rig` to verify configuration.")
+			fmt.Sprintf("Internal error preparing modal payload; please retry or use `%s` to verify configuration.", packCommand("map-rig")))
 		return
 	}
 	view, err := buildRigFixModalView(meta, pm)

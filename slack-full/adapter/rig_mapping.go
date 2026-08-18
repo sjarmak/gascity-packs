@@ -123,12 +123,12 @@ func (r *rigMappingRegistry) ResolveSlingTarget(workspaceID, rigName string) (ta
 	defer r.mu.RUnlock()
 	rec, ok := r.byKey[rigMappingKey(workspaceID, rigName)]
 	if !ok {
-		return "", "", fmt.Errorf("no rig mapping for workspace=%q rig=%q; run `gc slack map-rig %s --workspace-id %s --channel <c> --sling-target <rig>/<role>` to create one",
-			workspaceID, rigName, rigName, workspaceID)
+		return "", "", fmt.Errorf("no rig mapping for workspace=%q rig=%q; run `%s %s --workspace-id %s --channel <c> --sling-target <rig>/<role>` to create one",
+			workspaceID, rigName, packCommand("map-rig"), rigName, workspaceID)
 	}
 	if rec.SlingTarget == "" {
-		return "", "", fmt.Errorf("rig %q in workspace %q has no sling target; re-run `gc slack map-rig %s --workspace-id %s --sling-target <rig>/<role>` to set one",
-			rigName, workspaceID, rigName, workspaceID)
+		return "", "", fmt.Errorf("rig %q in workspace %q has no sling target; re-run `%s %s --workspace-id %s --sling-target <rig>/<role>` to set one",
+			rigName, workspaceID, packCommand("map-rig"), rigName, workspaceID)
 	}
 	return rec.SlingTarget, rec.FixFormula, nil
 }

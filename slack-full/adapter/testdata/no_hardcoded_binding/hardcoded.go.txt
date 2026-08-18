@@ -1,0 +1,5 @@
+package fixture
+
+// The guard must not read this comment: `gc slack react` in prose is a
+// description of a defect, not an instruction the program prints.
+const instruction = "Run gc slack publish."

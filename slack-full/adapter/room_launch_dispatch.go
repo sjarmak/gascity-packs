@@ -183,7 +183,8 @@ func dispatchRoomLaunch(
 // other slack-pack ephemeral path).
 func emitRoomLaunchNotEnabledEphemeral(cfg config, msg slackMessageEvent, handle string) {
 	body := fmt.Sprintf(
-		"channel is not enabled for launcher mode; run `gc slack enable-room-launch %s --launcher <pool>` to bind a launcher pool, then retry @@%s.",
+		"channel is not enabled for launcher mode; run `%s %s --launcher <pool>` to bind a launcher pool, then retry @@%s.",
+		packCommand("enable-room-launch"),
 		neutralizeMarkupBoundaries(msg.Channel),
 		neutralizeMarkupBoundaries(handle),
 	)

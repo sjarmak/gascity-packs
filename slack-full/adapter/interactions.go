@@ -396,8 +396,8 @@ func handleSlackInteractions(cfg config, mapReg *channelMappingRegistry, rigReg 
 		rec, source, ok := resolveChannelTargetWithName(mapReg, rigReg, teamID, channelID, channelName)
 		if !ok {
 			writeEphemeral(w, http.StatusOK, fmt.Sprintf(
-				"No binding for this channel. Bind a rig with `gc slack map-rig <name> --workspace-id %s --channel %s`, or bind a session with `gc slack map-channel %s --workspace-id %s --session <id>`.",
-				teamID, channelID, channelID, teamID))
+				"No binding for this channel. Bind a rig with `%s <name> --workspace-id %s --channel %s`, or bind a session with `%s %s --workspace-id %s --session <id>`.",
+				packCommand("map-rig"), teamID, channelID, packCommand("map-channel"), channelID, teamID))
 			return
 		}
 		log.Printf("interaction: workspace=%q channel=%q source=%s target=%s/%s",
@@ -429,7 +429,7 @@ func handleSlackInteractions(cfg config, mapReg *channelMappingRegistry, rigReg 
 			// process. Fail closed.
 			log.Printf("slack interactions: unexpected target_kind %q for %q/%q", rec.TargetKind, teamID, channelID)
 			writeEphemeral(w, http.StatusOK,
-				"Channel binding is in an unexpected state; please re-run `gc slack map-channel`.")
+				fmt.Sprintf("Channel binding is in an unexpected state; please re-run `%s`.", packCommand("map-channel")))
 		}
 	}
 }
@@ -452,7 +452,7 @@ func dispatchSlashCommandToSession(cfg config, sessionID, command, text, channel
 			"%s\n"+
 			"\n"+
 			"To reply in that channel, write your reply to a tmpfile and run:\n"+
-			"  gc slack publish-to-channel \\\n"+
+			"  %s \\\n"+
 			"    --conversation-id %s \\\n"+
 			"    --body-file <tmpfile>\n"+
 			"</system-reminder>",
@@ -461,6 +461,7 @@ func dispatchSlashCommandToSession(cfg config, sessionID, command, text, channel
 		neutralizeMarkupBoundaries(teamID),
 		neutralizeMarkupBoundaries(userID),
 		neutralizeMarkupBoundaries(text),
+		packCommand("publish-to-channel"),
 		neutralizeMarkupBoundaries(channelID),
 	)
 	if err := postSessionMessage(cfg, sessionID, body, "gc-slack-adapter-interactions"); err != nil {
@@ -613,8 +614,8 @@ func handleBlockActionsPayload(w http.ResponseWriter, cfg config, mapReg *channe
 	rec, source, ok := resolveChannelTarget(mapReg, rigReg, p.Team.ID, channelID)
 	if !ok {
 		writeEphemeral(w, http.StatusOK, fmt.Sprintf(
-			"No binding for this channel. Bind a rig with `gc slack map-rig <name> --workspace-id %s --channel %s`, or bind a session with `gc slack map-channel %s --workspace-id %s --session <id>`.",
-			p.Team.ID, channelID, channelID, p.Team.ID))
+			"No binding for this channel. Bind a rig with `%s <name> --workspace-id %s --channel %s`, or bind a session with `%s %s --workspace-id %s --session <id>`.",
+			packCommand("map-rig"), p.Team.ID, channelID, packCommand("map-channel"), channelID, p.Team.ID))
 		return
 	}
 	log.Printf("interaction: workspace=%q channel=%q source=%s target=%s/%s type=block_actions",
@@ -643,7 +644,7 @@ func handleBlockActionsPayload(w http.ResponseWriter, cfg config, mapReg *channe
 	default:
 		log.Printf("slack interactions: unexpected target_kind %q for %q/%q", rec.TargetKind, p.Team.ID, channelID)
 		writeEphemeral(w, http.StatusOK,
-			"Channel binding is in an unexpected state; please re-run `gc slack map-channel`.")
+			fmt.Sprintf("Channel binding is in an unexpected state; please re-run `%s`.", packCommand("map-channel")))
 	}
 }
 
@@ -811,11 +812,11 @@ func dispatchBlockActionsToSession(cfg config, sessionID, channelID string, p *s
 	}
 	fmt.Fprintf(&buf,
 		"\nTo reply in that channel, write your reply to a tmpfile and run:\n"+
-			"  gc slack publish-to-channel \\\n"+
+			"  %s \\\n"+
 			"    --conversation-id %s \\\n"+
 			"    --body-file <tmpfile>\n"+
 			"</system-reminder>",
-		neutralizeMarkupBoundaries(channelID))
+		packCommand("publish-to-channel"), neutralizeMarkupBoundaries(channelID))
 	body := buf.String()
 	if err := postSessionMessage(cfg, sessionID, body, "gc-slack-adapter-interactions-block"); err != nil {
 		log.Printf("slack interactions: dispatch block_actions to session=%s: %v", sessionID, err)

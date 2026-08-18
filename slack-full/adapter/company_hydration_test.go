@@ -197,7 +197,7 @@ func TestRenderCompanyReminderCarriesSelectiveResponseContract(t *testing.T) {
 		t.Run(kind+"_identity", func(t *testing.T) {
 			got := renderCompanyReminder(room, "human", kind, "status update", "1700000000.000500", "1700000000.000100", hy, nil, nil)
 			normalized := strings.ToLower(got)
-			if !strings.Contains(normalized, "gc slack reply-current --body-file <file>") {
+			if !strings.Contains(normalized, "gc <binding> reply-current --body-file <file>") {
 				t.Errorf("%s reminder missing reply command:\n%s", kind, got)
 			}
 			if !strings.Contains(normalized, "slack already attributes every reply to your agent identity") {
@@ -225,7 +225,7 @@ func TestRenderCompanyReminderCarriesSelectiveResponseContract(t *testing.T) {
 			normalized := strings.ToLower(tc.body)
 			for _, want := range []string{
 				"response_contract: respond",
-				"gc slack reply-current --body-file <file>",
+				"gc <binding> reply-current --body-file <file>",
 				"slack already attributes every reply to your agent identity",
 				"do not prefix the message with your name or handle",
 			} {
@@ -460,7 +460,7 @@ func TestRenderCompanyReminderCarriesExactSlackRoute(t *testing.T) {
 		"channel_id: " + testChannel,
 		"origin_ts: 1700000000.000500",
 		"thread_root_ts: 1700000000.000100",
-		"gc slack reply-current --turn-ref gct-aaaaaaaaaaaaaaaaaaaa --body-file <file>",
+		"gc <binding> reply-current --turn-ref gct-aaaaaaaaaaaaaaaaaaaa --body-file <file>",
 		"bound to this exact Slack channel and thread",
 	} {
 		if !strings.Contains(got, want) {

@@ -2,6 +2,8 @@ package main
 
 import (
 	"bytes"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -12,6 +14,8 @@ import (
 // future contributor adding a default Run could regress it; this
 // test guards the contract from gc-wj70y.
 func TestRootHelpOnNoArgs(t *testing.T) {
+	t.Setenv("GC_CITY_PATH", "")
+	t.Setenv("GC_PACK_DIR", "")
 	cmd := newRootCmd()
 	var out bytes.Buffer
 	cmd.SetOut(&out)
@@ -21,11 +25,70 @@ func TestRootHelpOnNoArgs(t *testing.T) {
 		t.Fatalf("Execute() with no args: unexpected error: %v", err)
 	}
 	got := out.String()
-	if !strings.Contains(got, "gc-slack-cli") {
+	if !strings.Contains(got, filepath.Base(os.Args[0])) {
 		t.Errorf("usage output missing binary name: %q", got)
 	}
 	if !strings.Contains(got, "Usage:") {
 		t.Errorf("usage output missing 'Usage:' header: %q", got)
+	}
+}
+
+func TestRootUseNamesPackCommandInsideGC(t *testing.T) {
+	packDir := t.TempDir()
+	scriptDir := filepath.Join(packDir, "assets", "scripts")
+	if err := os.MkdirAll(scriptDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(scriptDir, "gc_binding.py"), []byte("print('team-chat')\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GC_CITY_PATH", t.TempDir())
+	t.Setenv("GC_PACK_DIR", packDir)
+
+	cmd := newRootCmd()
+	if got := cmd.DisplayName(); got != "gc team-chat" {
+		t.Fatalf("root display name = %q, want %q", got, "gc team-chat")
+	}
+	var out bytes.Buffer
+	cmd.SetOut(&out)
+	cmd.SetArgs([]string{"map-rig", "--help"})
+	if err := cmd.Execute(); err != nil {
+		t.Fatalf("map-rig help: %v", err)
+	}
+	if !strings.Contains(out.String(), "gc team-chat map-rig <rig-name>") {
+		t.Fatalf("child usage does not name the bound command: %q", out.String())
+	}
+}
+
+func TestRootUseFallsBackToPlaceholderInsideGC(t *testing.T) {
+	t.Setenv("GC_CITY_PATH", t.TempDir())
+	t.Setenv("GC_PACK_DIR", t.TempDir())
+
+	if got := newRootCmd().DisplayName(); got != "gc <binding>" {
+		t.Fatalf("root display name = %q, want %q", got, "gc <binding>")
+	}
+}
+
+// TestPackDirFor covers the fallback the adapter measurement forced: gc sets
+// GC_PACK_DIR for pack commands, not for every way a pack binary is started,
+// so the binary's own location under <pack>/cli/ is the second source.
+func TestPackDirFor(t *testing.T) {
+	if got := packDirFor("/packs/slack-full", "/elsewhere/cli/gc-slack-cli"); got != "/packs/slack-full" {
+		t.Errorf("packDirFor with env = %q, want the env value", got)
+	}
+	if got := packDirFor("", "/packs/slack-full/cli/gc-slack-cli"); got != "/packs/slack-full" {
+		t.Errorf("packDirFor derived from the binary = %q, want /packs/slack-full", got)
+	}
+	if got := packDirFor("", ""); got != "" {
+		t.Errorf("packDirFor with nothing to go on = %q, want empty", got)
+	}
+}
+
+func TestRootUseNamesBinaryOutsideGC(t *testing.T) {
+	t.Setenv("GC_CITY_PATH", "")
+	t.Setenv("GC_PACK_DIR", "")
+	if got := rootCommandUse("/opt/slack/gc-slack-cli"); got != "gc-slack-cli" {
+		t.Fatalf("rootCommandUse outside gc = %q, want %q", got, "gc-slack-cli")
 	}
 }
 

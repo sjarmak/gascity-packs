@@ -182,8 +182,8 @@ func runSlackMapRig(stdout, stderr io.Writer, rigName, workspaceID string,
 			continue
 		}
 		if rec.TargetKind == channels.TargetKindRig && rec.TargetID != rigName {
-			return fmt.Errorf("map-rig: channel %q is already bound to rig %q via 'gc slack map-channel'; remove that binding first or pick a different channel set",
-				ch, rec.TargetID)
+			return fmt.Errorf("map-rig: channel %q is already bound to rig %q via '%s'; remove that binding first or pick a different channel set",
+				ch, rec.TargetID, packCommand("map-channel"))
 		}
 	}
 

@@ -1065,6 +1065,9 @@ func main() {
 	if err != nil {
 		log.Fatalf("config: %v", err)
 	}
+	// Resolve once before handlers start. proxy_process does not guarantee
+	// GC_PACK_DIR, so failure deliberately leaves the visible placeholder.
+	refreshPackBinding()
 	// Initialize the shared dispatch semaphore on the cfg value before
 	// any handler closes over it. cap is a fixed positive int —
 	// loadConfig rejected 0/negative. sec-S-04. gc-px8.7.
@@ -1170,7 +1173,7 @@ func main() {
 	log.Printf("apps registry: store=%s entries=%d (read-only; SIGHUP or restart to reload)",
 		cfg.appsRegistryPath, appsReg.Len())
 	if appsReg.Len() == 0 && cfg.slackSigningKey == "" {
-		log.Printf("WARN: apps registry is empty and SLACK_SIGNING_SECRET is unset — all inbound Slack requests will be rejected with 401 until an app is imported (gc slack import-app + OAuth) or the env var is set")
+		log.Printf("WARN: apps registry is empty and SLACK_SIGNING_SECRET is unset — all inbound Slack requests will be rejected with 401 until an app is imported (%s + OAuth) or the env var is set", packCommand("import-app"))
 	}
 
 	// Cross-store overlap WARN: surface contradictory bindings (cby.3
@@ -1326,6 +1329,7 @@ func main() {
 	signal.Notify(hupCh, syscall.SIGHUP)
 	defer signal.Stop(hupCh)
 	go runReloadLoop(reloadStop, hupCh, func() {
+		refreshPackBinding()
 		logReloadOutcome(appsReg, channelMapReg, rigMapReg, roomLaunchReg, subteamAliases, userAliases)
 		// Company stores reload on the same SIGHUP but OUTSIDE the atomic
 		// six-registry set: a stale/invalid company file retains its own
@@ -3890,10 +3894,10 @@ func dispatchToAliasedSession(cfg config, sessionID string, msg externalInboundM
 			"%s"+
 			"\n"+
 			"React to this message with writing_hand to signal you are actively working on it:\n"+
-			"  gc slack react --emoji writing_hand\n"+
+			"  %s --emoji writing_hand\n"+
 			"\n"+
 			"To reply in that channel (threaded under their message), write your reply to a tmpfile and run:\n"+
-			"  gc slack publish-to-channel \\\n"+
+			"  %s \\\n"+
 			"    --conversation-id %s \\\n"+
 			"    --thread-ts %s \\\n"+
 			"    --body-file <tmpfile>\n"+
@@ -3906,6 +3910,8 @@ func dispatchToAliasedSession(cfg config, sessionID string, msg externalInboundM
 		neutralizeMarkupBoundaries(msg.Actor.ID),
 		neutralizeMarkupBoundaries(msg.Text),
 		attachmentsBlock, // already per-field neutralized; pass raw
+		packCommand("react"),
+		packCommand("publish-to-channel"),
 		neutralizeMarkupBoundaries(msg.Conversation.ConversationID),
 		neutralizeMarkupBoundaries(msg.ProviderMessageID),
 	)

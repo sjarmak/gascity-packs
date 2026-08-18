@@ -1128,7 +1128,7 @@ func TestDispatchToAliasedSession(t *testing.T) {
 		"hi mayor please ack the deploy",
 		"--conversation-id C0B1NSK4N3T",
 		"--thread-ts 1234.5678",
-		"gc slack publish-to-channel",
+		"gc <binding> publish-to-channel",
 		"writing_hand",
 	} {
 		if !strings.Contains(gotBody.Message, want) {
@@ -1597,10 +1597,10 @@ func TestDispatchToAliasedSessionZeroAttachmentsUnchanged(t *testing.T) {
 		"hi mayor please ack the deploy\n" +
 		"\n" +
 		"React to this message with writing_hand to signal you are actively working on it:\n" +
-		"  gc slack react --emoji writing_hand\n" +
+		"  gc <binding> react --emoji writing_hand\n" +
 		"\n" +
 		"To reply in that channel (threaded under their message), write your reply to a tmpfile and run:\n" +
-		"  gc slack publish-to-channel \\\n" +
+		"  gc <binding> publish-to-channel \\\n" +
 		"    --conversation-id C0B1NSK4N3T \\\n" +
 		"    --thread-ts 1234.5678 \\\n" +
 		"    --body-file <tmpfile>\n" +

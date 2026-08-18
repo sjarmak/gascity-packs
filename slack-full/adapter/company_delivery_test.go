@@ -130,7 +130,7 @@ func TestAcceptance3TrustedDelegationWakesResponderOnce(t *testing.T) {
 		"turn_ref: " + ptr.TurnRef,
 		"channel_id: " + testChannelID,
 		"thread_root_ts: " + humanRootTS,
-		"gc slack reply-current --turn-ref " + ptr.TurnRef + " --body-file <file>",
+		"gc <binding> reply-current --turn-ref " + ptr.TurnRef + " --body-file <file>",
 	} {
 		if !strings.Contains(calls[0].body, want) {
 			t.Errorf("delivered reminder missing %q: %s", want, calls[0].body)

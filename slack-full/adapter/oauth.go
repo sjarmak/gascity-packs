@@ -370,8 +370,8 @@ func handleOAuthCallback(cfg oauthConfig, reg *appsRegistry) http.HandlerFunc {
 		// verification until the operator runs `gc slack import-app
 		// --signing-secret <secret>`.
 		if cfg.signingSecret == "" {
-			log.Printf("WARNING: oauth install: SLACK_SIGNING_SECRET unset — workspace=%q (%s) will fail signature verification until you run `gc slack import-app --signing-secret <secret>` for this app",
-				resp.Team.Name, resp.Team.ID)
+			log.Printf("WARNING: oauth install: SLACK_SIGNING_SECRET unset — workspace=%q (%s) will fail signature verification until you run `%s --signing-secret <secret>` for this app",
+				resp.Team.Name, resp.Team.ID, packCommand("import-app"))
 		}
 
 		// Clear the state cookie now that exchange succeeded.

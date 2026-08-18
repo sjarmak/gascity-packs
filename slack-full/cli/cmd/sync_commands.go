@@ -112,10 +112,10 @@ func NewSyncCommandsCmd(stdout, _ io.Writer) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "sync-commands",
 		Short: "Reconcile the locally-imported Slack app's slash commands with what's live in Slack",
-		Long: `Reconcile the locally-imported Slack app's slash commands with what's live in Slack.
+		Long: fmt.Sprintf(`Reconcile the locally-imported Slack app's slash commands with what's live in Slack.
 
 Reads the imported app record from <cityPath>/.gc/slack/apps.json (built
-by ` + "`gc slack import-app`" + `), calls Slack apps.manifest.export to read the
+by %s), calls Slack apps.manifest.export to read the
 live manifest, diffs the two slash-command sets, and (unless --dry-run)
 calls apps.manifest.update to push the local manifest. After update,
 apps.manifest.export is called once more to verify convergence.
@@ -128,7 +128,7 @@ The Slack configuration access token (xoxe.xoxp-...) is read from the
 SLACK_CONFIG_ACCESS_TOKEN environment variable, or from --token. Token
 values never appear in error or log output.
 
-Schema: https://api.slack.com/methods/apps.manifest.update`,
+Schema: https://api.slack.com/methods/apps.manifest.update`, "`"+packCommand("import-app")+"`"),
 		Args: cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return runSlackSyncCommands(cmd.Context(), stdout, o)
@@ -184,8 +184,8 @@ func runSlackSyncCommands(ctx context.Context, stdout io.Writer, o slackSyncOpts
 	}
 	rec, ok := reg.Get(o.workspaceID, o.appID)
 	if !ok {
-		return fmt.Errorf("no imported slack app for workspace=%s app=%s; run `gc slack import-app` first",
-			o.workspaceID, o.appID)
+		return fmt.Errorf("no imported slack app for workspace=%s app=%s; run `%s` first",
+			o.workspaceID, o.appID, packCommand("import-app"))
 	}
 
 	baseURL := os.Getenv(slackAPIURLEnv)
@@ -227,8 +227,8 @@ func runSlackSyncCommands(ctx context.Context, stdout io.Writer, o slackSyncOpts
 		return fmt.Errorf(
 			"non-command manifest fields drifted from local: %s\n"+
 				"pass --allow-non-command-drift to push the entire local manifest, "+
-				"or re-run `gc slack import-app` to refresh local from a hand-edited manifest",
-			strings.Join(diff.NonCommandFieldsPaths, ", "))
+				"or re-run `%s` to refresh local from a hand-edited manifest",
+			strings.Join(diff.NonCommandFieldsPaths, ", "), packCommand("import-app"))
 	}
 
 	if o.dryRun {

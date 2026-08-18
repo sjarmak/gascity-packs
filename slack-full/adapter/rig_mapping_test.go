@@ -92,7 +92,7 @@ func TestResolveSlingTargetReturnsErrorWhenSlingTargetEmpty(t *testing.T) {
 		t.Fatal("expected error when sling_target is empty, got nil")
 	}
 	msg := err.Error()
-	for _, want := range []string{"sling target", "gc slack map-rig", "--sling-target"} {
+	for _, want := range []string{"sling target", "gc <binding> map-rig", "--sling-target"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("error %q missing substring %q", msg, want)
 		}

@@ -38,7 +38,7 @@ func NewMapChannelCmd(stdout, _ io.Writer) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "map-channel <channel-id>",
 		Short: "Bind a Slack channel to a gc session for slash-command routing",
-		Long: `Bind a Slack channel to a gc session for slash-command routing.
+		Long: fmt.Sprintf(`Bind a Slack channel to a gc session for slash-command routing.
 
 Persists a (workspace_id, channel_id) → session record at
 <cityPath>/.gc/slack/channel_mappings.json. The slack-pack adapter
@@ -50,10 +50,10 @@ re-binding the same channel preserves the original CreatedAt and
 overwrites the target fields. --remove always exits 0 — if no
 binding exists, the command is a no-op.
 
-For rig→channel bindings, use 'gc slack map-rig' (gc-cby.4). The
+For rig→channel bindings, use '%s' (gc-cby.4). The
 legacy '--rig' flag on this verb is deprecated (gc-cby.25); cobra
 hides it from --help and emits a stderr deprecation warning on
-every use.`,
+every use.`, packCommand("map-rig")),
 		Args: cobra.ExactArgs(1),
 		RunE: func(_ *cobra.Command, args []string) error {
 			return runSlackMapChannel(stdout, args[0], workspaceID, rigName, sessionID, remove)
@@ -63,7 +63,7 @@ every use.`,
 	cmd.Flags().StringVar(&workspaceID, "workspace-id", defaultWorkspace,
 		workspace.IDFlagUsage)
 	cmd.Flags().StringVar(&rigName, "rig", "",
-		"DEPRECATED (gc-cby.25): use 'gc slack map-rig' instead. Bind the channel to a gc rig.")
+		fmt.Sprintf("DEPRECATED (gc-cby.25): use '%s' instead. Bind the channel to a gc rig.", packCommand("map-rig")))
 	cmd.Flags().StringVar(&sessionID, "session", "",
 		"Bind the channel to a gc session (mutually exclusive with --rig)")
 	cmd.Flags().BoolVar(&remove, "remove", false,
@@ -76,7 +76,7 @@ every use.`,
 	// "Flag --rig has been deprecated, ..." on stderr at parse time.
 	// Pattern mirrors cmd_events.go's --json deprecation.
 	_ = cmd.Flags().MarkDeprecated("rig",
-		"use 'gc slack map-rig <rig> --workspace-id <ws> --channel <c1> [--channel <c2> ...]' instead; the flag will be removed in a future release")
+		fmt.Sprintf("use '%s <rig> --workspace-id <ws> --channel <c1> [--channel <c2> ...]' instead; the flag will be removed in a future release", packCommand("map-rig")))
 	return cmd
 }
 
@@ -138,8 +138,8 @@ func runSlackMapChannel(stdout io.Writer, channelID, workspaceID, rigName, sessi
 			return fmt.Errorf("open slack rig mapping registry: %w", err)
 		}
 		if owner, _, ok := rigReg.LookupRigForChannel(workspaceID, channelID); ok && owner.RigName != rigName {
-			return fmt.Errorf("map-channel: channel %q is already bound to rig %q via 'gc slack map-rig'; remove that binding first or use --rig %q to keep the same target rig",
-				channelID, owner.RigName, owner.RigName)
+			return fmt.Errorf("map-channel: channel %q is already bound to rig %q via '%s'; remove that binding first or use --rig %q to keep the same target rig",
+				channelID, owner.RigName, packCommand("map-rig"), owner.RigName)
 		}
 	}
 
