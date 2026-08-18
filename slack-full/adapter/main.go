@@ -1260,6 +1260,217 @@ func (c *publishDedupCache) Put(key string, receipt publishReceipt) {
 	}
 }
 
+// referenceSuffix derives the 12-hex-character marker suffix embedded in
+// outbound publish text so a readback (readbackForMarker, below) can
+// recognize a specific delivery by what Slack's channel actually shows,
+// not by an in-process cache entry. publishDedupCache above only lives for
+// publishDedupTTL and does not survive an adapter restart, so a cache miss
+// does not mean "never posted" — it can equally mean "posted, but the
+// cache forgot" (dr-3msk6.8).
+//
+// Must match gas-city's bin/messaging_state_reconciler.py
+// derive_reference_suffix exactly — that module is the authoritative spec
+// (the Go adapter cannot call into Python directly, so this is an
+// independent port cross-checked by a shared test vector). Cross-check
+// vector: key "dr-3msk6.3-test-vector" -> suffix "50e90a583c36", asserted
+// on both sides so the two cannot silently drift apart.
+func referenceSuffix(idempotencyKey string) string {
+	sum := sha256.Sum256([]byte(idempotencyKey))
+	return hex.EncodeToString(sum[:])[:12]
+}
+
+// referenceMarker is the exact substring appended to outbound message text
+// for a given idempotency key, and the exact substring a readback scans
+// channel history for.
+func referenceMarker(idempotencyKey string) string {
+	return "_ref:" + referenceSuffix(idempotencyKey) + "_"
+}
+
+// Bounds on the readback-before-post history scan (dr-3msk6.8), named to
+// mirror MAX_HISTORY_PAGES / DEFAULT_HISTORY_LIMIT in
+// bin/messaging_state_reconciler.py: worst case maxHistoryReadbackPages *
+// defaultHistoryReadbackLimit messages scanned before giving up, so the
+// readback can never hang or make unbounded Slack API calls.
+const (
+	maxHistoryReadbackPages     = 5
+	defaultHistoryReadbackLimit = 200
+)
+
+// publishReadbackStatus is the tri-state outcome of scanning channel
+// history for a publish's reference marker before deciding whether
+// posting again would duplicate an already-delivered message.
+type publishReadbackStatus int
+
+const (
+	// readbackFound means the marker is already present in channel
+	// history: the message previously landed and must not be reposted.
+	readbackFound publishReadbackStatus = iota
+	// readbackAbsent means the marker was not found and the scan reached
+	// the end of history (Slack reported no further page) — a confirmed
+	// absence, safe to post.
+	readbackAbsent
+	// readbackInconclusive means the scan could not confirm either way: a
+	// Slack API error, or the page budget was exhausted while Slack still
+	// reported more history. Callers must never treat this as "safe to
+	// post" — that reproduces the exact unknown_state_policy: assume_failure
+	// bug this readback exists to fix (FAIL EFFECT-003).
+	readbackInconclusive
+)
+
+type publishReadbackResult struct {
+	status    publishReadbackStatus
+	messageTS string // set only when status == readbackFound
+	detail    string // human-readable reason, for logging
+}
+
+// slackHistoryResp is the subset of Slack's conversations.history response
+// this readback needs: the message list (text, to scan for the marker;
+// ts, to report as the found message's id) plus has_more /
+// response_metadata.next_cursor for pagination.
+type slackHistoryResp struct {
+	OK       bool   `json:"ok"`
+	Error    string `json:"error,omitempty"`
+	Messages []struct {
+		TS   string `json:"ts"`
+		Text string `json:"text"`
+	} `json:"messages"`
+	HasMore          bool `json:"has_more"`
+	ResponseMetadata struct {
+		NextCursor string `json:"next_cursor"`
+	} `json:"response_metadata"`
+}
+
+// fetchSlackHistoryPage calls conversations.history for one page, mirroring
+// postToSlack's request-building style (auth header, JSON decode).
+func fetchSlackHistoryPage(token, channel, cursor string, limit int) (*slackHistoryResp, error) {
+	q := url.Values{"channel": {channel}, "limit": {strconv.Itoa(limit)}}
+	if cursor != "" {
+		q.Set("cursor", cursor)
+	}
+	httpReq, err := http.NewRequest(http.MethodGet, slackAPIBase+"/conversations.history?"+q.Encode(), nil)
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+token)
+
+	httpResp, err := http.DefaultClient.Do(httpReq)
+	if err != nil {
+		return nil, err
+	}
+	defer httpResp.Body.Close()
+	respBody, err := io.ReadAll(httpResp.Body)
+	if err != nil {
+		return nil, err
+	}
+	return decodeSlackHistoryResp(respBody)
+}
+
+// decodeSlackHistoryResp decodes a conversations.history/conversations.replies
+// body and, on a reported ok:true, confirms the "messages" key was actually
+// present in the JSON. A well-formed empty channel/thread response always
+// carries messages:[] explicitly; a response that omits the key entirely
+// decodes to the same nil/zero Messages as a real empty page (Go's decoder
+// makes no distinction), which would otherwise let a truncated or malformed
+// upstream body masquerade as a confirmed-empty page and resolve readbackAbsent
+// instead of readbackInconclusive -- silently defeating the fail-closed
+// contract this readback exists to provide (codex-review --model spark,
+// dr-3msk6.8 thread-reply round).
+func decodeSlackHistoryResp(respBody []byte) (*slackHistoryResp, error) {
+	var hr slackHistoryResp
+	if err := json.Unmarshal(respBody, &hr); err != nil {
+		return nil, fmt.Errorf("decode slack history: %w (body=%s)", err, string(respBody))
+	}
+	if hr.OK {
+		var probe map[string]json.RawMessage
+		if err := json.Unmarshal(respBody, &probe); err != nil {
+			return nil, fmt.Errorf("decode slack history for messages-field probe: %w (body=%s)", err, string(respBody))
+		}
+		if _, present := probe["messages"]; !present {
+			return nil, fmt.Errorf("slack history response reported ok:true with no messages field (body=%s)", string(respBody))
+		}
+	}
+	return &hr, nil
+}
+
+// fetchSlackRepliesPage calls conversations.replies for one page of a
+// thread, mirroring fetchSlackHistoryPage's request-building style.
+// conversations.replies returns the same messages / has_more /
+// response_metadata shape conversations.history does (plus the thread's
+// parent message as the first entry), so slackHistoryResp is reused as-is.
+func fetchSlackRepliesPage(token, channel, threadTS, cursor string, limit int) (*slackHistoryResp, error) {
+	q := url.Values{"channel": {channel}, "ts": {threadTS}, "limit": {strconv.Itoa(limit)}}
+	if cursor != "" {
+		q.Set("cursor", cursor)
+	}
+	httpReq, err := http.NewRequest(http.MethodGet, slackAPIBase+"/conversations.replies?"+q.Encode(), nil)
+	if err != nil {
+		return nil, err
+	}
+	httpReq.Header.Set("Authorization", "Bearer "+token)
+
+	httpResp, err := http.DefaultClient.Do(httpReq)
+	if err != nil {
+		return nil, err
+	}
+	defer httpResp.Body.Close()
+	respBody, err := io.ReadAll(httpResp.Body)
+	if err != nil {
+		return nil, err
+	}
+	return decodeSlackHistoryResp(respBody)
+}
+
+// readbackForMarker scans channel history (newest first, up to
+// maxHistoryReadbackPages pages) for marker before a publish decides
+// whether posting would duplicate an already-delivered message
+// (dr-3msk6.8). It is the Go-native port of lookup_key in gas-city's
+// bin/messaging_state_reconciler.py: same tri-state result, same
+// pagination contract (has_more / response_metadata.next_cursor), same
+// bounded page budget. Read-only — it never posts, edits, or deletes.
+//
+// When threadTS is non-empty (the publish is a threaded reply,
+// req.ReplyToMessageID), the scan uses conversations.replies against that
+// thread instead of conversations.history: a threaded reply never appears
+// in the channel's top-level history, so a plain conversations.history
+// scan would always resolve readbackAbsent for a threaded publish and
+// provide zero duplicate protection for exactly the case
+// unknown_state_policy: assume_failure needs it most (pl-loop-close's
+// bead-scoped thread replies, per 08d0b55's commit message).
+func readbackForMarker(token, channel, marker, threadTS string) publishReadbackResult {
+	if token == "" || channel == "" || marker == "" {
+		return publishReadbackResult{status: readbackInconclusive, detail: "readback requires token, channel, and marker"}
+	}
+	cursor := ""
+	for page := 0; page < maxHistoryReadbackPages; page++ {
+		var resp *slackHistoryResp
+		var err error
+		if threadTS != "" {
+			resp, err = fetchSlackRepliesPage(token, channel, threadTS, cursor, defaultHistoryReadbackLimit)
+		} else {
+			resp, err = fetchSlackHistoryPage(token, channel, cursor, defaultHistoryReadbackLimit)
+		}
+		if err != nil {
+			return publishReadbackResult{status: readbackInconclusive, detail: fmt.Sprintf("slack history read failed: %v", err)}
+		}
+		if !resp.OK {
+			return publishReadbackResult{status: readbackInconclusive, detail: fmt.Sprintf("slack history read failed: %s", resp.Error)}
+		}
+		for _, m := range resp.Messages {
+			if strings.Contains(m.Text, marker) {
+				return publishReadbackResult{status: readbackFound, messageTS: m.TS, detail: "marker present in history"}
+			}
+		}
+		if !resp.HasMore || resp.ResponseMetadata.NextCursor == "" {
+			return publishReadbackResult{status: readbackAbsent, detail: "marker absent from scanned history"}
+		}
+		cursor = resp.ResponseMetadata.NextCursor
+	}
+	return publishReadbackResult{
+		status: readbackInconclusive,
+		detail: fmt.Sprintf("marker absent from the first %d page(s) scanned, but more history remains — not a confirmed absence", maxHistoryReadbackPages),
+	}
+}
+
 func handlePublish(cfg config, reg *identityRegistry, userAliases *userAliasMap, dedup *publishDedupCache) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodPost {
@@ -1309,6 +1520,17 @@ func handlePublish(cfg config, reg *identityRegistry, userAliases *userAliasMap,
 			Text:     rewrittenText,
 			ThreadTS: req.ReplyToMessageID,
 		}
+		// Embed a low-visibility reference marker derived from the
+		// idempotency key so a readback (below) can recognize this
+		// specific delivery by what Slack's channel actually shows, not
+		// just by an in-process cache entry that does not survive a TTL
+		// expiry or adapter restart (dr-3msk6.8). Empty key -> no marker,
+		// same behavior as before this marker existed.
+		marker := ""
+		if req.IdempotencyKey != "" {
+			marker = referenceMarker(req.IdempotencyKey)
+			post.Text += "\n\n" + marker
+		}
 		identityApplied := ""
 		if reg != nil {
 			if rec, ok := reg.Get(identitySessionID); ok {
@@ -1332,6 +1554,42 @@ func handlePublish(cfg config, reg *identityRegistry, userAliases *userAliasMap,
 			w.Header().Set("Content-Type", "application/json")
 			_ = json.NewEncoder(w).Encode(cached)
 			return
+		}
+
+		// Readback-before-post: a dedup-cache miss above does NOT mean
+		// "never posted" — publishDedupCache is in-process with a
+		// publishDedupTTL window, so a miss can equally mean the TTL
+		// expired or the adapter restarted since the original POST. That
+		// is the ambiguous-result case unknown_state_policy: assume_failure
+		// names (FAIL EFFECT-003): blindly posting again risks duplicating
+		// a message that already landed. When there's a key, check what
+		// Slack's channel actually shows before deciding.
+		if marker != "" {
+			result := readbackForMarker(cfg.slackBotToken, req.Conversation.ConversationID, marker, req.ReplyToMessageID)
+			switch result.status {
+			case readbackFound:
+				log.Printf("publish: readback found existing message idem=%s conv=%s ts=%s -> skipping post (%s)",
+					req.IdempotencyKey, req.Conversation.ConversationID, result.messageTS, result.detail)
+				receipt := publishReceipt{Conversation: req.Conversation, Delivered: true, MessageID: result.messageTS}
+				dedup.Put(req.IdempotencyKey, receipt)
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(receipt)
+				return
+			case readbackInconclusive:
+				// Do NOT fall back to posting — that reproduces the
+				// assume_failure bug this readback exists to fix. Fail
+				// closed so the caller retries later instead of risking
+				// a duplicate.
+				log.Printf("publish: readback inconclusive idem=%s conv=%s -> NOT posting (%s)",
+					req.IdempotencyKey, req.Conversation.ConversationID, result.detail)
+				receipt := publishReceipt{Conversation: req.Conversation, Delivered: false, FailureKind: "readback_inconclusive"}
+				w.Header().Set("Content-Type", "application/json")
+				_ = json.NewEncoder(w).Encode(receipt)
+				return
+			case readbackAbsent:
+				log.Printf("publish: readback confirmed absent idem=%s conv=%s -> proceeding to post (%s)",
+					req.IdempotencyKey, req.Conversation.ConversationID, result.detail)
+			}
 		}
 
 		slackResp, err := postToSlack(cfg.slackBotToken, post)

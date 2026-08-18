@@ -774,6 +774,17 @@ func TestHandlePublishDedupesOnIdempotencyKey(t *testing.T) {
 	// gpk-lbhl: a retry carrying the same idempotency key (the shape of an
 	// agent re-publishing after a delivered-but-timed-out POST) must return
 	// the original receipt WITHOUT posting a second Slack message.
+	//
+	// The dedup cache instance is shared across both calls here (no
+	// simulated restart), so the retry is expected to short-circuit on the
+	// dedup-cache HIT path and never reach the readback-before-post logic
+	// at all (that path is exercised by
+	// TestHandlePublishReadbackPreventsDuplicateAfterCacheLoss below, which
+	// simulates the cache-loss case with a fresh cache instance). The fake
+	// server is path-routed (rather than a single catch-all handler) so the
+	// first call's readback GET to conversations.history — which every
+	// dedup-cache-miss now performs when an idempotency key is set — isn't
+	// miscounted as a chat.postMessage call.
 	reg, err := newIdentityRegistry(filepath.Join(t.TempDir(), "id.json"))
 	if err != nil {
 		t.Fatalf("newIdentityRegistry: %v", err)
@@ -783,11 +794,20 @@ func TestHandlePublishDedupesOnIdempotencyKey(t *testing.T) {
 	t.Cleanup(func() { slackAPIBase = origBase })
 	var posts int
 	ts := "1700000000.000100"
-	fakeSlack := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/chat.postMessage", func(w http.ResponseWriter, _ *http.Request) {
 		posts++
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"ok":true,"ts":"` + ts + `"}`))
-	}))
+	})
+	mux.HandleFunc("/conversations.history", func(w http.ResponseWriter, _ *http.Request) {
+		// Empty history: the first call's readback confirms absence
+		// (exhaustive) and proceeds to post, exactly as before this
+		// endpoint existed.
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true,"messages":[],"has_more":false}`))
+	})
+	fakeSlack := httptest.NewServer(mux)
 	t.Cleanup(fakeSlack.Close)
 	slackAPIBase = fakeSlack.URL
 
@@ -854,6 +874,340 @@ func TestHandlePublishNoDedupWithoutKey(t *testing.T) {
 	}
 	if posts != 2 {
 		t.Fatalf("Slack posts = %d, want 2 (no key => no dedup)", posts)
+	}
+}
+
+// TestReferenceSuffixMatchesPythonVector cross-checks referenceSuffix
+// against gas-city's bin/messaging_state_reconciler.py
+// derive_reference_suffix using their shared test vector. The two are
+// independent implementations of the same spec (the Go adapter cannot call
+// into the Python module directly) and must never silently drift apart.
+func TestReferenceSuffixMatchesPythonVector(t *testing.T) {
+	const key = "dr-3msk6.3-test-vector"
+	const want = "50e90a583c36"
+	if got := referenceSuffix(key); got != want {
+		t.Fatalf("referenceSuffix(%q) = %q, want %q (must match Python derive_reference_suffix)", key, got, want)
+	}
+	if got, want := referenceMarker(key), "_ref:"+want+"_"; got != want {
+		t.Fatalf("referenceMarker(%q) = %q, want %q", key, got, want)
+	}
+}
+
+// TestHandlePublishReadbackPreventsDuplicateAfterCacheLoss is the
+// dr-3msk6.8 regression test. It reproduces the bead's own stated
+// verification: publish, lose the in-process dedup cache the way an
+// adapter restart would (a FRESH publishDedupCache instance — the cache is
+// in-process and does not survive a restart), publish again with the same
+// idempotency key, and assert only one message ever reaches Slack.
+//
+// This fails on the pre-fix handler: with no readback, a dedup-cache miss
+// falls straight through to postToSlack, so the second call posts a
+// duplicate and chat.postMessage is hit twice. It passes once
+// readbackForMarker is wired into the cache-miss path: the second call's
+// readback finds the first call's marker in the fake conversations.history
+// backend (which starts serving the posted message once one exists) and
+// returns the existing message instead of posting again.
+func TestHandlePublishReadbackPreventsDuplicateAfterCacheLoss(t *testing.T) {
+	reg, err := newIdentityRegistry(filepath.Join(t.TempDir(), "id.json"))
+	if err != nil {
+		t.Fatalf("newIdentityRegistry: %v", err)
+	}
+
+	origBase := slackAPIBase
+	t.Cleanup(func() { slackAPIBase = origBase })
+
+	const postedTS = "1700000000.000100"
+	var (
+		mu         sync.Mutex
+		posts      int
+		postedText string
+	)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/chat.postMessage", func(w http.ResponseWriter, r *http.Request) {
+		var req slackPostMessageReq
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		mu.Lock()
+		posts++
+		postedText = req.Text
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true,"ts":"` + postedTS + `"}`))
+	})
+	mux.HandleFunc("/conversations.history", func(w http.ResponseWriter, _ *http.Request) {
+		mu.Lock()
+		text := postedText
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		if text == "" {
+			// Nothing posted yet: confirmed-absent history (the first
+			// call's own readback, before anything exists to find).
+			_, _ = w.Write([]byte(`{"ok":true,"messages":[],"has_more":false}`))
+			return
+		}
+		body, _ := json.Marshal(map[string]any{
+			"ok":       true,
+			"messages": []map[string]string{{"ts": postedTS, "text": text}},
+			"has_more": false,
+		})
+		_, _ = w.Write(body)
+	})
+	fakeSlack := httptest.NewServer(mux)
+	t.Cleanup(fakeSlack.Close)
+	slackAPIBase = fakeSlack.URL
+
+	cfg := config{slackBotToken: "xoxb-test"}
+	body := `{"session_id":"gc-1","conversation":{"conversation_id":"C1","kind":"room"},"text":"hello","idempotency_key":"k-restart"}`
+
+	// First publish: fresh adapter state, fresh dedup cache.
+	first := handlePublish(cfg, reg, nil, newPublishDedupCache(publishDedupTTL))
+	req1 := httptest.NewRequest(http.MethodPost, "/publish", strings.NewReader(body))
+	rec1 := httptest.NewRecorder()
+	first(rec1, req1)
+	if rec1.Code != http.StatusOK {
+		t.Fatalf("first publish status = %d, want 200 (body=%q)", rec1.Code, rec1.Body.String())
+	}
+
+	// Simulate an adapter restart: a brand-new publishDedupCache instance
+	// (NOT the one the first call used), same idempotency key. The
+	// in-process cache has no memory of the first call at all.
+	second := handlePublish(cfg, reg, nil, newPublishDedupCache(publishDedupTTL))
+	req2 := httptest.NewRequest(http.MethodPost, "/publish", strings.NewReader(body))
+	rec2 := httptest.NewRecorder()
+	second(rec2, req2)
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("second publish status = %d, want 200 (body=%q)", rec2.Code, rec2.Body.String())
+	}
+
+	mu.Lock()
+	gotPosts := posts
+	mu.Unlock()
+	if gotPosts != 1 {
+		t.Fatalf("chat.postMessage called %d times across a cache-loss retry, want 1 (readback must find the first delivery)", gotPosts)
+	}
+
+	var secondReceipt publishReceipt
+	if err := json.Unmarshal(rec2.Body.Bytes(), &secondReceipt); err != nil {
+		t.Fatalf("decode second receipt %q: %v", rec2.Body.String(), err)
+	}
+	if !secondReceipt.Delivered || secondReceipt.MessageID != postedTS {
+		t.Errorf("second receipt = %+v, want delivered with message_id %q (found via readback, not re-posted)", secondReceipt, postedTS)
+	}
+}
+
+// TestHandlePublishReadbackFindsThreadReplyAfterCacheLoss is the
+// dr-3msk6.8 thread-reply regression test. A threaded reply
+// (req.ReplyToMessageID set, mirroring pl-loop-close's bead-scoped
+// replies per 08d0b55's commit message) never appears in
+// conversations.history — only conversations.replies for its thread
+// carries it — so the readback must route to conversations.replies when a
+// thread is involved, not conversations.history. Reproduces the same
+// cache-loss shape as TestHandlePublishReadbackPreventsDuplicateAfterCacheLoss:
+// publish, simulate an adapter restart (fresh publishDedupCache), publish
+// again with the same idempotency key, assert only one message ever
+// reaches Slack.
+//
+// This fails on a readback that only ever scans conversations.history:
+// the fake conversations.history handler here never carries the reply's
+// marker (a threaded reply cannot appear there), so a readback that does
+// not route to conversations.replies for a threaded publish always
+// resolves absent and posts a duplicate on the second call.
+func TestHandlePublishReadbackFindsThreadReplyAfterCacheLoss(t *testing.T) {
+	reg, err := newIdentityRegistry(filepath.Join(t.TempDir(), "id.json"))
+	if err != nil {
+		t.Fatalf("newIdentityRegistry: %v", err)
+	}
+
+	origBase := slackAPIBase
+	t.Cleanup(func() { slackAPIBase = origBase })
+
+	const threadTS = "1700000000.000050"
+	const postedTS = "1700000000.000100"
+	var (
+		mu           sync.Mutex
+		posts        int
+		postedText   string
+		historyCalls int
+		repliesCalls int
+	)
+	mux := http.NewServeMux()
+	mux.HandleFunc("/chat.postMessage", func(w http.ResponseWriter, r *http.Request) {
+		var req slackPostMessageReq
+		_ = json.NewDecoder(r.Body).Decode(&req)
+		mu.Lock()
+		posts++
+		postedText = req.Text
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true,"ts":"` + postedTS + `"}`))
+	})
+	mux.HandleFunc("/conversations.history", func(w http.ResponseWriter, _ *http.Request) {
+		// Deliberately never carries the reply's marker: a threaded reply
+		// does not appear in top-level channel history. A readback that
+		// wrongly scans this endpoint for a threaded publish always sees
+		// this and resolves absent, which is exactly the bug this test
+		// exists to catch.
+		mu.Lock()
+		historyCalls++
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"ok":true,"messages":[],"has_more":false}`))
+	})
+	mux.HandleFunc("/conversations.replies", func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		repliesCalls++
+		text := postedText
+		mu.Unlock()
+		if got := r.URL.Query().Get("ts"); got != threadTS {
+			t.Errorf("conversations.replies called with ts=%q, want %q", got, threadTS)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		if text == "" {
+			_, _ = w.Write([]byte(`{"ok":true,"messages":[{"ts":"` + threadTS + `","text":"parent"}],"has_more":false}`))
+			return
+		}
+		body, _ := json.Marshal(map[string]any{
+			"ok": true,
+			"messages": []map[string]string{
+				{"ts": threadTS, "text": "parent"},
+				{"ts": postedTS, "text": text},
+			},
+			"has_more": false,
+		})
+		_, _ = w.Write(body)
+	})
+	fakeSlack := httptest.NewServer(mux)
+	t.Cleanup(fakeSlack.Close)
+	slackAPIBase = fakeSlack.URL
+
+	cfg := config{slackBotToken: "xoxb-test"}
+	body := `{"session_id":"gc-1","conversation":{"conversation_id":"C1","kind":"room"},"text":"hello","idempotency_key":"k-thread-restart","reply_to_message_id":"` + threadTS + `"}`
+
+	first := handlePublish(cfg, reg, nil, newPublishDedupCache(publishDedupTTL))
+	req1 := httptest.NewRequest(http.MethodPost, "/publish", strings.NewReader(body))
+	rec1 := httptest.NewRecorder()
+	first(rec1, req1)
+	if rec1.Code != http.StatusOK {
+		t.Fatalf("first publish status = %d, want 200 (body=%q)", rec1.Code, rec1.Body.String())
+	}
+
+	// Simulate an adapter restart: a brand-new publishDedupCache instance
+	// (NOT the one the first call used), same idempotency key.
+	second := handlePublish(cfg, reg, nil, newPublishDedupCache(publishDedupTTL))
+	req2 := httptest.NewRequest(http.MethodPost, "/publish", strings.NewReader(body))
+	rec2 := httptest.NewRecorder()
+	second(rec2, req2)
+	if rec2.Code != http.StatusOK {
+		t.Fatalf("second publish status = %d, want 200 (body=%q)", rec2.Code, rec2.Body.String())
+	}
+
+	mu.Lock()
+	gotPosts, gotHistory, gotReplies := posts, historyCalls, repliesCalls
+	mu.Unlock()
+	if gotPosts != 1 {
+		t.Fatalf("chat.postMessage called %d times across a threaded cache-loss retry, want 1 (readback must find the reply via conversations.replies)", gotPosts)
+	}
+	if gotReplies == 0 {
+		t.Fatalf("conversations.replies was never called — the threaded readback did not route to the thread at all")
+	}
+	if gotHistory != 0 {
+		t.Errorf("conversations.history was called %d time(s) for a threaded publish, want 0 — a threaded readback must not scan top-level history", gotHistory)
+	}
+
+	var secondReceipt publishReceipt
+	if err := json.Unmarshal(rec2.Body.Bytes(), &secondReceipt); err != nil {
+		t.Fatalf("decode second receipt %q: %v", rec2.Body.String(), err)
+	}
+	if !secondReceipt.Delivered || secondReceipt.MessageID != postedTS {
+		t.Errorf("second receipt = %+v, want delivered with message_id %q (found via conversations.replies, not re-posted)", secondReceipt, postedTS)
+	}
+}
+
+// TestHandlePublishReadbackInconclusiveDoesNotPost covers the other half
+// of dr-3msk6.8: when the readback itself cannot confirm absence — a Slack
+// API error, or the page budget exhausted while Slack still reports more
+// history — the handler must fail closed (no post, Delivered=false)
+// instead of falling back to blindly posting, which would reproduce the
+// unknown_state_policy: assume_failure bug this readback exists to fix.
+func TestHandlePublishReadbackInconclusiveDoesNotPost(t *testing.T) {
+	cases := []struct {
+		name         string
+		historyBody  string
+		wantMinPages int
+	}{
+		{
+			name:         "slack API error",
+			historyBody:  `{"ok":false,"error":"internal_error"}`,
+			wantMinPages: 1,
+		},
+		{
+			name:         "page budget exhausted while more history remains",
+			historyBody:  `{"ok":true,"messages":[],"has_more":true,"response_metadata":{"next_cursor":"c"}}`,
+			wantMinPages: maxHistoryReadbackPages,
+		},
+		{
+			// codex-review --model spark, dr-3msk6.8 thread-reply round: a
+			// well-formed empty page always carries an explicit
+			// messages:[] (see the other cases' bodies); a response
+			// reporting ok:true with the messages key missing entirely is
+			// not that — it is malformed and must not decode to the same
+			// zero-value Messages a real empty page produces, or a
+			// truncated/malformed upstream body would masquerade as a
+			// confirmed-empty page and post on uncertain state.
+			name:         "ok:true response missing the messages field entirely",
+			historyBody:  `{"ok":true,"has_more":false}`,
+			wantMinPages: 1,
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			reg, err := newIdentityRegistry(filepath.Join(t.TempDir(), "id.json"))
+			if err != nil {
+				t.Fatalf("newIdentityRegistry: %v", err)
+			}
+			origBase := slackAPIBase
+			t.Cleanup(func() { slackAPIBase = origBase })
+
+			var posts, pageCalls int32
+			mux := http.NewServeMux()
+			mux.HandleFunc("/chat.postMessage", func(w http.ResponseWriter, _ *http.Request) {
+				atomic.AddInt32(&posts, 1)
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(`{"ok":true,"ts":"1700000000.000200"}`))
+			})
+			mux.HandleFunc("/conversations.history", func(w http.ResponseWriter, _ *http.Request) {
+				atomic.AddInt32(&pageCalls, 1)
+				w.Header().Set("Content-Type", "application/json")
+				_, _ = w.Write([]byte(tc.historyBody))
+			})
+			fakeSlack := httptest.NewServer(mux)
+			t.Cleanup(fakeSlack.Close)
+			slackAPIBase = fakeSlack.URL
+
+			cfg := config{slackBotToken: "xoxb-test"}
+			handler := handlePublish(cfg, reg, nil, newPublishDedupCache(publishDedupTTL))
+			body := `{"session_id":"gc-1","conversation":{"conversation_id":"C1","kind":"room"},"text":"hello","idempotency_key":"k-inconclusive"}`
+			req := httptest.NewRequest(http.MethodPost, "/publish", strings.NewReader(body))
+			rec := httptest.NewRecorder()
+			handler(rec, req)
+
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200 (body=%q)", rec.Code, rec.Body.String())
+			}
+			if got := atomic.LoadInt32(&posts); got != 0 {
+				t.Fatalf("chat.postMessage called %d times, want 0 (inconclusive readback must not post)", got)
+			}
+			if got := atomic.LoadInt32(&pageCalls); int(got) < tc.wantMinPages {
+				t.Errorf("conversations.history called %d times, want >= %d", got, tc.wantMinPages)
+			}
+			var receipt publishReceipt
+			if err := json.Unmarshal(rec.Body.Bytes(), &receipt); err != nil {
+				t.Fatalf("decode receipt %q: %v", rec.Body.String(), err)
+			}
+			if receipt.Delivered {
+				t.Errorf("receipt.Delivered = true, want false on inconclusive readback (receipt=%+v)", receipt)
+			}
+		})
 	}
 }
 
