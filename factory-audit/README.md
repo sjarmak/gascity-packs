@@ -167,7 +167,10 @@ code does not deduplicate produces a green line over a broken mechanism, which
 is the failure this checker exists to catch. Read the reasoning, run the
 equivalent check against your tree, write your own answer.
 `examples/gc-city/README.md` names every one of those failures and why it is
-still open.
+still open, and `examples/gc-city/deciding-a-field.md` takes the four fields
+`derive` leaves as `unknown` one at a time: what each one asks, where in a tree
+the answer lives, what each possible answer costs, and which of ours are the
+answers we are not happy with.
 
 ## What it can and cannot bind
 

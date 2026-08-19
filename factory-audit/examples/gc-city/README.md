@@ -69,6 +69,12 @@ states it under "A decided field is not a live mechanism". It is also why this
 example ships with its measurements in the comments. The numbers are the part
 the rule cannot see.
 
+## Deciding your own
+
+`deciding-a-field.md` beside this file is the per-field guide: the question each
+decision asks, where the answer lives in a tree, what each answer costs, and our
+five effects as the worked cases including the two whose answer is bad.
+
 ## How to read a decided field
 
 Each one carries what it asserts about the code and how to check it. From the

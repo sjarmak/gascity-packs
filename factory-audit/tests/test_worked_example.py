@@ -269,3 +269,95 @@ def test_auth_001_is_red_for_the_generation_and_not_for_the_lease(
         f"means the rule stopped naming its undecided fields and this test "
         f"can no longer tell the two apart."
     )
+
+
+GUIDE = PACK / "examples" / "gc-city" / "deciding-a-field.md"
+
+
+def _section(heading: str, doc: str | None = None) -> str:
+    """One `## ` section of the guide, by heading.
+
+    Every check below reads a table, and a table is only meaningful inside the
+    section that introduces it. Matching by shape across the whole file means a
+    second table added later silently joins the data of the first, which is a
+    drift the test would then report as agreement.
+    """
+    text = doc if doc is not None else GUIDE.read_text()
+    assert text.count(heading) == 1, f"{heading!r} is not a unique heading"
+    return text.split(heading, 1)[1].split("\n## ", 1)[0]
+
+
+def _rows(section: str, width: int) -> list[list[str]]:
+    """Table rows of exactly `width` cells, header and separator dropped."""
+    out = []
+    for line in section.splitlines():
+        line = line.strip()
+        if not line.startswith("|"):
+            continue
+        cells = [c.strip().strip("`") for c in line.strip("|").split("|")]
+        if len(cells) == width and cells[0] and not set(cells[0]) <= {"-", ":"}:
+            out.append(cells)
+    return out
+
+
+def _guide_table() -> dict[str, tuple[str, str]]:
+    """The guide's closing table, as {effect: (retry_contract, policy)}.
+
+    Parsed rather than hardcoded here, so the test compares two files that can
+    each move instead of comparing one file against a copy of itself.
+    """
+    rows = _rows(_section("## Our five answers, as a table"), 3)
+    return {r[0]: (r[1], r[2]) for r in rows if r[0] != "Effect"}
+
+
+def test_the_guide_states_the_answers_the_contract_actually_holds() -> None:
+    """The guide argues from our five effects; the contract is where they live.
+
+    This is the edit most likely to happen and least likely to be noticed:
+    changing a decision in the contract, which is a real change to what we
+    claim, and leaving the prose that explains it saying the old thing. Runs
+    with no kit and no network, because both files ship in this pack.
+    """
+    contract = yaml.safe_load(EXAMPLE.read_text())
+    actual = {
+        e["name"]: (str(e.get("retry_contract")), str(e.get("unknown_state_policy")))
+        for e in contract["effects"]
+    }
+    stated = _guide_table()
+    assert stated, f"no table rows parsed out of {GUIDE.name}"
+    assert stated == actual, (
+        f"the guide's table and the contract disagree.\n"
+        f"guide:    {sorted(stated.items())}\n"
+        f"contract: {sorted(actual.items())}"
+    )
+
+
+def test_the_guide_lists_the_retry_contracts_the_checker_accepts() -> None:
+    """A guide that names a value the rules reject teaches a failing edit.
+
+    The four retry contracts are an enum in the rules, and the guide prints
+    them as a table a reader chooses from. If the enum gains or loses a value,
+    this is the file that has to move with it.
+    """
+    kit = kit_home()
+    if kit is None:
+        pytest.skip(
+            "set FACTORY_KIT_HOME to a checkout of the reliability kit to "
+            "compare the guide's value list against the rules"
+        )
+    sys.path.insert(0, str(kit))
+    try:
+        from src import rules  # noqa: PLC0415
+    finally:
+        sys.path.pop(0)
+
+    # The table's first column, not every backticked token in the section. A
+    # token scan passes on a section whose table has been deleted as long as
+    # the prose still happens to name all four values, which is the one edit
+    # this test exists to catch.
+    section = _section("## `retry_contract`")
+    listed = {r[0] for r in _rows(section, 2) if r[0] != "Value"}
+    assert listed == rules.ALLOWED_RETRY_CONTRACTS, (
+        f"the guide lists {sorted(listed)}; the rules accept "
+        f"{sorted(rules.ALLOWED_RETRY_CONTRACTS)}"
+    )
