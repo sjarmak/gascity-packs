@@ -10,8 +10,8 @@
 # record in the pack CHANGELOG what changed in the kit and why it matters here.
 
 KIT_REPO='https://github.com/sjarmak/software-factory-reliability.git'
-KIT_COMMIT='4f3e7fe71e8a992a65f2931c9f119d6eeb037538'
-KIT_COMMIT_SUMMARY='fix(reconcile): name the matches whose reason tells you to exclude them'
+KIT_COMMIT='d04ce989974e05960e523af400f3b06ff942e2b2'
+KIT_COMMIT_SUMMARY='fix(rules): EFFECT-006 names the command that lists the instructed lines'
 
 # NOT YET REACHABLE. `setup` clones KIT_REPO and checks out KIT_COMMIT, and the
 # published remote does not carry this commit, so `setup` exits 4 with "the

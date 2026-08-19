@@ -115,3 +115,26 @@ def test_the_fetch_probe_still_fails_on_a_commit_that_cannot_exist(
         "the fetch probe reported success for a commit that cannot exist, so a "
         "green result from the pin check above is not evidence of anything"
     )
+
+
+def test_the_pin_is_a_full_commit_id(tmp_path: Path) -> None:
+    """A short id is a different defect that produces the same error message.
+
+    Every test above needs the network and skips without it, so offline this
+    pack has no opinion about its own pin at all. This one binds always, and it
+    separates two failures a reader cannot otherwise tell apart: `git fetch
+    --depth 1 <repo> <id>` is refused for a short id the same way it is refused
+    for a commit the remote does not carry, both with `not our ref`. Servers
+    allow a sha1 in `want` only for a full object name; an abbreviation is not
+    one, however unambiguous it is in the repository it was abbreviated in.
+
+    Written after moving the pin by hand produced a seven-character id that
+    every other check in this file accepted.
+    """
+    _, commit = read_pin()
+    assert len(commit) == 40 and all(c in "0123456789abcdef" for c in commit), (
+        f"kit.pin names {commit!r}. `setup` asks the remote for this id "
+        f"directly, and a remote serves a sha1 in `want` only when it is a "
+        f"full 40-character object name; anything shorter is refused with the "
+        f"same `not our ref` an unpublished commit gives."
+    )

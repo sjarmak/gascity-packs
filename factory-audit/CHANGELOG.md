@@ -6,6 +6,46 @@ changed in the kit and what a city sees differently because of it.
 
 ## Unreleased
 
+### Pin moved to `d04ce98`
+
+Was `4f3e7fe`. Five kit commits, and they are one change: every finding that
+tells a city to go edit something now hands over the thing needed to do it.
+
+What a city running this pack sees differently.
+
+- `review` prints a fourth line, `at <path>`, under every finding. A derived
+  contract for a repository of ordinary size runs several hundred lines and
+  holds one effect block per effect, whose findings are worded identically
+  apart from a name. "Decide deduplicate, converge, reconcile, or
+  at_least_once" used to arrive with the reader still owing themselves a
+  search. (`39e44e4`)
+- `probes-init` says, per directory, how much of what it counted is prose
+  rather than code, and names the directories that are entirely prose. Its own
+  first question is which directories are the factory's own output, and it had
+  been showing a list with no way to answer. On the repository this pack was
+  written against, the second largest source was 275 finished release
+  checklists, sitting next to the directory of real scripts at a nearly
+  identical count and looking the same. It will never name a directory holding
+  any code, which is the one exclusion that would flatter a score. (`c0e84cb`)
+- EFFECT-001 says what it can support. It reads the contract and never the
+  installation, so it was making a claim about the city from a field the
+  contract author wrote, and it now reports the value it did observe instead
+  of only asking for a different one. (`fd860d8`)
+- `reconcile` prints the instruction lane, so a city whose effects are
+  triggered from agent prose can see which lines those are instead of a
+  count. (`c694478`)
+- EFFECT-006 names `reconcile`. Its remedy is to move call sites into a
+  script, and `review` holds a count and no locations: it is handed a contract
+  and never an installation, so it cannot have them. The half of the tool that
+  reads the installation prints the lines. (`d04ce98`)
+
+Nothing about scoring moved, in either direction, and that is the property
+tested hardest, because a reporting change that quietly improves a result is
+the exact failure this checker exists to catch. On the city this pack was
+written against, `review` reports the same verdicts item for item before and
+after all five: the only difference in `findings.json` is the wording of the
+EFFECT-006 hint.
+
 ### Pin moved to `4f3e7fe`
 
 Was `c35aea0`. What a city running this pack sees differently: `reconcile` now
