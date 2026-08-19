@@ -23,6 +23,8 @@ doctor that stopped reporting produces.
 
 from __future__ import annotations
 
+import re
+from urllib.parse import urlsplit
 from pathlib import Path
 
 import pytest
@@ -282,4 +284,177 @@ def test_pack_orders_load_in_a_running_city(
         f"{sorted(missing)}. It loaded {sorted(loaded)}. Run `gc order list` in "
         f"a city importing {pack} to read why -- a rejected order is reported "
         f"there and nowhere else."
+    )
+
+
+# --- the API base URL a pack falls back to when nothing sets it -------------
+
+# `gc` sets GC_API_BASE_URL nowhere in its own source, so a pack's hardcoded
+# fallback is what runs on a fresh install. Ours is masked: the supervisor on
+# this machine is launched with the variable already set, so every pack works
+# here whatever it declares.
+# The three shapes a *fallback* takes in these packs: shell parameter
+# expansion, a Go envOr-style second argument, and a Go const. Deliberately
+# NOT matched: `env["GC_API_BASE_URL"] = "..."`, which SETS the variable
+# rather than defaulting it -- a test fixture pinning a value is not a
+# finding, and matching it would make this red for a reason that is not the
+# bug.
+API_FALLBACKS = (
+    re.compile(r"GC_API_BASE_URL:-(http://[^}\s\"']+)"),
+    re.compile(r'GC_API_BASE_URL"\s*,\s*"(http://[^"]+)"'),
+    re.compile(r'defaultGCAPIBase\s*=\s*"(http://[^"]+)"'),
+)
+
+# Only files a city executes. Documentation may show any example it likes.
+FALLBACK_SUFFIXES = (".sh", ".bash", ".py", ".go")
+
+# A fourth shape, and the one that matters most: the default is a NAMED
+# CONSTANT rather than a literal, so no single-line regex sees the URL.
+# `slack-full/scripts/slack_intake_common.py` and
+# `oversight-rig/assets/scripts/resolve_rig_channel.py` both use it. Missing
+# this class is how slack-full read clean while its adapter carried the bug.
+INDIRECT_FALLBACK = re.compile(
+    r"""GC_API_BASE_URL["']\s*,\s*([A-Za-z_][A-Za-z0-9_]*)\s*[,)]"""
+)
+
+
+def _resolve_constant(name: str, text: str) -> str:
+    """The URL a module-level constant holds, or a value that FAILS the check.
+
+    Fail-closed on purpose: an indirection this cannot follow is a blind spot,
+    and a blind spot must be loud. Returning the sentinel makes the port
+    assertion red and names the constant, rather than silently dropping the
+    site the way a `continue` would.
+    """
+    found = re.search(
+        r"""^[ \t]*%s\s*=\s*["'](http://[^"']+)["']""" % re.escape(name),
+        text,
+        re.M,
+    )
+    return found.group(1) if found else f"<unresolved constant {name}>"
+
+# `Supervisor.PortOrDefault()` in internal/supervisor. See the docstring on
+# test_pack_falls_back_to_the_port_this_gc_actually_serves for why this is
+# pinned rather than asked for, and what that costs.
+EXPECTED_API_PORT = "8372"
+
+
+def declared_api_fallbacks(pack: str) -> dict[str, str]:
+    """Every executable fallback in a pack, keyed by repo-relative path."""
+    found: dict[str, str] = {}
+    for path in sorted(pack_dir(pack).rglob("*")):
+        if not path.is_file() or path.suffix not in FALLBACK_SUFFIXES:
+            continue
+        if (
+            "/tests/" in path.as_posix()
+            or path.name.endswith("_test.go")
+            or path.name.startswith("test_")
+        ):
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        rel = str(path.relative_to(REPO_ROOT))
+        for pattern in API_FALLBACKS:
+            for match in pattern.finditer(text):
+                found[rel] = match.group(1)
+        for match in INDIRECT_FALLBACK.finditer(text):
+            found[rel] = _resolve_constant(match.group(1), text)
+    return found
+
+
+def test_some_pack_declares_an_api_fallback_at_all() -> None:
+    """The control for the test below.
+
+    The check is a derivation over pack contents. If the derivation stops
+    finding anything -- a renamed variable, a moved directory, a suffix list
+    that no longer matches -- every per-pack assertion passes over an empty set
+    and the suite reports that all fallbacks are correct because none was read.
+    """
+    total = {p: declared_api_fallbacks(p) for p in MAINTAINED_PACKS}
+    assert any(total.values()), (
+        "no maintained pack declares a GC_API_BASE_URL fallback, so the port "
+        f"check below asserts nothing. Searched: {sorted(total)}"
+    )
+
+
+@pytest.mark.parametrize("pack", MAINTAINED_PACKS)
+def test_pack_falls_back_to_the_port_this_gc_actually_serves(
+    pack: str, tmp_path: Path, gc_test_bin: Path  # noqa: F811
+) -> None:
+    """A fallback pointing at a dead port is a broken install, not a default.
+
+    Which port, and why it is not `[api] port`: gc has TWO API listeners. A
+    standalone controller (`gc controller` / `gc serve`) binds `cfg.API.Port`,
+    which `gc init` writes as 9443. A supervisor-managed city is reached on
+    `cfg.Supervisor.PortOrDefault()` instead, 8372 when unset
+    (`internal/api/effective_api_url.go`), and the two serve different route
+    sets. Every URL these packs build is `/v0/city/{cityName}/...`, which is
+    the supervisor's city-scoped set (`internal/api/supervisor_city_routes.go`,
+    `internal/api/supervisor.go`). So the supervisor port is the one they must
+    default to. `[api] port` is not dead config -- it is a different server,
+    and a pack that defaults to it is addressing the wrong one.
+
+    What this cannot do: no read-only `gc` command reports the resolved
+    supervisor port in a city whose supervisor is not running, and starting one
+    in a scratch city would contend for the port under test. So the expected
+    value is pinned here rather than asked for, and the pin is cross-checked
+    against a live answer whenever this runs somewhere a supervisor IS up. If
+    gc moves the default and no live city is around to notice, this test keeps
+    passing on the old value -- stated so nobody reads it as stronger than it
+    is. Refute the pin with `gc dashboard --no-open` in a running city.
+    """
+    fallbacks = declared_api_fallbacks(pack)
+    if not fallbacks:
+        pytest.skip(f"{pack} hardcodes no API fallback")
+
+    expected = EXPECTED_API_PORT
+
+    # Opportunistic live rail: only when a supervisor is actually serving.
+    imports, rig_imports = wiring(pack)
+    workspace = write_city(tmp_path, imports, rig_imports)
+    reported = gc_output(gc_test_bin, workspace, "dashboard", "--no-open")
+    live = re.search(r"http://[\d.]+:(\d+)", reported)
+    if live:
+        assert live.group(1) == expected, (
+            f"a running gc serves port {live.group(1)}, but this test pins "
+            f"{expected}. gc moved the default; update EXPECTED_API_PORT and "
+            f"every pack fallback with it."
+        )
+
+    wrong = {
+        path: url
+        for path, url in fallbacks.items()
+        if urlsplit(url.rstrip("/")).port != int(expected)
+    }
+    assert not wrong, (
+        f"{pack} falls back to a port gc does not serve (it serves {expected}). "
+        f"Nothing sets GC_API_BASE_URL on a fresh install -- gc's own source "
+        f"never sets it -- so these run against nothing:\n"
+        + "\n".join(f"  {path} -> {url}" for path, url in sorted(wrong.items()))
+    )
+
+
+def test_the_detector_resolves_a_named_constant_default() -> None:
+    """A control for the indirection, because the direct patterns would mask it.
+
+    `oversight-rig` declares its API default ONLY as a named constant. If
+    `_resolve_constant` regresses, this pack silently reverts to "declares no
+    fallback" and its port check turns into a skip -- green, and measuring
+    nothing. slack-full is the same shape and already did exactly that once.
+    """
+    fallbacks = declared_api_fallbacks("oversight-rig")
+    assert fallbacks, (
+        "oversight-rig declares an API default via a named constant; the "
+        "detector no longer sees it, so its port check has become a skip"
+    )
+    assert all(
+        url.startswith("http://") for url in fallbacks.values()
+    ), f"a constant went unresolved: {fallbacks}"
+
+
+def test_an_unresolvable_constant_fails_closed() -> None:
+    """The blind spot must be loud. Proves the sentinel path still fails."""
+    unresolved = _resolve_constant("NAME_THAT_IS_NOT_DEFINED", "x = 1\n")
+    assert urlsplit(unresolved.rstrip("/")).port != int(EXPECTED_API_PORT), (
+        "an unresolvable constant now satisfies the port check, so a fallback "
+        "the detector cannot follow would pass as correct"
     )

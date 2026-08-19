@@ -52,7 +52,7 @@ if [ -z "$text" ]; then
   exit 2
 fi
 
-api_base="${GC_API_BASE_URL:-http://127.0.0.1:9443}"
+api_base="${GC_API_BASE_URL:-http://127.0.0.1:8372}"
 api_base="${api_base%/}"
 city="${GC_CITY_NAME:-}"
 if [ -z "$city" ]; then

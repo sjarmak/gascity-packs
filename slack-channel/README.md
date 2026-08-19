@@ -170,7 +170,7 @@ The built binary is git-ignored; the `[[service]]` block runs it in place.
 | `REGISTER_ON_START` | | `true` | Self-register as an extmsg adapter on start. |
 | `SLACK_CHANNEL_INBOUND_TARGET` | | `mayor` | Fallback session for an unbound, unaliased `app_mention`. |
 | `SLACK_API_BASE` | | `https://slack.com/api` | Slack web API origin (override for relays/tests). |
-| `GC_API_BASE_URL` | | `http://127.0.0.1:9443` | gc API base. |
+| `GC_API_BASE_URL` | | `http://127.0.0.1:8372` | gc API base. |
 
 \* Either `GC_CITY_PATH` or `SLACK_CHANNEL_REGISTRY_DIR` must be set so the
 registries have a home. `GC_SERVICE_SOCKET`, `GC_SERVICE_URL_PREFIX`, and

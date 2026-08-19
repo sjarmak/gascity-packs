@@ -35,7 +35,7 @@
 //	                       adapter runs as a gc proxy_process service.
 //	GC_SERVICE_URL_PREFIX  Reverse-proxy prefix gc routes to this service;
 //	                       used to compute the self-registration callback URL.
-//	GC_API_BASE_URL        gc API base (default http://127.0.0.1:9443).
+//	GC_API_BASE_URL        gc API base (default http://127.0.0.1:8372).
 //
 // Optional env:
 //
@@ -74,7 +74,7 @@ import (
 const (
 	defaultPublicListen   = "0.0.0.0:8775"
 	defaultInternalListen = "127.0.0.1:8776"
-	defaultGCAPIBase      = "http://127.0.0.1:9443"
+	defaultGCAPIBase      = "http://127.0.0.1:8372"
 	defaultProvider       = "slack"
 	defaultInboundTarget  = "mayor"
 

@@ -362,7 +362,7 @@ package docstring at the top of that file. Summary:
 | `LISTEN_PUBLIC`                | `:8765`                                          | Public listener for `/slack/events` (bind `0.0.0.0` if fronted by a tunnel).    |
 | `LISTEN_INTERNAL`              | `127.0.0.1:8766`                                 | Loopback listener for `/publish`. Ignored under proxy_process mode.             |
 | `INTERNAL_CALLBACK_URL`        | `http://127.0.0.1:8766`                          | URL advertised to gc at self-registration. Ignored under proxy_process mode.    |
-| `GC_API_BASE_URL`              | `http://127.0.0.1:9443`                          | Base URL for gc's HTTP API.                                                     |
+| `GC_API_BASE_URL`              | `http://127.0.0.1:8372`                          | Base URL for gc's HTTP API.                                                     |
 | `ADAPTER_PROVIDER`             | `slack`                                          | Provider name in conversation refs + adapter registration.                      |
 | `REGISTER_ON_START`            | `true`                                           | Set `false` to skip `/extmsg/adapters` registration (tests, diagnostics).       |
 | `HANDLE_PREFIX`                | `@`                                              | Leading address token for keyword routing. Empty disables routing.              |

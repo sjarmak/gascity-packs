@@ -35,7 +35,7 @@ sc_adapter_base() {
     printf '%s' "${SLACK_CHANNEL_ADAPTER_URL%/}"
     return
   fi
-  _base="${GC_API_BASE_URL:-http://127.0.0.1:9443}"
+  _base="${GC_API_BASE_URL:-http://127.0.0.1:8372}"
   _base="${_base%/}"
   printf '%s/v0/city/%s/svc/slack-channel' "$_base" "$(sc_city)"
 }

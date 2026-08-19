@@ -13,7 +13,7 @@ import (
 const (
 	defaultPublicListen   = "0.0.0.0:8775"
 	defaultInternalListen = "127.0.0.1:8776"
-	defaultGCAPIBase      = "http://127.0.0.1:9443"
+	defaultGCAPIBase      = "http://127.0.0.1:8372"
 	defaultProvider       = "slack"
 	defaultInboundTarget  = "mayor"
 	defaultSlackAPIBase   = "https://slack.com/api"

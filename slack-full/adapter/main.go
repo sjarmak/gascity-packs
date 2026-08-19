@@ -67,7 +67,7 @@
 //     In proxy_process mode this is computed
 //     from GC_API_BASE_URL + GC_SERVICE_URL_PREFIX
 //     and the env var is ignored.
-//   - GC_API_BASE_URL              Default "http://127.0.0.1:9443". Base
+//   - GC_API_BASE_URL              Default "http://127.0.0.1:8372". Base
 //     URL for gc's HTTP API.
 //   - ADAPTER_PROVIDER             Default "slack". Provider name used in
 //     conversation refs and adapter registration.
@@ -548,7 +548,7 @@ func loadConfigFromEnv(getenv func(string) string) (config, error) {
 		internalListen:       envOrFn("LISTEN_INTERNAL", defaultInternalListen),
 		serviceSocket:        getenv("GC_SERVICE_SOCKET"),
 		internalCallbackURL:  strings.TrimRight(envOrFn("INTERNAL_CALLBACK_URL", defaultInternalCallback), "/"),
-		gcAPIBase:            strings.TrimRight(envOrFn("GC_API_BASE_URL", "http://127.0.0.1:9443"), "/"),
+		gcAPIBase:            strings.TrimRight(envOrFn("GC_API_BASE_URL", "http://127.0.0.1:8372"), "/"),
 		cityName:             getenv("GC_CITY_NAME"),
 		provider:             envOrFn("ADAPTER_PROVIDER", "slack"),
 		accountID:            getenv("SLACK_WORKSPACE_ID"),

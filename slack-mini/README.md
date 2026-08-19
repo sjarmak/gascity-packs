@@ -112,7 +112,7 @@ The built binary is git-ignored; the `[[service]]` block runs it in place.
 | `REGISTER_ON_START` | | `true` | Self-register as an extmsg adapter on start. |
 | `SLACK_MINI_INBOUND_TARGET` | | `mayor` | Session handle inbound mentions address. |
 | `SLACK_API_BASE` | | `https://slack.com/api` | Slack web API origin (override for relays/tests). |
-| `GC_API_BASE_URL` | | `http://127.0.0.1:9443` | gc API base. |
+| `GC_API_BASE_URL` | | `http://127.0.0.1:8372` | gc API base. |
 
 `GC_SERVICE_SOCKET`, `GC_SERVICE_URL_PREFIX`, and `GC_API_BASE_URL` are
 injected by gc when the adapter runs as a `proxy_process` service.

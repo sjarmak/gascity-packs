@@ -43,7 +43,7 @@
 //
 //	GC_SERVICE_SOCKET      UDS path the internal listener binds.
 //	GC_SERVICE_URL_PREFIX  Reverse-proxy prefix gc routes to this service.
-//	GC_API_BASE_URL        gc API base (default http://127.0.0.1:9443).
+//	GC_API_BASE_URL        gc API base (default http://127.0.0.1:8372).
 //
 // Optional env:
 //

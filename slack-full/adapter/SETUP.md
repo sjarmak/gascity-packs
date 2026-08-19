@@ -134,7 +134,7 @@ GC_CITY_NAME=<your-city-name>
 # LISTEN_INTERNAL=127.0.0.1:8766           # gc-only, localhost
 # INTERNAL_CALLBACK_URL=http://127.0.0.1:8766
 
-# Optional override; defaults to http://127.0.0.1:9443 (no /v0/... suffix).
+# Optional override; defaults to http://127.0.0.1:8372 (no /v0/... suffix).
 # Under proxy_process supervision you don't set this — but you do need
 # it sourced before `gc start` so the supervisor inherits it for the
 # spawned adapter (it is NOT auto-injected by the controller).
