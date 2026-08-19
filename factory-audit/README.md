@@ -191,6 +191,36 @@ That is also why `open` is a verdict rather than a failure. Some effects have
 no identity to look for because nobody decided what one would be; reporting
 that as a failed search is a false reading, since the search had no target.
 
+## A decided field is not a live mechanism
+
+The checker reads your description. A field that says `unknown` fails; a field
+that names something real passes. Nothing checks that the thing named is being
+used.
+
+Our own contract is the worked instance, and it is in `examples/gc-city/`.
+`work.ownership.lease_expiry` names `lease_expires_at`, a real column in a real
+table, and the rule accepts it. When this example was taken, nine leases had
+ever been granted, none was live, and one of the twenty four items then claimed
+carried a lease row at all. The comments in the contract carry the query that
+says otherwise if it has changed. The reaper that recovers work from dead owners
+takes expired leases as its input, so it could reach one of those twenty four.
+That line will read green the day we clear the other half of the same rule.
+
+The kit does not close this, and the reason is worth stating rather than
+apologising for. Checking it means observing a running installation, and where
+work claims live differs per factory. A static rule that asked only whether the
+declared name resolves somewhere in the code would pass here too, since the
+column exists and is simply not written. That is a guard that cannot go red on
+the case it was built for.
+
+One field does close a version of the gap, and it shows the shape a fix takes.
+`instructed_call_sites` is a number you declare that is re-derived from a fresh
+scan on every run, so it goes stale rather than silently wrong. Ownership has
+no equivalent, because nothing static can count live leases.
+
+So read a passing line as "somebody decided this", not "this works". The
+passing rules that describe a mechanism are the ones worth checking by hand.
+
 ## The checker is pinned, not vendored
 
 `kit.pin` names a repository and a commit. `gc <binding> setup` clones it into

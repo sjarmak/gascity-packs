@@ -183,3 +183,89 @@ def test_both_pages_state_the_example_length_the_example_actually_has() -> None:
             f"{page.name} does not say '{stated} lines'; the example has "
             f"{lines}"
         )
+
+
+def test_the_dead_mechanism_warning_and_the_contract_agree() -> None:
+    """Half of the README's sharpest claim, and it is worth saying which half.
+
+    The claim is that a DECIDED field can name a mechanism nothing runs. This
+    binds the decided half only: set `lease_expiry` to `unknown` and the rule
+    starts failing on it, at which point the paragraph describes a green line
+    that is no longer green and the example teaches the opposite of what it
+    says. The dead half is a measurement of a running store, recorded in the
+    contract's comments with the query beside it, and no test in this pack can
+    re-take it, because the pack ships without the store. The test below binds
+    the reading the checker gives, which is the other thing that can drift.
+
+    Runs with no kit and no network: the edit it guards against is one
+    keystroke, and every other check of this claim needs an installed checker.
+    """
+    # Asserted, not skipped over. A skip here would quietly retire the whole
+    # check the moment someone reworded the heading, which is the one edit most
+    # likely to happen to it.
+    pack_readme = (PACK / "README.md").read_text()
+    assert "A decided field is not a live mechanism" in pack_readme, (
+        "the pack README no longer carries the decided-but-dead section; the "
+        "example README's own section points at it by that name"
+    )
+
+    ownership = yaml.safe_load(EXAMPLE.read_text())["work"]["ownership"]
+    lease = str(ownership.get("lease_expiry", "")).strip()
+    assert lease and lease.lower() not in {"unknown", "none", "tbd"}, (
+        f"lease_expiry reads {lease!r}. Both READMEs argue from a field that "
+        f"is decided and whose mechanism is dead; an undecided field fails the "
+        f"rule outright and makes that argument false."
+    )
+    # The heading, not a bare mention of the field. `lease_expiry` also appears
+    # in the failure table above that section, so a mention proves nothing
+    # about the section still being there.
+    assert "A field that passes, over a mechanism that does not run" in (
+        README.read_text()
+    ), "the example README lost the section that argues this case"
+
+
+def test_auth_001_is_red_for_the_generation_and_not_for_the_lease(
+    tmp_path: Path,
+) -> None:
+    """Which half of AUTH-001 fails is the whole point of that section.
+
+    Both READMEs say this rule is red for the claim generation and that
+    clearing it would turn the rule green over a lease almost nothing takes. If
+    the checker is in fact failing on the lease, that reading is wrong and the
+    advice inverts: clearing the generation would leave the rule red and nobody
+    would learn anything from it.
+    """
+    kit = kit_home()
+    if kit is None:
+        pytest.skip(
+            "set FACTORY_KIT_HOME to a checkout of the reliability kit to "
+            "confirm which half of AUTH-001 is failing"
+        )
+    out = tmp_path / "findings"
+    result = subprocess.run(
+        [sys.executable, "-m", "src.factory_check", "review", str(EXAMPLE),
+         "--out", str(out)],
+        cwd=kit,
+        capture_output=True,
+        text=True,
+        timeout=300,
+    )
+    assert result.returncode in (0, 1), result.stderr[:500]
+    findings = json.loads((out / "findings.json").read_text())
+    ownership = [
+        f for f in findings
+        if f["rule"] == "AUTH-001" and f["path"] == "work.ownership"
+    ]
+    assert len(ownership) == 1, findings
+    # Set equality over the field names the rule can list, not an absence
+    # check. `lease_expiry not in message` would also pass if the wording
+    # changed so that neither name appeared, which is a rule this test no
+    # longer understands rather than a rule that agrees with the README.
+    message = ownership[0]["message"]
+    named = {n for n in ("generation", "lease_expiry") if n in message}
+    assert named == {"generation"}, (
+        f"AUTH-001 reads {message!r}. Both READMEs claim this rule is red for "
+        f"the generation and that the lease half passes. An empty set here "
+        f"means the rule stopped naming its undecided fields and this test "
+        f"can no longer tell the two apart."
+    )

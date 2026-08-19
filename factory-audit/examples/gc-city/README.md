@@ -55,6 +55,20 @@ recovery ceiling, no reserved interactive capacity, no fairness levels), and
 
 Warnings do not gate. They are the shape of the next argument, not a queue.
 
+## A field that passes, over a mechanism that does not run
+
+`work.ownership.lease_expiry` names `lease_expires_at` and the checker accepts
+it. The comments beside it record what the store actually holds: nine leases
+ever taken, eight of them expired days ago, against 1,557 issues. AUTH-001 is
+red here for the other half of the same rule, the claim generation, which has
+nothing to do with the lease. Clear the generation and this rule goes green over
+a lease almost nothing takes.
+
+That is the limit of a checker that reads a description, and the pack README
+states it under "A decided field is not a live mechanism". It is also why this
+example ships with its measurements in the comments. The numbers are the part
+the rule cannot see.
+
 ## How to read a decided field
 
 Each one carries what it asserts about the code and how to check it. From the
