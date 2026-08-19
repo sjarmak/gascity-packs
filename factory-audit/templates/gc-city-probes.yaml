@@ -33,11 +33,23 @@ factory_name: my-gas-city
 # from a filename. They are subtracted from the identity derivation and printed
 # every run.
 harness_globs: &harness_globs
-  - "bin/*.test"
-  - "bin/*.test.sh"
-  - "bin/test_*.py"
-  - "bin/*_test.py"
-  - "bin/*-test"
+  # Every scanned root, not just bin/. Written as bin/ globs first, and that
+  # under-counted nothing and over-counted plenty: nine of the twelve git_push
+  # sites reported as carrying no identity came from
+  # assets/scripts/prune-branches.test, a file whose whole job is to exercise
+  # the verb. A harness list scoped to one directory silently promotes every
+  # other directory's tests into the population.
+  #
+  # Widening it is a behaviour change and was checked rather than assumed:
+  # across every scanned root in that city, six files move into the harness set
+  # and all six are tests. `*-test` needs the name to END that way, so a script
+  # merely mentioning tests is untouched. Re-run the check on your own tree
+  # before trusting it: the globs are declared here so you can.
+  - "**/*.test"
+  - "**/*.test.sh"
+  - "**/test_*.py"
+  - "**/*_test.py"
+  - "**/*-test"
 
 scan:
   include_globs:
@@ -63,10 +75,26 @@ effects:
       scripted:
         path_globs: ["bin/*", "bin/**/*", "hooks/**/*", "assets/scripts/**/*"]
         any_of:
-          # Unanchored so a wrapped invocation is caught. Restricted to shell
-          # because unanchored it also matches the verb quoted in a Python
-          # docstring, which is a mention and not a call.
-          - regex: 'gc slack publish-to-channel'
+          # Matched on the VERB, with no binary in front of it, and both
+          # halves of that are load-bearing.
+          #
+          # Written as the literal `gc slack publish-to-channel` first, and in
+          # the city this template was written against that read ZERO scripted
+          # call sites for an effect performed daily: every send had moved
+          # behind a wrapper whose one real line is `"$GC_BIN" slack
+          # publish-to-channel "${ARGS[@]}"`, and a literal `gc` matches none
+          # of it. The effect then reports as performed only by agent
+          # instruction, which is a quiet reading rather than an error.
+          #
+          # Naming the binary as a pattern instead (`$GC_BIN`, `${GC}`) fixes
+          # the count and breaks the quoting check: the match then STARTS
+          # inside the opening quote of `"$GC_BIN"`, so every wrapper line is
+          # set aside as a mention. Starting at the verb puts the match after
+          # the quote has closed, which is the same place a reader would look.
+          #
+          # Restricted to shell because unanchored it also matches the verb
+          # quoted in a Python docstring, which is a mention and not a call.
+          - regex: '\bslack[ \t]+publish-to-channel'
             languages: [shell, unknown]
             not_regex: ['--help']
           - regex: '["'']publish-to-channel["'']'

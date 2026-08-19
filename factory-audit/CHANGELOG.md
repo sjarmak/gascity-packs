@@ -6,6 +6,41 @@ changed in the kit and what a city sees differently because of it.
 
 ## Unreleased
 
+### Pin moved to `c35aea0`
+
+Was `ca66097`. What a city running this pack sees differently: an observability
+promise that declares no objective is now a WARN (OBS-002 and OBS-003), a
+contract may carry `observability.objectives`, and `factory_check cites`
+resolves every `path:line` a contract writes about code so a citation that rots
+says so instead of sitting there looking authoritative.
+
+The pin still names a commit the published remote does not carry, so `setup`
+refuses. `kit.pin` says so in the file rather than only here.
+
+### The gc-city template scored its own tests, and lost an effect to a wrapper
+
+Both found by running the three commands against the city the template was
+written against, which is the only way either of them shows up: neither is an
+error, and both move a number quietly.
+
+`harness_globs` listed `bin/*.test` and its siblings and nothing else, so tests
+living anywhere else were population. Nine of the twelve `git_push` call sites
+reported as carrying no identity came from one file whose whole job is to
+exercise the verb. Scoped to `**/` now, and the reading went from `12 of 19` to
+`1 of 8`.
+
+The `slack_publish` scripted matcher named the literal `gc`. Every send in that
+city had moved behind a wrapper whose one real line is `"$GC_BIN" slack
+publish-to-channel "${ARGS[@]}"`, which the literal does not match, so the
+effect read as ZERO scripted call sites and reported as something only agents
+perform. Matching the verb instead of the binary recovers it.
+
+Naming the binary as a pattern was tried first and is wrong in a way worth
+recording: the match then starts inside the opening quote of `"$GC_BIN"`, and
+the quoting check correctly sets aside every wrapper line as a mention. Anchor
+on the verb and the match lands after the quote closes.
+
+
 ### A clean audit could be printed over a contract the code contradicts
 
 `audit` scores the contract and `reconcile` checks the contract

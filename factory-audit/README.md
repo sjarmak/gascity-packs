@@ -6,34 +6,40 @@ actually does.
 ## What it found in the city that wrote it
 
 Our own installation, which has more orders, formulas and reapers than anything
-we would be advising, still reads:
+we would be advising, reads:
 
 ```
-3 drift, 0 unverified, 0 confirmed, 2 open (of 5 declared)
-14 FAIL, 8 WARN
+5 drift, 0 unverified, 0 confirmed, 0 open (of 5 declared)
+5 effect(s) the scan measured and the contract does not record
+4 FAIL, 5 WARN
+verification: DRIFTED
 ```
+
+Nothing we declare about our own outbound effects survives contact with our own
+call sites, and the `4 FAIL` is a score over a document the code contradicts, so
+the audit exits nonzero whatever the rule catalog thinks of the prose.
 
 The specific things it surfaced, each one checkable:
 
 - **A squash merge that could lie about itself.** The merge path recorded a
   commit that was not the one the forge produced, so a retry had no way to tell
   a completed merge from an unstarted one. Fenced afterwards.
-- **30 of 30 agent-nudge call sites carry no `nudge_id`.** The contract said
-  they did. Every nudge redelivery in this city is free to run finished work a
-  second time, and one of them did, three times in a day.
-- **15 of 15 `git push` call sites carry no expected remote ref.** Nobody had
-  decided what identity a push should carry here, so the contract left it
-  undecided and the code matched, which is the only reason this reads as an
-  open question rather than as drift.
-- **A Slack idempotency key accepted and discarded at 0 of 16 call sites.** The
-  parameter existed, the plumbing accepted it, and nothing downstream used it.
-  This is the one on the list we have closed end to end: the key now reaches the
-  request body, and reconcile reads all 20 scripted call sites as carrying one.
-  Two of those twenty read as missing until we fixed the checker, not the code.
-  They assembled the command over several statements, so the marker was not on
-  the line the scan had found. A checker is allowed to withdraw an identity it
-  cannot prove and is never allowed to confirm one that does not hold, which is
-  why that bug was safe to have and worth fixing anyway.
+- **28 of 30 agent-nudge call sites carry no `nudge_id`.** The contract said
+  they all did. Every nudge redelivery in this city is free to run finished work
+  a second time, and one of them did, three times in a day.
+- **1 of 8 `git push` call sites carries no expected remote ref, and 34 more
+  sites are agent instructions.** The scripted lane is nearly closed. The lane
+  that is not closed is the one where a prompt tells an agent to push, which no
+  static check can bind, and which outnumbers the scripted sites four to one.
+- **An effect that moved behind a wrapper stopped being counted at all.** Our
+  Slack sends were routed through one fenced wrapper, and the probe pack still
+  named the bare verb. The reading went to zero scripted call sites for an
+  effect this city performs every day, and reported the effect as something only
+  agents do. It is not an error state and nothing goes red: a probe pack rots
+  when the code it points at moves, and the symptom is a count that quietly
+  falls. The shipped `gc-city` template matches the verb rather than the binary
+  because of this. If you route an effect through a wrapper of your own, add it
+  to your probe pack, because nothing here can guess it.
 - **Four effects this city performs on the outside world with nothing written
   down about half-success**, found because reconcile reported them as
   UNDECLARED against a contract their authors believed was complete.
@@ -42,11 +48,20 @@ We have not finished fixing these. That is the point of publishing the number:
 a factory with this much machinery still fails its own check, so the check is
 not a formality you pass by having good practices.
 
-That reading is from 2026-08-17, and it is a reading rather than a fact about
-us: it moves whenever our code or our contract does. The two commands that
-produce it are the two in this pack, run against our own tree, so the way to
-check the claim is to run them against yours and see whether a number that
-uncomfortable is hard to get.
+That reading is from 2026-08-19, and it is a reading rather than a fact about
+us: it moves whenever our code or our contract does. Reproduce it, or refute it,
+with the three commands this pack ships:
+
+```bash
+gc <binding> derive --template gc-city
+gc <binding> reconcile --contract <your contract>
+gc <binding> audit --contract <your contract>
+```
+
+Ours ran against the city's own hand-written contract with the kit at
+`c35aea0`, and the drift lines name nine matches set aside as mentions rather
+than invocations, which we have not settled. Settling them can only move the
+reading in one direction, and we have not earned it yet.
 
 ## The two halves, and why one alone is worthless
 

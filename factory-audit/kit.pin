@@ -10,5 +10,12 @@
 # record in the pack CHANGELOG what changed in the kit and why it matters here.
 
 KIT_REPO='https://github.com/sjarmak/software-factory-reliability.git'
-KIT_COMMIT='ca6609781e038cc809e9e24fa19bf83461425708'
-KIT_COMMIT_SUMMARY='docs(readme): the front page sent people to the hand-written contract'
+KIT_COMMIT='c35aea0715cf3c3fd18fa71dd28751de54194e7a'
+KIT_COMMIT_SUMMARY='feat(cites): resolve the code citations a contract makes, so they can rot loudly'
+
+# NOT YET REACHABLE. `setup` clones KIT_REPO and checks out KIT_COMMIT, and the
+# published remote does not carry this commit, so `setup` exits 4 with "the
+# remote has no commit" and leaves git metadata and no working tree. That is the
+# designed refusal and it is not a workaround away: until the checker commits
+# are published, this pack can be read but not run by anyone who does not
+# already have the kit. Set FACTORY_KIT_HOME to a checkout you hold to run it.
