@@ -40,6 +40,20 @@ The specific things it surfaced, each one checkable:
   falls. The shipped `gc-city` template matches the verb rather than the binary
   because of this. If you route an effect through a wrapper of your own, add it
   to your probe pack, because nothing here can guess it.
+- **Two effects are one error message away from a clean verdict, and the tool
+  would not tell us which one.** `open_pull_request` and `merge_pull_request`
+  both read "every readable code call site carries it; 1 match(es) set aside
+  for review". The one set-aside match in each is a `printf` line inside the
+  fenced wrapper for the command it wraps, naming that command in its own error
+  text. A scanner cannot tell that from `PUSH_CMD="git push origin main"`, a
+  real command built to run later, so it refuses to decide, which is the right
+  refusal. What was wrong is that `reconcile` said "exclude the ones that are
+  not invocations" and named none of them, while `derive` printed them all.
+  Reconcile is the command you run on a schedule and the one whose exit code
+  gates, so the instruction reached the reader without the evidence. It
+  enumerates them now. Nine such matches hold three of our five effects
+  undecided, and every one of the nine is a diagnostic string in a wrapper,
+  which is the ordinary shape of a well-built city rather than an edge case.
 - **Four effects this city performs on the outside world with nothing written
   down about half-success**, found because reconcile reported them as
   UNDECLARED against a contract their authors believed was complete.

@@ -6,6 +6,30 @@ changed in the kit and what a city sees differently because of it.
 
 ## Unreleased
 
+### Pin moved to `4f3e7fe`
+
+Was `c35aea0`. What a city running this pack sees differently: `reconcile` now
+prints the matches it sets aside, under the effect they belong to and with the
+matched text, the same way `derive` already did.
+
+Why that is a pin move rather than a cosmetic one. The reason string on a
+drifted effect ends "N match(es) set aside for review, exclude the ones that
+are not invocations with not_regex in the probe pack", and it named none of
+them. Reconcile is the command you put on a schedule and the one whose exit
+code gates a build, so the instruction was reaching the reader in the one place
+the evidence was missing. On the city this pack was written against, nine such
+matches hold three of five effects undecided, and each is a diagnostic string
+inside a fenced wrapper naming the command it wraps.
+
+Nothing about scoring moved. A set-aside match still forces the identity to
+undecided, on purpose: the shapes it cannot tell apart include a real command
+assembled into a variable to run later, and a rule that dropped them would be a
+guard that can only ever improve a score.
+
+The enumeration is printed under DRIFT and OPEN and not under UNVERIFIED, which
+is not an oversight: every route to UNVERIFIED excludes set-aside matches by
+construction, so a call there could never fire.
+
 ### Pin moved to `c35aea0`
 
 Was `ca66097`. What a city running this pack sees differently: an observability
