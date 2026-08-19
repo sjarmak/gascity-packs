@@ -1,0 +1,1171 @@
+# Gas City (ds-research workspace) factory reliability contract.
+#
+# Written 2026-08-16 against the LIVE installation at <city> by
+# reading the bead store schema and city config directly, not from memory.
+# Every "unknown" here is a decided-to-be-undecided: it means the mechanism was
+# looked for and not found, or was found and does not supply the property.
+# Refuting commands are recorded inline so a later reader can falsify each line.
+
+version: factory.reliability/v1
+
+factory:
+  name: gas-city-ds-research
+
+# Gas City states this split explicitly in its own operating docs: "Beads owns
+# canonical facts, Temporal owns durable procedure, Activities/agents own
+# effects, and the Mayor owns policy."
+#
+# CAVEAT recorded on purpose: the procedure authority is in SHADOW MODE.
+# TEMPORAL_BEADS_MODE=shadow and TEMPORAL_OUTCOME_MODE=shadow bind a
+# DryRunAdapter that records mutations and executes nothing. A declared
+# procedure authority that executes nothing is a declared authority, not an
+# operative one.
+authorities:
+  facts:     { system: dolt-beads, record: issues }
+  procedure: { system: temporal-maintenance-shadow }
+  policy:    { system: mayor-and-city-toml }
+  effects:   { system: agent-seats-and-workers }
+
+work:
+  logical_identity: bead_id          # stable for the item's whole life; survives executors
+  # No per-attempt identity exists. The claim path stamps gc.work_branch,
+  # gc.session_id and gc.session_name (hookClaimIdentityPatch,
+  # cmd_hook_claim.go:1104) and deliberately NO timestamp. gc.claimed_at is a
+  # proposal in docs/design/load-adaptive-dispatch.md:260-267, never written:
+  # `grep -rn claimed_at` over the beads module returns zero hits, and the key
+  # is set on 0 of 1298 beads. So attempt N and attempt N+1 of the same bead
+  # are indistinguishable in the durable record.
+  # UPDATED 2026-08-19 (mayor) and DELIBERATELY STILL `unknown`. A per-attempt
+  # identity now EXISTS: bin/gc-sling mints and advances gc.claim_generation on
+  # every dispatch, so (bead_id, gc.claim_generation) distinguishes attempt N
+  # from N+1 where bead_id alone could not. The advance is a destination-side
+  # compare-and-set (`bd update --if-assignee`), serialized per bead under flock
+  # because --if-assignee alone does not make read-compute-write atomic: two
+  # dispatches whose assignee never moves both read G and both write G+1,
+  # reusing an attempt number. bin/gc-sling-generation.test, 17/17.
+  #
+  # Why the field does NOT flip. This fences DISPATCH, and the schema's claim is
+  # factory-wide. A warm worker that picks a bead up through `gc hook --claim`
+  # with no sling gets no advance, and that path (hookClaimIdentityPatch,
+  # cmd_hook_claim.go) is upstream and PR-gated, so it cannot be closed from
+  # here. Declaring this would assert a factory-wide property from a mechanism
+  # that covers one of two claim paths -- the same overclaim the publication
+  # block below refused to make from the gascity ship gate.
+  #
+  # Also recorded rather than papered over: an A -> B -> A round trip between
+  # the read and the write satisfies --if-assignee. The invariant is "the holder
+  # I read is the holder I fenced against", not "no ownership event occurred".
+  # A fence against churn needs a CAS on the generation itself, which bd does
+  # not expose.
+  #
+  # The paragraph above about gc.claimed_at being written on 0 of 1298 beads is
+  # unchanged and still the reason the ordinary claim path supplies nothing.
+  attempt_identity: unknown
+  # A session id exists and start-or-attach is REAL: convergence returns
+  # "converged, spawn nothing" rather than launching a second process
+  # (cmd/gc/session_lifecycle_parallel.go:1836-1841). Declared because it works.
+  # What it is NOT bound to is process reality: identity is resolved by reading
+  # GC_SESSION_ID / GC_INSTANCE_TOKEN out of the surviving process's OWN tmux
+  # environment under an advisory flock (internal/session/names.go:270-309),
+  # never from a durable registry row. 0 of 29 session beads carry a pid, a
+  # start time, or a boot id. And the adoption path mints a FRESH instance
+  # token and resets Generation to default for a process still carrying the old
+  # ones (cmd/gc/adoption_barrier.go:222-234), so adoption destroys the very
+  # value that would distinguish incarnations.
+  session_identity: session_id       # gc session id, e.g. gc-801791
+
+  ownership:
+    # A leases table EXISTS (issue_id, holder, granted_at, lease_expires_at,
+    # heartbeat_at, granted_node) but is effectively vestigial:
+    #   9 lease rows against 1557 issues, 526 of which carry an assignee.
+    #   heartbeat_at == granted_at on all 9 rows: heartbeats never renew.
+    #   8 of 9 leases expired days ago and nothing reclaimed them.
+    # [2026-08-16T14:40Z; dolt --host 127.0.0.1 --port 29620 --user root
+    #  --no-tls --password '' sql -q "USE gc; SELECT * FROM leases;"]
+    lease_expiry: lease_expires_at
+
+    # NO monotonic generation/epoch column exists anywhere in the store.
+    # row_lock is NOT a fencing token: it is deliberately RANDOM per write
+    # (beads issueops/lease.go:99-115), a commit-collision detector, not a
+    # version. Measured: 995 issues share the value 1, the rest carry hash-like
+    # signed 64-bit values.
+    # [2026-08-16T14:40Z; dolt --host 127.0.0.1 --port 29620 --user root
+    #  --no-tls --password '' sql -q "USE gc; SELECT row_lock, COUNT(*) FROM
+    #  issues GROUP BY row_lock ORDER BY 2 DESC LIMIT 10;"]
+    # updated_at is explicitly REJECTED as a fence by the code itself
+    # (internal/beads/metadata_cas.go:8-11: second-granularity, so two
+    # same-second writes yield an EQUAL token and a stale fence SILENTLY
+    # SUCCEEDS). The absence is considered, not overlooked.
+    # The upstream primitive that would supply this is beads issue #4697
+    # (claim_fence); `grep -in generation internal/dispatch/` = 0 hits.
+    #
+    # IMPORTANT NUANCE, because "Gas City has no generation" is too strong and
+    # the true statement is sharper. A generation DOES exist at the SESSION
+    # layer and it is not vestigial: PreWakePatch mints state=creating, a fresh
+    # instance_token, and generation+1 in one SetMetadataBatch BEFORE the
+    # process starts (internal/session/lifecycle_transition.go:193), and 29 of
+    # 29 session beads carry both fields. The city knows how to build this.
+    # It is `unknown` HERE because no generation is bound to WORK ownership, and
+    # because the session generation is broken in exactly the case the drill
+    # injects: the adoption path (cmd/gc/adoption_barrier.go:222-234) mints a
+    # BRAND-NEW instance token and resets Generation to the default for a
+    # process that is still carrying the OLD ones in its tmux environment. The
+    # one fence the session layer has is guaranteed to disagree with reality in
+    # precisely the worker-died-agent-survived case.
+    # No session record binds to process reality either: pid / process_id /
+    # start_time / boot_id are present on 0 of 29. The kernel primitive is in
+    # the tree (internal/pidutil/pidutil.go:51-85, /proc/<pid>/stat field 22)
+    # and its only consumer is kill-confirmation, not registration.
+    generation: unknown
+
+    # CORRECTION to an earlier draft of this file, recorded rather than
+    # silently edited: the claim transition IS fenced at the destination.
+    # BdStore.Claim -> `bd update --claim` -> issueops.ClaimIssueInTx runs
+    #   UPDATE ... WHERE id=? AND status IN (...) AND (assignee='' OR
+    #   assignee IS NULL OR assignee=? OR assignee IN pools)
+    # with conflict detected as rowsAffected==0. That is a real compare-and-set
+    # inside the mutation transaction, at the right layer.
+    #
+    # It is declared here because it exists. What it does NOT do is the point:
+    # the value it compares is the `assignee` VARCHAR, a string a worker writes
+    # about itself and that several workers can present -- and the predicate
+    # admits `assignee=?`, so the SAME holder always re-passes. A worker paused
+    # past its lease expiry, waking and re-presenting its own assignee string,
+    # satisfies this CAS. A monotonic generation is the only value that would
+    # refuse it, and there is none.
+    #
+    # The caller-side checks around it (hookCandidateClaimable at
+    # cmd_hook_claim.go:684-688) read a STALE work-query snapshot and are an
+    # optimization, not the guarantee. Two release paths are genuinely
+    # caller-side read-then-write: releasePoolAssignmentWithRecheck
+    # (pool_session_name.go:519-546, whose own comment admits a claim landing
+    # between recheck and write is undetectable) and reopenForReassignInStore
+    # (sling_core.go:1834-1848, the `gc sling --reassign` path).
+    #
+    # And the emulated CAS fallback is DEAD IN PRODUCTION:
+    # BdStore.CompareAndSetMetadataKey returns ErrConditionalWriteUnsupported
+    # (bdstore_conditional.go:531-533) because `--if-revision` does not exist
+    # in the pinned bd build.
+    #
+    # SCOPE, and it is narrower than "the city fences its writes". The CAS
+    # above governs claim ACQUISITION. The CLOSE -- the transition that
+    # actually publishes "this work is done" -- carries NO ownership predicate
+    # at all: closeIssueInTx guards on `WHERE id = ? AND status != 'closed'`
+    # (beads issueops/close.go:136-140). A late writer's close is therefore
+    # accepted unconditionally, which is precisely the stale-writer fault.
+    # Measured: 0 of 38 live claims carry gc.session_generation,
+    # gc.instance_token, gc.lease, or gc.claimed_at.
+    # The only real generation fence in the city is Temporal's, and that unit's
+    # own Description reads "binds DryRunAdapter: records mutations, executes
+    # nothing."
+    fence:
+      enforced_by: destination
+      operation: compare-and-set
+
+artifacts:
+  identity: commit_sha
+  # Verification is NOT bound to the artifact identity, and this is the one
+  # place where the city's own standing ruling was found STALE by the audit.
+  #
+  # The ruling in CLAUDE.md says the close path WRITES
+  # evidence.reviewer_verdict="pass" rather than reading one, and that
+  # bin/gc-outcome-close validates the key NAME and never its VALUE. Both halves
+  # were fixed in commit 33742d9 (2026-08-12). The minting line is gone;
+  # producer_disposition_close.go:394-396 now hard-errors "requires a
+  # pre-existing exact pass", and gc-outcome-close:345 refuses any value that is
+  # not the exact JSON string "pass". Verified at HEAD, both rails.
+  # [git show 33742d9 --stat]
+  # [grep -n 'requires a pre-existing exact pass'
+  #  services/temporal-maintenance/internal/temporalbeads/producer_disposition_close.go]
+  #
+  # It is still `unknown` here, because fixing who may WRITE the verdict does
+  # not bind the verdict to an ARTIFACT. The live gate remains two mutable bead
+  # metadata keys with no writer-identity constraint (`recorded_by` is
+  # self-asserted, bin/gc-outcome-close:17). The mechanism that WOULD bind an
+  # identity is specified in ADR-0022 and is not installed: /etc/gas-city/ and
+  # /usr/libexec/gas-city/ do not exist, no review* tables exist in the live
+  # store, and the strings "review broker" / "client-producer" /
+  # "gc.review_receipt" are absent from the deployed outcome-ready binary while
+  # the dr-qmf6a fix strings are present in it.
+  # 216 closes across 10 databases (2026-08-03 -> 08-11) carry a verdict the
+  # pre-fix path produced; zero closes have exercised the fixed path since.
+  # CHANGED 2026-08-19 (mayor). Both fields were `unknown` because the close
+  # path carried a verdict in MUTABLE bead metadata and never a content hash,
+  # and because ADR-0022's broker is specified and not installed. The broker is
+  # still not installed and that half of the comment above stands. What changed
+  # is that the non-broker close path now binds the verdict to an immutable
+  # commit, so the property these fields assert is real without it.
+  #
+  # bin/gc-review-artifact is the single derivation of artifact identity, shared
+  # by the recorder that stamps <verdict-key>.artifact_sha256 and by the closer:
+  #   digest = sha256("gc-outcome-close artifact v1\n" + <git commit oid> + "\n")
+  # It observes the work tree twice and requires the readings identical, and a
+  # DIRTY tree resolves to NOTHING rather than to a digest -- a verdict bound to
+  # uncommitted bytes would be a label wearing a digest.
+  #
+  # Two rails, and neither is sufficient alone. bin/gc-outcome-close:357-382
+  # refuses before any effect unless the presented digest is what the work tree
+  # resolves to right now; it can read the tree and cannot see what the reviewer
+  # recorded. producer_disposition_close.go re-reads the stored
+  # <verdict-key>.artifact_sha256 inside the SERIALIZABLE transaction that
+  # publishes the close and refuses if it is not the presented one; it can read
+  # what the reviewer recorded and cannot see the tree.
+  #
+  # Factory-wide, not single-repo: this is the close verb for all four producers
+  # (direct-worker, formula-step, project-lead, maintenance-order), which is why
+  # it can carry the claim the gascity ship gate could not.
+  #
+  # INSTALLED, per this file's own standard -- not merely built. The deployed
+  # services/temporal-maintenance/bin/outcome-ready carries all four new refusal
+  # strings and the retained pre-change backup carries none of them.
+  # [2026-08-19T00:2xZ; `cd services/temporal-maintenance/bin && for s in "passing
+  # verdict requires a claim generation" "requires a 64-hex review artifact digest"
+  # "does not fence" "was produced against a different artifact"; do grep -c -a -F
+  # "$s" outcome-ready outcome-ready.bak-2026-08-18-pre-verify001; done` -> 1 then
+  # 0, four times; `git diff --stat 6f176f7 HEAD -- services/temporal-maintenance/`
+  # is empty, so the binary's source equals main's]
+  verification:
+    identity: review_artifact_sha256
+    binds_to: commit_sha
+  # CHANGED 2026-08-19 (mayor): declared. The block below records why it was
+  # omitted and every word of it was true when written; what follows the marker
+  # is what changed. Kept rather than deleted because the reason it was omitted
+  # is the reason the new mechanism had to be factory-wide.
+  publication:
+    conditions:
+      # Re-read inside the same SERIALIZABLE transaction that publishes the
+      # close, against the row it holds FOR UPDATE -- not in a caller-side
+      # preflight, which cannot supply the property: the generation can advance
+      # between the preflight and the write, and a close presenting a generation
+      # the item has moved past is exactly the stale writer this refuses.
+      # producer_disposition_close.go, storedGeneration comparison.
+      - current_generation
+      # The stored <verdict-key>.artifact_sha256 must equal the digest the close
+      # presents, checked in that same transaction. Named RED mutation for both:
+      # delete either comparison and a stale-generation or wrong-artifact close
+      # lands (producer_disposition_close_fence_test.go).
+      - verification_matches_artifact
+  # HISTORICAL, and still the reason the bar is where it is:
+  # publication was omitted deliberately, and the omission is now a CLOSER call
+  # than the first draft made it look. One real conditional publication write
+  # does exist: the gascity ship gate re-resolves the branch head and refuses to
+  # push when it differs from the authorized SHA. That is a correct
+  # verified-artifact-equals-published-artifact check, and it is the ONLY one
+  # in the city.
+  # The path here named a `assets/scripts/` copy until 2026-08-19, which is
+  # not where that file is; the line numbers were right all along. The
+  # refuted path is described rather than repeated in `path:line` form on
+  # purpose: a cite checker cannot tell a live citation from a quoted dead
+  # one, so writing it out would leave a permanent false finding. It lives at `~/.claude/hooks/gascity-ship-gate.sh` (212 lines),
+  # OUTSIDE this repository, which is why no reviewer opening the cited path
+  # ever found the absence -- and why `factory_check.py cites` cannot reach it
+  # either. Two paragraphs down this same contract already had it right, so
+  # the document disagreed with itself. Found by the cites check the moment it
+  # existed (dr-nsjtk).
+  # It is not declared because its scope cannot support the claim the schema
+  # would make: it covers the gascity repo only, exempts `main`, has an
+  # unconditional unlogged bypass, and covers no Codex lane. Declaring
+  # `verification_matches_artifact` would assert a factory-wide property from a
+  # single-repo mechanism. 344 of 346 commits on default branches since
+  # 2026-08-08 carry no bead tie at all, and the entire HQ store holds 12 full
+  # commit SHAs.
+
+# Gas City's external mutations. Every retry_contract below is `unknown`
+# because no readback-before-repeat was found on any path that actually runs.
+#
+# The measured shape: 1 of 21 code-host effect sites writes a record naming the
+# effect BEFORE performing it (bin/github-central-mirror:327-352), and nothing
+# ever reads a prior plan back. Three sites carry a retry-safe identity
+# (--force-with-lease, the mirror body marker, the docs-autofix comment marker);
+# the rest rely on a fresh read next cycle.
+#
+# The complete protected contract the kit asks for — durable intent, stable
+# effect identity crossing the boundary, readback before retry, and an explicit
+# UNKNOWN state — IS implemented, and is even drilled with its own unsafe
+# control. It exists in exactly one place: Temporal mail delivery, which is
+# TEMPORAL_MAIL_MODE=disabled, unregistered on the worker, and shows Total: 0
+# executions. The city has the right answer written down and switched off.
+effects:
+  - name: git_push
+    destination: code_host
+    # CORRECTED 2026-08-16 (codex-review caught two overclaims below — see
+    # dr-pzesl bd comment for the full exchange). No compare-and-set identity
+    # at the sites that matter, but "branch name only" was not true of all
+    # five formula push sites. bin/fork-fast-forward:280 uses
+    # --force-with-lease=<ref>:<old_oid>, a real pinned-oid compare-and-set,
+    # outside the ship-gate-governed formula surface. Inside it, three sites
+    # push unconditionally by branch name only — mol-pr-from-issue.formula.
+    # toml:711, mol-pr-revert.formula.toml:374, .beads/formulas/mol-polecat-
+    # commit.toml:118 (all `git push [-u] <remote> <branch-or-ref>`, no
+    # fencing flag at all). Two sites are CONDITIONAL: mol-adopt-pr.toml:
+    # 717-719 chooses bare `git push --force-with-lease` (no pinned old-oid,
+    # so weaker than fork-fast-forward's, but a real compare-and-set against
+    # the local remote-tracking ref) when contributor_count>1 or a rebase
+    # happened, else falls back to plain `git push` with no fencing; the same
+    # rebase-gated pattern reappears at mol-pr-merge-only.formula.toml:
+    # 427-430. So the identity gap is real but the mechanism is inconsistent
+    # across sites, not uniformly absent.
+    # On re-sling after mol-pr-merge-only.formula.toml's A.2 CI-watch-timeout
+    # halt (:404-410), the chain restarts at A.1: the ack comment (:401,
+    # unconditional `gh pr comment`) always re-runs. A.3's push (:427-430)
+    # only re-runs IF a rebase was performed (`rebase_status != not_needed`)
+    # — my original comment claimed it re-runs unconditionally; it does not.
+    # Either way, neither step reads back whether the prior attempt already
+    # landed before re-running.
+    # The ship-gate sentinel (~/.claude/hooks/gascity-ship-gate.sh, 76 live
+    # sentinels at <gc state dir>/ship-passed/<branch>.json) records an
+    # AUTHORIZATION ("this SHA may ship") before the push, not an in-flight
+    # intent about the push attempt itself — and it is Claude-only:
+    # .codex/hooks.json has no PreToolUse key, so the Codex lane this factory
+    # now routes implementation to is entirely uncovered by it.
+    # [2026-08-16; dr-pzesl bd comment carries the full per-site citation list]
+    #
+    # SCOPE OF THE DECLARATION BELOW, stated first because it qualifies every
+    # word of it: the retry_contract and unknown_state_policy hold for the push
+    # sites in THIS repository. Two known paths do NOT satisfy them and are not
+    # ours to change here -- the upstream mol-polecat-commit retry loop, and
+    # bin/fork-fast-forward, which fences its own push correctly but does not
+    # collapse an already-landed repeat. Both are described at the bottom of this
+    # comment. A reader who takes `reconcile` as a property of every push this
+    # city performs is reading more than is claimed.
+    #
+    # FIXED 2026-08-18 (dr-mkvkg), and the paragraphs above are kept because the
+    # before state IS the finding. One fencing rule now sits between every push
+    # site in THIS repo and the remote: bin/git-push-fenced. It reads the ref off
+    # the remote before writing, collapses a repeat that already landed to exit 0,
+    # pins the lease to the oid it actually observed rather than to a local
+    # remote-tracking ref, and reads the ref back AFTER the push instead of
+    # trusting the push's exit code. Three exit codes, not two: 0 the commit is on
+    # the remote ref, 1 it definitively is not (retry is safe), 2 it could not be
+    # checked and the state is UNKNOWN. bin/git-push-fenced.test is 52 assertions
+    # against real bare repos and real pushes, each of thirteen named mutations
+    # shown red and green again.
+    #
+    # A cross-family review (codex, 2026-08-18) found five more folds in the first
+    # cut of this and they are fixed here, each with the assertion that catches it:
+    # the awk that parses ls-remote had its status swallowed, so a filter that
+    # never ran read as "the ref is absent"; every nonzero `git merge-base
+    # --is-ancestor` was read as the negative answer, so an unreadable repository
+    # became a confident "this push would discard work"; a branch tracking a
+    # differently-named remote ref was pushed to its LOCAL name, changing the
+    # destination; the JSON result escaped quotes in one field only; and the
+    # push's own stderr was discarded, which removed the only signal
+    # mol-pr-from-issue's 403 recovery path can key on.
+    #
+    # Wired at: mol-pr-revert.formula.toml (the halt path used to report a
+    # nonzero push as "retry manually" about work that may already have been
+    # pushed), mol-pr-from-issue.formula.toml, mol-pr-merge-only.formula.toml,
+    # mol-adopt-pr.toml (the A.3 rebase push and the Path B/C/D commands handed
+    # to mayor).
+    #
+    # CORRECTED 2026-08-18, and the correction is the whole finding: the line
+    # above said .beads/formulas/mol-polecat-commit.toml is "a symlink into the
+    # gascity core pack ... upstream code, not ours to land here". It is not a
+    # symlink. It is a regular file, and it carries local edits (`bd` -> `gc bd`
+    # at six sites) that predate today and have survived, so the local copy is
+    # durable in practice and was always ours to fix. It is now fenced: the
+    # retry loop calls git-push-fenced and, on rc 2, mails the witness and exits
+    # instead of going round again. That loop was the worst of the five --
+    # retrying on a nonzero exit sends a push that LANDED and then reported
+    # failure round to rebase onto a base that already contains the commit.
+    #
+    # What is still true, restated so the fix is not read as wider than it is:
+    # the UPSTREAM pack is unchanged, `git push origin HEAD:{{base_branch}}` at
+    # line 118 of all four cached copies, so a city materializing this formula
+    # fresh gets the unfenced loop. And .beads/ is gitignored (.gitignore:12),
+    # so our fix is live and UNVERSIONED -- it survives, and nothing records it.
+    # [2026-08-18; `ls -la .beads/formulas/mol-polecat-commit.toml` (regular
+    #  file, not a symlink); `grep -n "git push\|git-push-fenced" $(find
+    #  ~/.gc/cache/repos -path "*packs/core/formulas/mol-polecat-commit.toml")`]
+    # bin/fork-fast-forward keeps its own pinned lease and is not routed through
+    # the helper; it still lacks the already-landed branch, so a retry after an
+    # unrecorded success reports drift rather than a collapsed repeat.
+    # [2026-08-18; `bin/git-push-fenced.test`, `grep -rn git-push-fenced formulas/`,
+    #  `ls -la .beads/formulas/mol-polecat-commit.toml`]
+    # Tracked: dr-lnmm4 (own bead, not goal-1 dispatch scope — see README).
+    effect_identity: "the (remote, refs/heads/<branch>, intended commit oid) triple; the oid is what the readback compares, so the identity survives a branch being force-updated"
+    effect_identity_key: expected_remote_ref
+    retry_contract: reconcile
+    readback: "git ls-remote <remote> refs/heads/<branch>, compared against the intended commit oid — run before the push to collapse a repeat, and again after it to decide whether the effect landed"
+    unknown_state_policy: block_and_escalate
+    # MEASURED, not asserted: call sites that are prose telling an agent to run
+    # the command. Omitting it does not make those routes go away, it only
+    # stops EFFECT-006 from being able to fire -- this contract scored 4 FAIL
+    # for two days over five effects that had it missing. A wrong number is
+    # contradicted in either direction: reconcile reports STALE. That check is
+    # skipped when no probe covers the effect, which reconcile reports as
+    # UNVERIFIED, so an uncovered effect's count is unchecked and says so.
+    instructed_call_sites: 34
+  - name: open_pull_request
+    destination: code_host
+    # Deduplicated only INCIDENTALLY, by GitHub rejecting a second PR for the
+    # same head branch. That is a property of the destination, not a mechanism
+    # this factory owns, and it disappears the moment the branch name varies.
+    # Not one decided-but-broken mechanism: two uncoordinated approaches.
+    # mol-pr-revert.formula.toml:333 derives a stable branch from the work id;
+    # mol-pr-from-issue.formula.toml:192 has the model read the branch off a
+    # freshly regenerated plan each run, so a legitimate re-run can vary it.
+    # Even on the stable-branch path, the dedup key the READER queries
+    # (Fixes #N / Closes #N in body, :539-541) is never a key the WRITER is
+    # told to stamp (:752) — two passing runs can both open a PR. And the two
+    # formulas disagree on what a duplicate-PR error even looks like:
+    # mol-pr-revert assumes it fails; mol-pr-from-issue.formula.toml:756-757
+    # asserts exit 0 with a warning.
+    #
+    # FIXED 2026-08-18 (dr-mkvkg), same rule as git_push above, kept as one
+    # mechanism on purpose: bin/gh-pr-create-fenced. It lists the head on the
+    # forge BEFORE creating, so a repeat collapses to already-open (exit 0) with
+    # no second write; it lists again AFTER, so the answer comes from the forge
+    # rather than from `gh pr create`'s exit code — which lies in both directions
+    # (exit 0 with no URL when a PR already exists, nonzero after actually
+    # opening one). A failed or unparseable list is exit 2, never "no PR exists":
+    # that fold is the whole bug class. bin/gh-pr-create-fenced.test is 55
+    # assertions over a stubbed gh, each of ten named mutations shown red and
+    # green again; the stub-fidelity claim per replaced seam is in its header.
+    #
+    # Wired at: mol-pr-from-issue.formula.toml (which had a hand-rolled recovery
+    # covering only the exit-0-no-URL half) and mol-adopt-pr.toml Paths C and D.
+    #
+    # What this does NOT fix, and it is the identity half: the branch a re-run
+    # pushes to can still vary (mol-pr-from-issue.formula.toml:192 has the model
+    # read it off a freshly regenerated plan), and the effect identity below is
+    # the head ref. A re-run that picks a different branch name is a different
+    # effect by this identity and will open a second PR. Stable-branch derivation
+    # is the remaining work; the fencing does not substitute for it.
+    # A cross-family review (codex, 2026-08-18) found four more folds in the first
+    # cut and they are fixed here: the lookup filtered on head alone, so a pull
+    # request from this head to a DIFFERENT base was reported as the requested
+    # effect; a CLOSED-unmerged pull request exited 0, so a step asking for an
+    # open one could succeed on one somebody had closed, and no caller passed
+    # --only-open; the URL was reconstructed as a github.com string, which is
+    # wrong on every GitHub Enterprise host; and the JSON result escaped quotes
+    # in one field only. It also caught the site this whole declaration turns on:
+    # mol-pr-revert.formula.toml:490 was still calling bare `gh pr create` while
+    # the text below said pull-request creation was fenced. That is the fifth
+    # call site, now wired like the rest -- and it is the same lesson as the
+    # squash-merge fence in 4b4e0b4, which moved the audit by zero because the
+    # other sites had not moved with it.
+    # # [2026-08-18; `bin/gh-pr-create-fenced.test`, `grep -rn gh-pr-create-fenced formulas/`]
+    # Tracked: dr-lnmm4.
+    #
+    # 2026-08-18, commit cc9c5f5: the identity no longer has to be the branch.
+    # gh-pr-create-fenced takes --dedupe-marker, a durable string the writer
+    # stamps into the PR body and the reader looks the PR up by, so a formula
+    # whose branch name varies between runs still collapses its repeat. Passed
+    # by mol-pr-from-issue and mol-pr-revert; mol-adopt-pr still relies on
+    # head+base, which is correct for it because its branch is derived from the
+    # work id. Three defects fixed in the same commit, each of which reinstated
+    # the duplicate the fence exists to prevent: the marker lookup listed the
+    # newest 100 pull requests and scanned bodies client-side (invisible on any
+    # repo past 100 PRs, so always on gastownhall/gascity); the query narrowed
+    # on the longest marker token, which is the SHARED family prefix, so it
+    # selected every marker PR in the repo and refused forever instead; and
+    # max_by(.number) over --state all returned a newer CLOSED PR while an OPEN
+    # one carrying the same marker sat beside it.
+    # [2026-08-18; `bash bin/gh-pr-create-fenced.test` -> 73 passed 0 failed;
+    #  `grep -rln dedupe-marker formulas/`]
+    effect_identity: "the --dedupe-marker string in the pull request BODY where the caller supplies one, otherwise the (repo, head ref, base ref) triple — the marker is durable across branch renames, the triple is only as stable as the branch-naming rule above it"
+    effect_identity_key: dedupe_marker
+    retry_contract: reconcile
+    readback: "gh pr list --repo <repo> --search '<marker tokens> in:body' --state all (marker path) or --head <head> --base <base> (branch path), --json number,state — run before the create to collapse a repeat, and again after it to decide whether a pull request exists. A reply that exactly fills --limit may have been cut and is treated as a failed lookup, never as an absence"
+    unknown_state_policy: block_and_escalate
+    # MEASURED, not asserted: call sites that are prose telling an agent to run
+    # the command. Omitting it does not make those routes go away, it only
+    # stops EFFECT-006 from being able to fire -- this contract scored 4 FAIL
+    # for two days over five effects that had it missing. A wrong number is
+    # contradicted in either direction: reconcile reports STALE. That check is
+    # skipped when no probe covers the effect, which reconcile reports as
+    # UNVERIFIED, so an uncovered effect's count is unchecked and says so.
+    instructed_call_sites: 32
+  - name: merge_pull_request
+    destination: code_host
+    # WAS the most dangerous unprotected effect in the city, FIXED 2026-08-16 in
+    # commit 4b4e0b4. Recorded in full because the before state is the finding.
+    # (This line read 30b993f until 2026-08-17. That was the same change before a
+    # rebase rewrote it; it is unreachable from main, so the citation resolved to
+    # nothing on any fresh clone. `git merge-base --is-ancestor <sha> HEAD`.)
+    #
+    # Before: `--match-head-commit` appeared ZERO times in either tree, so a
+    # merge could not refuse a base that moved after review. The formula then
+    # wrote a durable "Squash-merged PR #N" WITHOUT reading the exit status
+    # (formulas/mol-pr-merge-only.formula.toml:451,456), so a failed merge was
+    # recorded as a completed one. It was contained only by a missing --apply,
+    # which had been present for months. This is the single place in the city
+    # that actually runs `gh pr merge`; every other formula hands the command to
+    # the mayor, so one unfenced call site was the whole exposure.
+    #
+    # After: the head is re-read from GitHub and checked against the pushed
+    # commit (the intake HEAD_SHA is stale by merge time, after the A.3 rebase
+    # and force-push, and is no longer reused); the merge is fenced with
+    # `--match-head-commit`; and the PR state plus merge commit are read back
+    # from GitHub before anything is recorded, because a nonzero exit can
+    # accompany a completed merge and a zero exit is not a merge commit.
+    # [2026-08-16; `grep -n 'match-head-commit' formulas/mol-pr-merge-only.formula.toml`]
+    effect_identity: pr_head_sha        # the tested commit; the merge is a
+                                        # compare-and-set against it
+    retry_contract: deduplicate         # GitHub refuses a second merge of the
+                                        # same PR, and the fence refuses a
+                                        # merge of a head we did not test
+    unknown_state_policy: block_and_escalate  # A.7 halts the chain and marks
+                                              # the root bead blocked rather
+                                              # than recording an outcome
+    # MEASURED, not asserted: call sites that are prose telling an agent to run
+    # the command. Omitting it does not make those routes go away, it only
+    # stops EFFECT-006 from being able to fire -- this contract scored 4 FAIL
+    # for two days over five effects that had it missing. A wrong number is
+    # contradicted in either direction: reconcile reports STALE. That check is
+    # skipped when no probe covers the effect, which reconcile reports as
+    # UNVERIFIED, so an uncovered effect's count is unchecked and says so.
+    instructed_call_sites: 18
+  - name: slack_publish
+    destination: messaging
+    # DECIDED 2026-08-17 by a behaviour change, not by editing this file.
+    # gas-city 08d0b55 put --idempotency-key on all 20 city publish call sites
+    # (0 of 16 before), keyed on a per-caller-prefixed content hash of the
+    # message body, and added bin/publish-to-channel-callers.test as a static
+    # contract so a new caller cannot silently opt out. Verified against the
+    # RUNNING system, not the source tree: city.toml:271 imports slack-pack
+    # from gascity-packs/slack-pack; that tree forwards idempotency_key
+    # (scripts/slack_intake_common.py) and its adapter consults
+    # publishDedupCache (adapter/main.go, dedup.Get/dedup.Put around the
+    # publish); the live adapter process runs that tree's binary, built after
+    # the source. The prior comment here, which said the key was DISCARDED and
+    # that a working cache existed only in an unimported tree, was true when
+    # written on 08-16 and was made stale the same day by the port landing.
+    #
+    # Refute: `grep -rn -- --idempotency-key <city>/bin/ | grep -vc '\.test:'`
+    # (expect 20); `bash <city>/bin/publish-to-channel-callers.test` (65/0);
+    # `readlink /proc/$(pgrep -x gc-slack-adapter)/exe` then `strings` that
+    # binary for dedup.
+    effect_identity: idempotency_key
+    # DECIDED 2026-08-18. Both fields below read "unknown" until today, and the
+    # comment sitting here explained at length why neither could be declared:
+    # the three retry contracts were all false, and the real policy was named in
+    # prose as "assume-failure-and-retry, which the checker rates unsound". That
+    # was a correct reading of a checker that had no word for either answer. It
+    # has both now (kit commits 234166b and its successor), so the paragraph
+    # that argued the record could not be honest is replaced by the record.
+    #
+    # at_least_once, not deduplicate. The destination dedup window is real and
+    # 2 minutes (slack-pack/adapter/main.go, publishDedupTTL) and NOTHING on
+    # this city's publish path ever reaches it: neither the pack scripts nor the
+    # adapter retry the Slack call, so the only re-delivery is the next order
+    # tick, minutes to hours later. Declaring deduplicate would name a
+    # destination behaviour that exists and that no retry here uses.
+    # Refute: grep -n 'retry\|backoff' <packs>/slack-pack/adapter/main.go --
+    # the only hits are the comment on publishDedupTTL, not a retry loop.
+    retry_contract: at_least_once
+    duplicate_disposition: >-
+      a second copy posts as a new message in the channel and both stay; nothing
+      collapses or supersedes the first. The bound is the caller's own state
+      file, which is uneven across callers -- orders/escalate-surfacer.toml
+      leaves a failed post unstamped to retry next tick, so a post that landed
+      while its confirmation was lost is re-posted on every tick until some
+      caller-side stamp lands. Unbounded for a caller with no stamp.
+    # assume_failure, and the previous comment already said so in prose: on an
+    # ambiguous outcome the callers treat a non-zero exit as failure and let the
+    # next tick re-post. That is the unsound policy the kit fails, and this line
+    # is the city recording that it does it, not a claim that it is fine.
+    #
+    # UNCHANGED 2026-08-19, and the reason is worth more than the field. The
+    # repair named here was "a readback (search the channel for the key before
+    # posting) ... and neither is built". Half of that is now built: the
+    # readback machinery runs on a 15m order, is fed by a receipt on every
+    # publish path, and was exercised end to end this morning. It still cannot
+    # answer, because the marker it searches for is emitted by an adapter build
+    # that is not deployed (gascity-packs, PR-gated). Declaring
+    # reconcile_then_block today would assert that an ambiguous outcome gets
+    # resolved, when what actually happens is `could_not_measure` on every
+    # receipt. That is precisely the overclaim this file refuses elsewhere, so
+    # the FAIL stands and this comment records why rather than the field moving.
+    # It also stays assume_failure for a second reason that survives the marker
+    # landing: the readback is a SWEEP after the fact, not a check before the
+    # post, so it can detect a duplicate and cannot prevent one.
+    # Refute the "cannot answer" half: run the sweep with the order's
+    # environment and read `status` — `could_not_measure`, not `checked`.
+    unknown_state_policy: assume_failure
+    # MEASURED, not asserted: call sites that are prose telling an agent to run
+    # the command. Omitting it does not make those routes go away, it only
+    # stops EFFECT-006 from being able to fire -- this contract scored 4 FAIL
+    # for two days over five effects that had it missing. A wrong number is
+    # contradicted in either direction: reconcile reports STALE. That check is
+    # skipped when no probe covers the effect, which reconcile reports as
+    # UNVERIFIED, so an uncovered effect's count is unchecked and says so.
+    instructed_call_sites: 7
+  - name: agent_mail_nudge
+    destination: messaging
+    # CORRECTED 2026-08-16: effect_identity was pointed at the wrong field —
+    # codex-review's cite is right, and this replaces the earlier "declared,
+    # bound to the wrong dimension" framing. The ONE effect with genuine
+    # durable write-ahead intent: a bead-backed queue with an atomic claim,
+    # attempt counter, TTL and a dead list, defined at internal/nudgequeue/
+    # state.go:31-49 (`type Item struct`). That struct carries `ID`
+    # (state.go:32, doc'd at internal/nudgequeue/store.go:47-48 as "the
+    # durable nudge id",
+    # metadata["nudge_id"]) as a field SEPARATE from `SessionID` and
+    # `ContinuationEpoch` (state.go:35-36). Retries increment `Attempts`
+    # (state.go:43) IN PLACE on the same Item — they do not mint a new ID —
+    # so `ID`/nudge_id is the genuinely retry-stable identity; SessionID +
+    # ContinuationEpoch identify the RECIPIENT/session-fence, not the queued
+    # nudge, and were the wrong field to declare here. A fence roll still
+    # discards intent rather than re-targeting it (bead_id is right there and
+    # unused for that), but that is a re-keying finding about SessionID/
+    # ContinuationEpoch's role, not evidence the queue lacks an identity.
+    # UNKNOWN is separately named and then thrown away:
+    # ErrNudgeSubmitUnconfirmed (internal/runtime/tmux/tmux.go:213) maps to
+    # FAILED-then-requeue only on the queue path (cmd_nudge.go:1488); the
+    # startup path and the ineligible-provider fallback (tmux.go:2208-2223)
+    # collapse the same named UNKNOWN straight to SUCCESS. TWO sites, not
+    # three: this sentence said three until 2026-08-19 and named
+    # internal/worker/runtime_handle.go:266-276 as the third, which propagates
+    # on today's main. Corrected here as well as in the unknown_state_policy
+    # block below, because a file that contradicts itself is worse than one
+    # that is merely stale -- a reader who stops at the first hit gets the
+    # refuted version. Derivation and the sibling that also propagates:
+    # dr-6siig, and the unknown_state_policy comment further down.
+    # Documented false-negative: delivery observed 3/3, recorded 0/3 ("busy
+    # state never observed"), driving repeated re-delivery of work direction
+    # that re-runs finished beads. `gc nudge` has no cancel verb.
+    # CORRECTION to an earlier reading of the dead-letter queue: it went 67 -> 1
+    # by a 1-hour RETENTION PRUNE, not by triage. The queue draining is not
+    # evidence that anything was delivered or handled. Tracked: dr-fi8ur.
+    effect_identity: nudge_id          # state.go:32 Item.ID, stable across
+                                        # Attempts increments — see comment
+    # DECIDED 2026-08-18, same reason as slack_publish above: the checker now
+    # has words for both answers, so the record can stop reading "undecided".
+    #
+    # at_least_once. The identity IS stable across retries (Item.ID survives
+    # Attempts increments), which is what deduplicate would need at the CALLER
+    # -- but deduplicate is a claim about the DESTINATION, and the destination
+    # here is an agent's pane. It has no dedup property at all: the documented
+    # false-negative above is delivery observed 3/3 and recorded 0/3, and the
+    # consequence was the same work direction re-delivered and finished beads
+    # re-run. A repeat lands, in full, as a second instruction.
+    retry_contract: at_least_once
+    duplicate_disposition: >-
+      a second copy is a second instruction to an agent, and an agent that
+      already did the work does it again -- observed re-running beads that were
+      already closed. Bounded only by the queue's attempt ceiling and TTL
+      (internal/nudgequeue/state.go), not by anything at the destination, and
+      `gc nudge` has no cancel verb, so a re-delivery in flight cannot be
+      withdrawn once it is queued.
+    # assume_success, and this effect does not have ONE policy -- it has two,
+    # split by call path, which is worth more than the field can hold.
+    #
+    # RE-DERIVED 2026-08-19 against gascity-main @b726b41f1 rather than copied
+    # forward, and one of the three cited sites did not survive the check. The
+    # count was three of four paths; it is TWO. Tracked on dr-6siig, which this
+    # entry had no bead for until then -- the epic's query could not see the
+    # second EFFECT-003 FAIL at all.
+    #
+    #   REFUSES the collapse, on purpose, and is the model for the fix:
+    #     tmux.go:2197-2206, the queue path. Returns
+    #     ErrNudgeSubmitUnconfirmed with the reason in the code -- "Do NOT
+    #     collapse this to nil: a caller that treats nil as clean delivery
+    #     would ack a queued nudge for a message that may still be sitting
+    #     drafted-but-unsubmitted in the pane." The item stays unacked, so it
+    #     requeues and spends one bounded attempt. That is assume_failure, and
+    #     it duplicates.
+    #
+    #   COLLAPSES to SUCCESS, both in the tmux runtime:
+    #     internal/runtime/tmux/adapter.go:1332-1341, the STARTUP nudge --
+    #       downgrades the sentinel to a stderr warning and returns nil, so the
+    #       start reports success. Its comment gives a real constraint ("the
+    #       startup nudge has no retry-capable caller"), and the consequence is
+    #       still that a nudge which never reached the agent is
+    #       indistinguishable from one that did.
+    #     internal/runtime/tmux/tmux.go:2208-2222, the ineligible-provider
+    #       FALLBACK -- does not collapse the sentinel, it never produces one:
+    #       on a successful sendSubmit it sets delivered = true and returns nil
+    #       with no confirmation check. Same outcome, and harder to find,
+    #       because there is no error to grep for.
+    #
+    #   DOES NOT HOLD, and is left here rather than deleted because the way it
+    #     failed is the finding: "the worker boundary
+    #     (internal/worker/runtime_handle.go:266-276)". That function
+    #     PROPAGATES today -- `if err := h.provider.Nudge(...); err != nil {
+    #     return NudgeResult{}, err }` -- as does its sibling
+    #     internal/worker/handle_lifecycle.go:299-352, the file the code moved
+    #     into across aea97fd5f / 9b5b0791b / 5c16a476c. A line-pinned claim
+    #     outlived the lines it pinned.
+    #
+    # Declared as assume_success because it is the SILENT half: a duplicate
+    # announces itself by arriving twice, a dropped nudge announces itself as
+    # nothing at all, which is why the 67 undelivered nudges sat unread for two
+    # months. Ranking by which failure is harder to see, not by which name
+    # sounds worse.
+    #
+    # `nudge_queue_target_liveness_readback` (56cf477) does NOT discharge this:
+    # it reads the SENDER-side queue, so a nudge the startup path swallowed
+    # before it was ever queued is invisible to it.
+    unknown_state_policy: assume_success
+    # MEASURED, not asserted: call sites that are prose telling an agent to run
+    # the command. Omitting it does not make those routes go away, it only
+    # stops EFFECT-006 from being able to fire -- this contract scored 4 FAIL
+    # for two days over five effects that had it missing. A wrong number is
+    # contradicted in either direction: reconcile reports STALE. That check is
+    # skipped when no probe covers the effect, which reconcile reports as
+    # UNVERIFIED, so an uncovered effect's count is unchecked and says so.
+    instructed_call_sites: 2
+
+# This block was WRONG TWICE, in opposite directions, and both errors are the
+# drill's own failure mode rather than incidental sloppiness. Recorded because
+# the corrections are the finding.
+#
+# Error 1: an earlier draft declared stale_claim_reaper and
+# orphaned_molecule_reaper as live. They are disabled by FILENAME
+# (`*.toml.disabled`), which no `gc order` surface displays, so their absence is
+# invisible from every operator view.
+# [ls <city>/orders/ | grep -iE "molecule|orphan|landing|stale-claim"]
+#
+# Error 2: the correction then declared close_gate_reaper as the ONE live
+# reconciler. That was derived by enumerating `orders/`, which is only one of
+# THREE scheduling surfaces, and it missed the only reconciler that actually
+# works. `bin/completion-reconciler` runs from a systemd user timer, not from a
+# gc order, every 15m, in APPLY mode
+# (`ExecStart=%h/gas-city/bin/completion-reconciler --apply --nudge-mayor
+# --scope all`). It does not appear in `orders/` at all.
+# [2026-08-16T14:57Z; systemctl --user list-timers --all --no-pager]
+# [2026-08-16T14:57Z; systemctl --user cat completion-reconciler.service]
+# So "is this reconciler alive" cannot be answered from any single surface:
+# gc order files, city.toml [[orders.overrides]], and systemd user timers each
+# hold part of the answer, and each one alone returns a confidently wrong one.
+#
+# close_gate_reaper is therefore NOT declared below, and that is deliberate. It
+# is scheduled and it fires, but it is not COMPLETING: its landing cache was
+# last written 2026-08-07, with 186 `context deadline exceeded` since, and
+# 2,514 detections today against 0 repairs. Lifetime it records 19,789
+# unmerged_branch_flagged and 8,735 evidence_missing against 209
+# reopened_blocked and 73 reopened. It also records AHEAD only; `behind` is
+# never read, logged, or gated on. Declaring a loop that emits detections and
+# performs no repair would be exactly the article's "a failed observation read
+# as a fact about the world," committed inside the contract that is supposed to
+# catch it.
+#
+# Every OTHER loop that re-reads an external destination is disabled, dry-run,
+# or not completing: work-landing-reaper (disabled since 07-13);
+# github-mirror-reconcile, the authorized GitHub->beads reconciler (disabled,
+# its own re-enable deadline ten days expired); dispatch-delivery-canary, the
+# only receiver-side delivery proof (disabled 08-14); gate-sweep (0 of 210,
+# because disabling the local order unmasked a pack copy that calls `gc bd`
+# against a file-backed store).
+reconciliation:
+  - fact: work_item_completion
+    query: completion_reconciler_scope_all
+    interval: 15m
+  - fact: code_host_pr_state
+    query: pr_state_poller_code_host_reconcile
+    interval: 15m
+  - fact: slack_publish_delivery
+    query: slack_channel_reference_readback
+    interval: 15m
+  - fact: agent_mail_nudge_delivery
+    query: nudge_queue_target_liveness_readback
+    interval: 15m
+  # PARTIALLY CLOSED 2026-08-18 (dr-3msk6.3) — was, together with the
+  # agent_mail_nudge half below (still open): "nothing re-reads Slack/mail
+  # delivery state after a slack_publish or agent_mail_nudge effect runs."
+  # This entry covers slack_publish ONLY. Deliberately: it names neither
+  # "messaging" (slack_publish's and agent_mail_nudge's shared destination
+  # string) nor "mail"/"agent"/"nudge", because the checker's token-overlap
+  # fallback (rules.py entry_covers_effect) would otherwise mark
+  # agent_mail_nudge covered too, and it is not — that half is a separate,
+  # still-blocked prerequisite (dr-3msk6.1, nudge identity) and must keep
+  # raising until it is actually fixed.
+  #   [2026-08-18T13:22Z; cd software-factory-reliability && python3 -c
+  #    "sys.path.insert(0,'src'); import rules,yaml; doc=yaml.safe_load(open(
+  #    'factory.yaml')); print([f.message for f in rules.review(doc) if
+  #    f.rule=='RECON-001'])" — before this entry: "Effects relying on it:
+  #    slack_publish, agent_mail_nudge."; after: "Effects relying on it:
+  #    agent_mail_nudge."]
+  #
+  # bin/messaging-state-reconciler (dr-3msk6.3) makes Slack delivery state
+  # readable: it derives the reference marker `_ref:<sha256(idempotency_key)
+  # [:12]>_` the same way the adapter does (spec written down, and asserted
+  # against a shared test vector, in both bin/messaging_state_reconciler.py
+  # and gascity-packs slack-pack/adapter/main_test.go so the two
+  # implementations cannot silently drift) and scans conversations.history
+  # for it. Read-only — never posts, edits, reacts to, or deletes a Slack
+  # message. `--sweep` re-checks recent entries in a local append-only
+  # receipts log (.gc/messaging-state-cache/receipts.jsonl) against Slack
+  # and classifies each as clean / delivered_not_found / found_not_delivered
+  # (the assume_failure-retry-landed-after-all case above, EFFECT-003) /
+  # duplicate_post (2+ messages under one key's marker), writing a report
+  # under .gc/reports/messaging-state-reconciler/ and nudging mayor on any
+  # finding (same idiom as bin/completion-reconciler). Scheduled every 15m:
+  # orders/messaging-state-reconciler.toml. Unit-tested against a stubbed
+  # conversations.history response, never a real Slack call:
+  # bin/test_messaging_state_reconciler.py,
+  # bin/test_messaging_state_reconciler_cli.py (26 passed, 2026-08-18).
+  #
+  # NOT OVERCLAIMING what "partially closed" covers: the marker-emitting
+  # half of this fix — the adapter appending `_ref:<suffix>_` to
+  # post.Text in gascity-packs slack-pack/adapter/main.go's handlePublish —
+  # is verified (go build/vet/test) but LEFT UNCOMMITTED in that checkout,
+  # since gascity-packs canonical is gastownhall (PR-gated) and this agent
+  # has neither pre-authorization nor per-action approval to push there.
+  #
+  # CORRECTED 2026-08-19. The paragraph that stood here said "nothing in
+  # production calls `--record` yet" and "the scheduled sweep will find zero
+  # local receipts and report clean". Both were true when written on 08-18 and
+  # both were false by 05:30Z the next morning, which is the decay this whole
+  # audit exists to catch — a stale claim inside the contract that measures
+  # staleness. What is measured now:
+  #
+  #   * Every publish call site routes through bin/slack-publish-fenced, which
+  #     writes a receipt on EVERY path including a failed or killed publish
+  #     (gas-city f9e0755). 47 routed references in bin/ excluding suites
+  #     [2026-08-19T06:2xZ; `grep -rnI SLACK_PUBLISH <city>/bin/ | grep -v
+  #     '__pycache__' | grep -vc '\.test:'`. The -I and the __pycache__ filter
+  #     are not decoration: a compiled .pyc under bin/ would otherwise join the
+  #     count and the number would drift without the city changing. Zero such
+  #     hits today, so the figure is the same either way — the command is
+  #     tightened so it stays reproducible, not because it is currently wrong.]
+  #   * The population is no longer empty and no receipt was posted on purpose
+  #     to make it so: stall-watch published on its own schedule at
+  #     2026-08-19T05:23:02Z and decision-ledger-push at 05:29:02Z.
+  #   * The sweep does NOT report clean. It reports `could_not_measure`,
+  #     reason "the adapter is not stamping reference markers, so readback
+  #     cannot answer for any receipt", detail "3 of 3 receipt(s) in the window
+  #     recorded that no reference marker was stamped at post time ... This is
+  #     the adapter build, not lost mail." That is the marker_stamped guard
+  #     doing its job: without it the same reading would have been scored
+  #     DELIVERED_NOT_FOUND and every message this city successfully sends
+  #     would be reported lost, every 15 minutes.
+  #
+  #     READ THE REASON, NEVER THE STATUS. `could_not_measure` is ONE status
+  #     over several non-equivalent causes, and they call for different
+  #     responses: an absent SLACK_BOT_TOKEN ("sweep held before any Slack
+  #     read") is an environment problem and is what a hand-run from an agent
+  #     shell returns, since the token reaches the order through an
+  #     EnvironmentFile= drop-in and not through any seat; zero parsed receipts
+  #     is an empty population; the marker reason above is the deployed adapter
+  #     build. A future incident that keys on the status alone will attribute
+  #     whichever of these is in force to whichever was last written down here.
+  #     Raised in the 2026-08-19 cross-family review of this very edit, which
+  #     had collapsed the three into one cause.
+  #     [2026-08-19T06:2xZ; the order's own environment, `( set -a; .
+  #     <adapter env file>; set +a; bin/messaging-state-reconciler
+  #     --sweep )` — the token reaches the scheduled order through an
+  #     EnvironmentFile= drop-in, which `systemctl show -p Environment` does
+  #     NOT report; `-p EnvironmentFiles` is the reading that settles it.]
+  #
+  #   * The first real sweep also found three defects in the reconciler that
+  #     100 green tests could not see, fixed in gas-city 970714b: the Slack
+  #     read passed its timeout as the request BODY (urlopen's second
+  #     positional parameter is `data`), so the module had never completed one
+  #     Slack read; every test stub was `def opener(_request, _timeout)`, one
+  #     positional slot for two meanings, so no assertion could discriminate;
+  #     and a 1 MiB read cap truncated a real 1,125,345-byte history page into
+  #     JSON the sweep then blamed on Slack as "unreadable".
+  #
+  # So the mechanism is now exercised end to end and terminates honestly at
+  # the one thing still missing. See the dr-3msk6.3 and dr-c3wos bd comments
+  # for the full state and what dr-3msk6.8 (readback-before-post) needs next.
+  #
+  # CLOSED 2026-08-18 (dr-3msk6.1, mail/nudge half) — the second entry above.
+  # The Slack comment's "that half is a separate, still-blocked prerequisite
+  # ... and must keep raising until it is actually fixed" is now discharged,
+  # and the deliberate token avoidance it describes is why this needed its own
+  # entry rather than widening the Slack one. `nudge_queue_target_liveness_
+  # readback` overlaps agent_mail_nudge's name tokens (nudge) and nothing in
+  # slack_publish, so the two effects stay independently accounted for.
+  #   [2026-08-18T19:31Z; cd software-factory-reliability && python3 -c
+  #    "import sys,yaml; sys.path.insert(0,'src'); import rules; print([f.message
+  #    for f in rules.review(yaml.safe_load(open(FACTORY_YAML))) if
+  #    f.rule=='RECON-001'])" — before this entry: "Effects relying on it:
+  #    agent_mail_nudge."; after: [] ]
+  #
+  # bin/nudge-state-reconciler (dr-3msk6.1) makes nudge delivery state
+  # readable. A nudge leaves `pending` in .gc/nudges/state.json when it is
+  # delivered, so bucket membership IS the delivery signal; the reconciler
+  # classifies every record against a live `gc session list --json` snapshot
+  # as PENDING / DEFERRED / STALE_PENDING / TARGET_NOT_LIVE /
+  # TARGET_UNKNOWN_STATE / DEAD_LETTERED, and reports the last four. Read-only:
+  # it never enqueues, drains, retries, or expires a nudge. Scheduled every
+  # 15m: orders/nudge-state-reconciler.toml. 41 tests, both rails
+  # mutation-proved (12 of 13 seeded mutations go red; the 13th is stated as
+  # uncoverable on CPython 3.12 rather than papered over):
+  # bin/test_nudge_state_reconciler.py, bin/test_nudge_state_reconciler_cli.py.
+  #
+  # It found live loss on its first run, which is the point: 41 of 41 records
+  # undelivered, and the two groups are not equally serious, which is why the
+  # report groups on `source` and not only on target.
+  #   - 1 x DEAD_LETTERED -> gascity-pl via `sling`: real work direction
+  #     ("Work slung. Check your hook.", bead dr-wisp-8br) that expired
+  #     undelivered after 51h. A bead was dispatched and its seat never heard.
+  #   - 40 x TARGET_NOT_LIVE -> geo/oversight-rig.project-lead via `session`:
+  #     Slack channel-binding reminders for C0123ROOM01, queued over 21h to a
+  #     session (gc-795775) that is `asleep` on a rig suspended under dec-nyej.
+  #     Context injection rather than work direction, and still loss: a bound
+  #     channel accrues reminders for a seat that cannot answer.
+  # Every one of the 40 carries `last_error: null` — the queue does not consider
+  # them failed, and before this order nothing said otherwise. Same shape as the
+  # 67 undelivered nudges CLAUDE.md records, still accumulating. An earlier
+  # draft of this entry called all 41 "work direction"; the messages say
+  # otherwise, and the correction is what added the source dimension.
+  #   [2026-08-18T19:28Z; bin/nudge-state-reconciler --no-report]
+  #   [2026-08-18T19:44Z; python3 -c "import json,collections; d=json.load(open(
+  #    '.gc/nudges/state.json')); print(collections.Counter((b, r.get('source'))
+  #    for b in ('pending','dead') for r in d.get(b,[])))" ]
+  #
+  # Cross-family review: one round, codex-review --model spark (gpt-5.6-sol is
+  # rate-limited until ~Aug 19 23:30). Two real defects, both fixed and both now
+  # mutation-proved: a non-mapping row in `gc session list --json` crashed
+  # index_sessions with an AttributeError before any report was emitted, and a
+  # queue of nothing but malformed rows reported total_records=0 and exited 0 —
+  # a clean bill of health for an unreadable queue. Malformed rows are now
+  # counted and reported as MALFORMED_RECORD, and a partly-parseable registry
+  # reads as unread rather than partial. 18 seeded mutations, 17 go red; the
+  # 18th (dropping the nanosecond-fraction trim in parse_timestamp) is stated in
+  # the test as uncoverable on CPython 3.12, which accepts fractions of any
+  # length, rather than papered over.
+  #
+  # NOT OVERCLAIMING: this reads the SENDER-side queue, not the receiver. It
+  # proves a nudge left the queue, not that the seat acted on the text — the
+  # receiver-side proof is dispatch-delivery-canary, disabled since 08-14 and
+  # noted at the head of this section. It also cannot distinguish a nudge
+  # backing off from one backing off forever from one reading; DEFERRED is
+  # counted, not reported, and the age rail catches the forever case only once
+  # the record outlives the stale limit. And it deliberately does NOT report
+  # via `gc nudge`: reporting a dropped nudge through the nudge channel is the
+  # failure it exists to measure. The durable output is
+  # .gc/reports/nudge-state-reconciler/latest.json; exit 2 (queue unreadable)
+  # is kept distinct from exit 0 so an unread channel can never present as a
+  # clean one.
+  #
+  # CLOSED 2026-08-18 (dr-3msk6.2) — was: "nothing re-reads the code host for
+  # BASE identity. PR #4827 sat at behind_by=290 with ahead_by=4 and
+  # mergeable=MERGEABLE for nine days; GitHub's mergeability is textual and
+  # carries no base identity, and no rollup row carries the base SHA the run
+  # was evaluated against. A human reading job logs is the entire detection
+  # mechanism."
+  #   [2026-08-16T14:37Z; gh api repos/gastownhall/gascity/compare/main...
+  #    3d3176a270a00d7a43a892589be949829da483fd --jq '{ahead_by,behind_by}']
+  #
+  # bin/pr-state-poller now re-reads, every 15m per open PR we authored on
+  # gastownhall/{gascity,gascity-packs}: head SHA, base SHA (resolved via
+  # `gh api repos/<repo>/branches/<baseRefName> --jq .commit.sha` — gh's
+  # `pr view --json` has no baseRefOid field, only baseRefName, a branch
+  # name; confirmed live 2026-08-18 against gh 2.45.0), mergeable,
+  # mergeStateStatus, a check-status summary, and ahead_by/behind_by (same
+  # compare-API shape as the citation above, base resolved to a SHA rather
+  # than a moving branch name). Persisted under code_host_state in
+  # .gc/pr-state-cache/<repo>-<pr>.json; raises (`gc mail send mayor`, the
+  # bin/pr-merge-notifier idiom) on: behind_by over threshold (default 20,
+  # env PR_STATE_POLLER_BEHIND_THRESHOLD) for 2 consecutive polls — not 1,
+  # to avoid alerting on a single noisy sample; mergeable flipping
+  # MERGEABLE->CONFLICTING; mergeable reading UNKNOWN for 2+ consecutive
+  # polls with no head-SHA change in between (a single UNKNOWN right after a
+  # push is GitHub's normal async computation, not a signal); and base_sha
+  # changing between polls while behind_by does not simultaneously trend
+  # toward zero. 24h re-raise suppression per (repo, pr, condition),
+  # tracked in the same cache file. Read-only: never pushes, merges,
+  # closes, or comments on a PR. Runs and persists unconditionally on
+  # --dry-run — the live order (orders/pr-state-poller.toml) runs this
+  # script under --dry-run permanently under a 2026-08-11 hold that scopes
+  # to *dispatching iterate work*, not to observing PR state, so this path
+  # had to be independent of that flag to run in production at all.
+  # Verified against live data, not just stubs, on gastownhall/gascity #5276
+  # (Stephanie-authored, currently open): behind_by=44, mergeable=MERGEABLE,
+  # raised behind_by_threshold on the 2nd consecutive poll as designed.
+  #   [2026-08-18T13:18:20Z; GC_STORE_ROOT=<scratch> bash bin/pr-state-poller
+  #    --dry-run --pr 5276 (run twice); .gc/pr-state-cache/gastownhall-
+  #    gascity-5276.json code_host_reconcile.raised_conditions.
+  #    behind_by_threshold set; .gc/pr-state-poller.log event=reconcile_raised]
+  #
+  # Remaining gap, stated plainly rather than folded into "closed": checks_
+  # summary (total/passing/failing/pending from statusCheckRollup) is
+  # captured and cached every poll, but no condition here raises on a
+  # check-status FLIP (e.g. green -> red after the PR was already read as
+  # clean). That is a narrower, still-open instance of this same WARN —
+  # RECON-001 is closed for base/mergeable drift, not for every code-host
+  # fact a PR carries.
+  #
+  # ABSENT, each an explicit finding rather than an omission:
+  #   - no entry re-reads mail/nudge delivery receipts. UPDATED 2026-08-18
+  #     (dr-3msk6.3): the Slack half of this is now covered by the
+  #     slack_publish_delivery entry above — genuinely, but not yet live
+  #     (mechanism built and tested, adapter-side marker emission still an
+  #     uncommitted gascity-packs diff; see that entry's comment for the
+  #     precise state). The mail/nudge half remains fully absent and
+  #     unstarted, blocked on dr-3msk6.1 (nudge identity prerequisite).
+  #   - no `running_session` / resolve_session_for_current_claim entry, so a
+  #     retry cannot start-or-attach and can only launch blind
+  #   - no reconciler is scheduled for a dead formula run. 416 live step beads
+  #     exist; 54 sit under 11 roots ALREADY CLOSED; 153 carry no
+  #     gc.root_bead_id at all and are unreachable by any reconciler by
+  #     construction. The autoclose that would cover the 11 returns early on
+  #     `mol.Type != "molecule"` (cmd/gc/molecule_autoclose.go:169-171) and all
+  #     11 are issue_type=task with gc.kind=workflow.
+
+# Capacity is per-pool (min_active_sessions / max_active_sessions per agent)
+# with a session-create budget. There is no class partition: no recovery class
+# with a decided numeric maximum, no reserved interactive capacity, no declared
+# fairness levels. Budgets that DO exist bound wakes per tick (15), pool session
+# creates per tick (15) and order dispatches per tick (4) — all of them seat
+# admission, none of them work re-attempts.
+#
+# `classes` is omitted rather than declared with a guess, because the retry
+# storm the class partition exists to bound is present in code and unbounded:
+#
+#   - NINE independent retry owners, each with its own ceiling and none reading
+#     another's: dispatch retry-eval, the ralph controller, nudge-queue
+#     redelivery, idle-claim nudge, the session reconciler, the order
+#     dispatcher, Temporal activity retry, completion-reconciler requeue, and
+#     close-gate-reaper reopen (which has no attempt counter at all).
+#   - ZERO jitter anywhere in the city, and backoff in exactly one layer.
+#     internal/dispatch/retry.go does not import `time`; appendRetryAttempt
+#     writes the next attempt with no scheduled-at and no delay, so it is ready
+#     the instant it is written. The only spacing is the 2m controller tick, an
+#     incidental floor rather than a policy.
+#     [cd <gascity checkout> && grep -n 'time\.' internal/dispatch/retry.go]
+#   - The ceilings COMPOSE MULTIPLICATIVELY because they live in separate
+#     namespaces. gc.max_attempts (dispatch) and gc.completion_recovery_attempts
+#     (the reconciler) are independent counters; the reconciler requeues by
+#     setting --status open --assignee "", which resets nothing the dispatch
+#     counter can see. Up to NINE executions of one work item, with no layer
+#     able to report that number.
+#   - The one layer with correct exponential backoff is Temporal, and it is in
+#     shadow mode and executes nothing.
+#   - The spawn-storm detector is disabled at city.toml:1983-1984, and even when
+#     live it mailed the mayor rather than refusing anything. The guards that do
+#     work (crash tracker, circuit breaker) bound SEAT restarts, never WORK
+#     re-attempts.
+#
+# One favorable property, recorded because it cuts the other way: a failed order
+# does not retry, since the cooldown arms off the tracking bead's CreatedAt with
+# no outcome filter. One amplifier removed, at the price that order execution
+# failures are silently dropped with no retry and no dead-letter.
+scheduling:
+  capacity: { total: 1 }             # workspace.max_active_sessions during the one-seat pause
+
+# These measurements are the reason code_estate was OMITTED from 2026-08-16 to
+# 2026-08-19, and they are kept rather than deleted because the declaration
+# added below is narrower than they are: campaign work now pins a revision,
+# and everything measured here still does not. Confirmed by direct
+# measurement, not assumed: NO planned_base / base_revision / base_sha /
+# merge_base is recorded at bead creation, at `gc sling` dispatch, at formula
+# materialization, or at worktree creation. The issues schema has
+# source_repo varchar(512) and no revision column at all.
+# [2026-08-16T14:50Z; dolt --host 127.0.0.1 --port 29620 --user root --no-tls
+#  --password '' sql -q "use gascity; describe issues;"]
+# [2026-08-16T14:44Z; grep -rn --include="*.go" -E
+#  "base_revision|base_sha|baseRev|baseSHA|BaseRevision|BaseSHA"
+#  <gascity checkout>]  -> only an unrelated path-classifier test fixture
+#
+# What IS recorded describes the RESULT, not the starting point, and is
+# near-vacuous: of beads closed since 2026-07-01, gc.work_commit is set on
+# 10 of 2870 in gascity (0.35%) and 7 of 809 in the dr- store. The close gate
+# that consumes it (cmd/gc/work_record_gate.go:117-158) is warn-only;
+# GC_WORK_RECORD_ENFORCE is unset everywhere.
+#
+# And the branch identity it consumes is itself corrupt on 460 beads:
+# 391 record gc.work_branch=pl-shared-checkout (201 behind origin/main) and
+# 69 record _pr1945_check (2472 behind, last commit 2026-05-11). The gate asks
+# "is my commit on my branch" and never "is my branch current".
+# 404 of 405 worktrees are behind origin/main, median 298 commits.
+
+code_estate:
+  # Declared 2026-08-19 because a mechanism now earns it, and NOT before. The
+  # note this replaces recorded that nothing in this city pins a starting
+  # revision -- still true of `gc sling`, of formula materialization, and of
+  # worktree creation, all measured below and unchanged. What changed is that
+  # CAMPAIGN work, the only thing CODE-000 is asked about, now pins one.
+  #
+  # bin/campaign-estate records a campaign as (repository, revision, predicate,
+  # TARGETS) and re-runs the predicate against `git archive <revision>`
+  # extracted to a temp directory -- never against the working tree, which would
+  # measure whatever is on disk and file it under a revision nobody verified.
+  # bin/campaign-estate-records.test rechecks every record in campaigns/ on
+  # each city-selftest run, which is what keeps this from being a sentence.
+  #
+  # It closes exactly defect 1 named under `campaigns:` below: completion
+  # re-derives from the BEAD GRAPH and never re-executes discovery over
+  # repository state, so a target that appears in the world after
+  # materialization never gets a member. The recheck re-executes discovery and
+  # exits 1 naming the unenrolled targets.
+  #
+  # Targets are stored as a LIST, never a count: two converted and two appeared
+  # leaves the count identical and is the finding a campaign recheck exists for.
+  # A predicate that exits nonzero is REFUSED rather than recorded as zero
+  # targets, because grep exits 1 on no matches and an empty census is the shape
+  # that makes every later recheck pass.
+  #
+  # First record, and it carries a real 17-member set rather than a fixture:
+  # campaigns/slack-publish-fenced-routing.json, pinned to
+  # gas-city@1272a78b, every bin/ caller of `gc slack publish-to-channel`.
+  # [2026-08-19T06:4xZ; `bin/campaign-estate recheck --record
+  #  campaigns/slack-publish-fenced-routing.json` -> exit 0, reproduces;
+  #  `bash bin/campaign-estate-records.test` -> 1 passed]
+  #
+  # What this does NOT claim, so the declaration is not read wider than it is:
+  # bead work outside a campaign record still pins nothing. gc.work_commit is
+  # still set on 10 of 2870 closed gascity beads, its close gate is still
+  # warn-only, and 460 beads still record a corrupt branch identity. Those
+  # measurements are unchanged and are kept below.
+  canonical_identity: "repository@revision"
+  # topology_provider and in_flight_manifest stay UNDECLARED. Both have a
+  # plausible candidate here -- codegraph answers structural questions, and the
+  # worktree registry lists in-flight work -- and neither is wired to campaign
+  # discovery, so declaring them would be exactly the unearned declaration this
+  # block was omitted to avoid. Discovery today is a shell predicate against a
+  # materialized revision, which is honest about being textual.
+campaigns:
+  # Completion re-derives its member set live rather than counting a remembered
+  # child list (molecule_autoclose.go:227-245 -> molecule.ListSubtree), which is
+  # a better shape than the kit's unsafe control. Two things defeat it, so this
+  # is declared as the narrow property it actually holds:
+  #   1. The re-derived set is the BEAD GRAPH, never a re-executed discovery
+  #      predicate over repository state. The kit's discover(intent,
+  #      current_state) step has no implementation, so a target that appears in
+  #      the world after materialization never gets a child.
+  #   2. It is one-directional: it closes a root when the subtree is terminal,
+  #      and NOTHING refuses a root close while the subtree is live. Measured:
+  #      11 closed roots with 54 live steps under them, closes spanning
+  #      2026-08-05 to 2026-08-14.
+  completion:
+    all_current_targets_have_disposition:
+      - published
+
+# Which lifecycle transitions this city claims to WATCH, and the threshold each
+# one is watched against. Read by bin/lifecycle-latency-watch, which exits
+# non-zero when a promise here is breached, has no objective, or cannot be
+# measured at all. That last rail is why this list is short.
+#
+# `ready_to_claim` was declared here from 2026-08-16 and is WITHDRAWN, not
+# demoted. Nothing in this city records a ready timestamp, so no transition
+# computes it, and the nearest candidate (created_at -> gc.claimed_at) starts at
+# creation: a bead can sit non-ready for days after it is cut, so measuring from
+# there would report a queue-wait as a claim-latency and would be wrong in the
+# direction that looks fine. A promise with nothing behind it is an overclaim in
+# our own contract, which is the exact defect this audit exists to find. It goes
+# back when something emits the timestamp, not before.
+#
+# Four of the six canonical transitions stay unpromised for the same reason:
+# `gc.claimed_at` and `gc.verified_at` are written by nothing today, so
+# created_to_claimed, claimed_to_started, completed_to_verified and
+# verified_to_published are all uncomputable. That keeps OBS-001 a WARN (the
+# rule wants all six) and the WARN is accurate. Emission is tracked on
+# dr-3msk6.7 and dr-3msk6.9; refute the coverage claim with
+# `bin/lifecycle-transition-coverage` (exit 1, and it names the missing key).
+#
+# The two objectives below are REGRESSION thresholds, not a claim that the
+# current numbers are good. Each is set with headroom over the measured p90 so
+# the watch fires on a material worsening rather than on ordinary variance, and
+# so it cannot be a guard fitted so tightly to today's data that it is green by
+# construction. Measured 2026-08-19 over 1675 beads
+# [`bin/lifecycle-transition-coverage`]:
+#   started_to_progress        p50 2.2h   p90 3.0d    -> objective p90 4d
+#   published_to_acknowledged  p50 35m    p90 25.8h   -> objective p90 36h
+# Tighten them when the underlying latency improves; a threshold that has never
+# been moved down is a threshold nobody is reading.
+observability:
+  promises:
+    - started_to_progress
+    - published_to_acknowledged
+  objectives:
+    started_to_progress:
+      p90: 4d
+    published_to_acknowledged:
+      p90: 36h

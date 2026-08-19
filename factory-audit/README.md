@@ -149,6 +149,26 @@ nothing reports a clean factory.
 `--template` refuses to overwrite an existing `probes.yaml`; pass
 `--rewrite-probes` when you mean to discard your edits.
 
+## A contract that already has the answers in it
+
+`derive` leaves `effect_identity`, `retry_contract` and `unknown_state_policy`
+reading `unknown` for every effect, because those are decisions and no scan can
+read a decision. That is where most people stop, since a file of `unknown` shows
+nothing of what a decided field is supposed to look like.
+
+`examples/gc-city/factory.yaml` is the real contract for the city this pack was
+written against, 1,171 lines, with each decision recorded next to the code
+property it asserts and the command that would refute it. It ships with its nine
+failures left in, because a contract you can copy is worth less than one you can
+argue with, and because our own factory has not cleared them either.
+
+Do not copy its values into yours. Declaring `deduplicate` for an effect whose
+code does not deduplicate produces a green line over a broken mechanism, which
+is the failure this checker exists to catch. Read the reasoning, run the
+equivalent check against your tree, write your own answer.
+`examples/gc-city/README.md` names every one of those failures and why it is
+still open.
+
 ## What it can and cannot bind
 
 Three kinds of call site, and the distinction is the difference between a

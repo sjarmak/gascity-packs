@@ -1,0 +1,24 @@
+# The finding set this example produces, one per line: SEVERITY RULE PATH.
+#
+# Asserted by set EQUALITY, not by count. A finding that disappears fails the
+# same way a new one does, so work that clears a failure has to remove its line
+# here in the same change and cannot leave a stale entry behind.
+#
+# Regenerate with:
+#   factory_check review examples/gc-city/factory.yaml --out /tmp/ex
+#   python3 -c "import json;[print(f'{x[\"severity\"]} {x[\"rule\"]} {x[\"path\"]}') for x in json.load(open('/tmp/ex/findings.json'))]"
+
+FAIL IDENT-001 work
+FAIL AUTH-001 work.ownership
+FAIL EFFECT-006 effects[0].instructed_call_sites
+FAIL EFFECT-006 effects[1].instructed_call_sites
+FAIL EFFECT-006 effects[2].instructed_call_sites
+FAIL EFFECT-003 effects[3].unknown_state_policy
+FAIL EFFECT-006 effects[3].instructed_call_sites
+FAIL EFFECT-003 effects[4].unknown_state_policy
+FAIL EFFECT-006 effects[4].instructed_call_sites
+WARN RECON-002 reconciliation
+WARN FLEET-001 scheduling.classes.recovery
+WARN FLEET-002 scheduling.classes
+WARN FLEET-003 scheduling.fairness.levels
+WARN OBS-001 observability.promises
