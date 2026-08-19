@@ -4,7 +4,7 @@ Gas City hands a pack command GC_PACK_NAME, which is the PACK's own name, and
 nothing that carries the BINDING -- the key under `[imports.<name>]` in the
 city's pack.toml. Those are the same word only when the operator happened to
 bind the pack under its own name. Every message this pack printed telling a
-user to "run gc factory-audit setup" was therefore a command that
+user to "run gc <pack-name> setup" was therefore a command that
 errors with `unknown command` for anyone who bound it as anything else.
 
 So the binding is recovered from the city's own pack.toml: the import whose

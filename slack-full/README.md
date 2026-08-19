@@ -241,9 +241,17 @@ which bypasses `/publish` entirely and is unaffected by this guard.
 
 ```toml
 # city.toml
-[imports.slack-full]
+[imports.slack]
 source = "/path/to/gascity-packs/slack-full"
 ```
+
+The import key, not the pack directory or `pack.toml [pack] name`, is what
+gc binds the verbs under: imported as `slack`, the commands are `gc slack
+<cmd>`, which is the surface this README and every `commands/*/help.md`
+document. Import it under a different key and the verbs move with it (`gc
+chatops bind-room`), so the examples below read as that key instead. A
+mismatch is silent rather than loud -- an unbound verb prints gc's root
+help and exits 0, so there is no error to notice.
 
 Then `gc reload` (or wait for the supervisor to pick up the change).
 Verify the commands appear:

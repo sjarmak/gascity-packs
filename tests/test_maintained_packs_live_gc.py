@@ -111,6 +111,75 @@ def pack_dir(pack: str) -> Path:
     return REPO_ROOT / pack
 
 
+IMPORT_KEY = re.compile(r"^\[imports\.([A-Za-z0-9_-]+)\]", re.M)
+
+# A pack's own changelog records what a verb was called when it shipped.
+# Rewriting history to match today's binding would be a lie, so it is not
+# evidence of drift and is excluded from the scan.
+NOT_INSTRUCTIONS = ("CHANGELOG.md",)
+
+INSTRUCTED_SUFFIXES = (
+    ".md", ".sh", ".bash", ".py", ".go", ".toml", ".json", ".txt",
+)
+
+
+def readme_import_key(pack: str) -> str | None:
+    """The binding a pack's README tells a user to install it under.
+
+    This is the whole contract under test: gc registers a pack's verbs under
+    the IMPORT KEY, and neither the pack directory nor `pack.toml [pack] name`
+    participates. Measured -- a pack imported as `chatops` answers to
+    `gc chatops <verb>` and to nothing else.
+    """
+    readme = pack_dir(pack) / "README.md"
+    keys = IMPORT_KEY.findall(readme.read_text(encoding="utf-8"))
+    assert len(keys) <= 1, (
+        f"{pack}/README.md documents {len(keys)} import keys {keys}; this guard "
+        f"compares the pack's instructions against ONE documented binding, and "
+        f"cannot tell which of several a reader would use."
+    )
+    return keys[0] if keys else None
+
+
+def instructed_bindings(pack: str) -> dict[tuple[str, str], int]:
+    """Every `gc <literal> <verb>` pair the pack instructs, and how often.
+
+    The VERB is carried alongside the literal because it is what makes a
+    sibling-pack reference distinguishable from a mistake: `gc slack-mini
+    post-message` inside slack-full is a true statement about slack-mini, while
+    `gc slack-mini bind-room` names a verb slack-mini does not ship and is
+    simply wrong. A literal alone cannot tell those apart.
+
+    Derived from the verbs the pack actually ships rather than from a list, so
+    a pack that grows a command is covered without touching this file. Keyed on
+    a shipped verb specifically because `gc records the upload` is prose, not an
+    instruction, and a bare `gc <word>` scan cannot tell the two apart.
+    """
+    verbs = {words[0] for words in discover_command_words(pack_dir(pack))}
+    if not verbs:
+        return {}
+    pattern = re.compile(
+        r"\bgc ([a-z][a-z0-9_-]*) (%s)\b" % "|".join(re.escape(v) for v in sorted(verbs))
+    )
+    counts: dict[tuple[str, str], int] = {}
+    for path in sorted(pack_dir(pack).rglob("*")):
+        if not path.is_file() or path.suffix not in INSTRUCTED_SUFFIXES:
+            continue
+        if path.name in NOT_INSTRUCTIONS:
+            continue
+        # A test asserting the string `gc fa setup` is a fixture pinning an
+        # expected output, not an instruction a user will read and type.
+        # Counting it would make a pack that TESTS this contract look like a
+        # pack that violates it -- which is exactly backwards.
+        if "/tests/" in path.as_posix() or path.name.startswith("test_"):
+            continue
+        for literal, verb in pattern.findall(
+            path.read_text(encoding="utf-8", errors="replace")
+        ):
+            counts[(literal, verb)] = counts.get((literal, verb), 0) + 1
+    return counts
+
+
 def wiring(pack: str) -> tuple[dict[str, Path], dict[str, Path]]:
     """City-scope and rig-scope bindings for one pack, as its manifest requires.
 
@@ -457,4 +526,146 @@ def test_an_unresolvable_constant_fails_closed() -> None:
     assert urlsplit(unresolved.rstrip("/")).port != int(EXPECTED_API_PORT), (
         "an unresolvable constant now satisfies the port check, so a fallback "
         "the detector cannot follow would pass as correct"
+    )
+
+@pytest.mark.parametrize("pack", MAINTAINED_PACKS)
+def test_the_binding_a_pack_documents_is_the_one_its_instructions_use(pack: str) -> None:
+    """A pack whose README and examples disagree is broken on its own happy path.
+
+    gc registers a pack's verbs under the IMPORT KEY. Neither the pack directory
+    nor `pack.toml [pack] name` participates, so a README that says
+    `[imports.slack-full]` above 310 examples reading `gc slack ...` documents an
+    install in which none of its own examples work. Found exactly that, live.
+
+    Two shapes satisfy this, and the second is the better one:
+
+    1. The README names one key and every instruction uses it.
+    2. The README names no key (`gc <binding> ...` placeholders) and the pack
+       hardcodes no literal, resolving the binding at runtime instead. This is
+       the only shape that is correct for a user who binds the pack under a name
+       of their own choosing, which gc allows and which nothing warns about.
+
+    Why this is not merely untidy: the failure is silent. An unbound verb prints
+    gc's root help and exits 0, so a user following the README sees help text
+    rather than an error, and a test asserting on exit status sees green.
+    """
+    if not discover_command_words(pack_dir(pack)):
+        # No commands means no verbs to bind, so there is no binding to get
+        # wrong. Skipped rather than passed: a pack that LOSES its commands
+        # would otherwise start passing this the moment it broke.
+        pytest.skip(f"{pack} ships no commands, so no binding is under test")
+
+    documented = readme_import_key(pack)
+    instructed = instructed_bindings(pack)
+
+    # A sibling pack's key is exempt only where that sibling SHIPS the verb it
+    # is paired with -- "see `gc slack-mini post-message`" is a true statement
+    # about slack-mini. Exempting the literal alone would let `gc slack-mini
+    # bind-room`, which names a verb slack-mini does not have, ride through as a
+    # cross-reference; the exemption has to be provenance-checked per pair.
+    sibling_verbs = {
+        (key, words[0])
+        for other in MAINTAINED_PACKS
+        if other != pack and (key := readme_import_key(other)) is not None
+        for words in discover_command_words(pack_dir(other))
+    }
+    offenders = {
+        pair: count
+        for pair, count in instructed.items()
+        if pair[0] != documented and pair not in sibling_verbs
+    }
+
+    if documented is None:
+        # A pack claiming the placeholder shape has to be SHOWING placeholders.
+        # Without this, a scan that matched nothing at all would read exactly
+        # like a pack that correctly hardcodes nothing.
+        readme = (pack_dir(pack) / "README.md").read_text(encoding="utf-8")
+        assert re.search(r"\bgc <[a-z-]+>", readme), (
+            f"{pack}/README.md documents no `[imports.<key>]` and shows no "
+            f"`gc <binding> ...` placeholder either, so there is nothing telling "
+            f"a user how to reach this pack's verbs -- and this guard would pass "
+            f"it vacuously, having found no instruction to disagree with."
+        )
+        assert not offenders, (
+            f"{pack}/README.md documents no import key -- it uses `gc <binding>` "
+            f"placeholders, which is the shape that survives a user-chosen "
+            f"binding -- but the pack still hardcodes {offenders}. Every one of "
+            f"those is an instruction that fails for anyone who binds the pack "
+            f"under any other name, and fails by printing gc's root help with "
+            f"exit 0. Resolve the binding at runtime (see "
+            f"factory-audit/assets/scripts/gc_binding.py) or document one key."
+        )
+        return
+
+    # A documented key with no instruction found anywhere means the scan is
+    # looking at the wrong thing, not that the pack is clean.
+    assert instructed, (
+        f"{pack}/README.md documents `[imports.{documented}]`, but no "
+        f"`gc <literal> <verb>` instruction was found in the pack at all. The "
+        f"derivation is broken or the verbs moved; either way this pack's "
+        f"compliance here would be vacuous."
+    )
+    assert not offenders, (
+        f"{pack}/README.md tells a user to install as `[imports.{documented}]`, "
+        f"but the pack instructs {offenders}. Under the documented install those "
+        f"commands do not exist, and gc answers them with its root help and exit "
+        f"0 rather than an error. Either change the documented key or the "
+        f"instructions -- whichever is the outlier; `pack.toml`'s own header "
+        f"comment is usually the tiebreak, since it states the intended verb "
+        f"surface."
+    )
+
+
+@pytest.mark.parametrize("pack", MAINTAINED_PACKS)
+def test_the_documented_import_key_actually_resolves_the_packs_verbs(
+    pack: str, tmp_path: Path, gc_test_bin: Path  # noqa: F811
+) -> None:
+    """The static check above, proven against the real binary, for EVERY verb.
+
+    Compared against a CONTROL -- the same verb under a binding nothing was
+    imported as -- rather than against gc's help text. Both invocations exit 0,
+    so what a verb prints is the only thing separating resolved from unresolved,
+    and pinning gc's root-help wording here would make this fail on an unrelated
+    copy edit upstream.
+
+    The control is itself checked: two DIFFERENT unimported bindings must print
+    the same thing. That is what makes "unresolved" a stable signature rather
+    than an accident of the particular name chosen, and it is the answer to
+    "could both sides be equal for some reason other than the verb being
+    unregistered?" -- if they could, these two would not agree either.
+    """
+    words = sorted(discover_command_words(pack_dir(pack)))
+    if not words:
+        pytest.skip(f"{pack} ships no commands, so no binding is under test")
+
+    # A pack using the placeholder shape has no documented key by design; any
+    # key must work, which is the property being asserted.
+    binding = readme_import_key(pack) or "chosen-by-the-operator"
+    workspace = write_city(tmp_path, {binding: pack_dir(pack)})
+
+    probe = words[0]
+    unbound = gc_output(
+        gc_test_bin, workspace, "a-binding-nothing-was-imported-as", *probe, "--help"
+    )
+    also_unbound = gc_output(
+        gc_test_bin, workspace, "another-unimported-binding", *probe, "--help"
+    )
+    assert unbound == also_unbound, (
+        "two different unimported bindings printed different things, so "
+        "'prints the same as an unimported binding' is not a reliable signature "
+        "for an unregistered verb and every assertion below rests on it"
+    )
+
+    unresolved = sorted(
+        verb
+        for verb in words
+        if gc_output(gc_test_bin, workspace, binding, *verb, "--help") == unbound
+    )
+    assert not unresolved, (
+        f"installed exactly as {pack}/README.md instructs "
+        f"(`[imports.{binding}]`), {len(unresolved)} of {len(words)} verbs "
+        f"printed the same thing as a binding nothing was imported as: "
+        f"{[' '.join(v) for v in unresolved]}. Those verbs are not registered, "
+        f"and gc reports that by printing its root help and exiting 0 -- there "
+        f"is no error to notice."
     )

@@ -15,7 +15,7 @@ PACK_DIR=${GC_PACK_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)}
 
 # The word a user types after `gc` to reach this pack. gc sets GC_PACK_NAME to
 # the PACK's name and exposes nothing carrying the BINDING, so a pack bound as
-# `[imports.fa]` was told to run `gc factory-audit setup`, which exits
+# `[imports.fa]` was told to run `gc <pack-name> setup`, which exits
 # with `unknown command`. Recovered from the city's pack.toml, with the README's
 # placeholder as the answer when it cannot be determined. See gc_binding.py.
 gc_binding() {
