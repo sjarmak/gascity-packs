@@ -967,7 +967,7 @@ reconciliation:
   # to *dispatching iterate work*, not to observing PR state, so this path
   # had to be independent of that flag to run in production at all.
   # Verified against live data, not just stubs, on gastownhall/gascity #5276
-  # (Stephanie-authored, currently open): behind_by=44, mergeable=MERGEABLE,
+  # (human-authored, currently open): behind_by=44, mergeable=MERGEABLE,
   # raised behind_by_threshold on the 2nd consecutive poll as designed.
   #   [2026-08-18T13:18:20Z; GC_STORE_ROOT=<scratch> bash bin/pr-state-poller
   #    --dry-run --pr 5276 (run twice); .gc/pr-state-cache/gastownhall-
