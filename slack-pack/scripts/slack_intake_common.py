@@ -8,6 +8,7 @@ helpers actually consumed by ``slack_chat_bind`` and
 
 from __future__ import annotations
 
+import http.client
 import json
 import os
 import pathlib
@@ -169,9 +170,48 @@ def _request(method: str, url: str, body: dict[str, Any] | None = None,
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             raw = resp.read()
     except urllib.error.HTTPError as exc:
-        detail = exc.read().decode("utf-8", errors="replace")
+        # Reading the error body is another socket read and fails the same ways
+        # the main one does. An exception raised inside an except clause is not
+        # offered to this statement's remaining clauses, so it would leave the
+        # function uncaught -- the defect the clauses below exist to close,
+        # reintroduced one level in. The status line is already in hand, so a
+        # body that cannot be read costs the body and nothing else.
+        try:
+            detail = exc.read().decode("utf-8", errors="replace")
+        except (OSError, http.client.HTTPException) as body_exc:
+            detail = f"<{exc.reason}; error body unreadable: {body_exc}>"
         raise GCAPIError(f"{method} {url} -> {exc.code}: {detail}") from exc
     except urllib.error.URLError as exc:
+        raise GCAPIError(f"{method} {url} failed: {exc}") from exc
+    except TimeoutError as exc:
+        # A timeout during the RESPONSE READ is raised by the socket layer as a
+        # bare TimeoutError. That is an OSError and not a urllib URLError, so it
+        # passes through both handlers above and out of the process. Callers
+        # that catch GCAPIError to degrade one section then do not degrade: the
+        # exception takes the whole command with it, including the sections
+        # already read and the ones never attempted (dr-3lhmr, 2026-09-18 --
+        # gc slack status died on the inbound events read; the adapters result
+        # was already in hand and the bindings read, which the report confirms
+        # was healthy, was never reached. Neither was rendered, and a lead
+        # spent a delivery leg believing their channel bindings were
+        # unreadable).
+        raise GCAPIError(f"{method} {url} timed out after {timeout}s") from exc
+    except http.client.HTTPException as exc:
+        # A peer that answers but breaks the protocol: a body shorter than its
+        # own Content-Length (IncompleteRead), a malformed status line
+        # (BadStatusLine). http.client.HTTPException descends from Exception,
+        # NOT from OSError, so the clause below does not reach it, and urllib
+        # only converts failures raised while SENDING the request. Without this
+        # clause both escape exactly as the bare TimeoutError above did.
+        raise GCAPIError(
+            f"{method} {url} failed: {type(exc).__name__}: {exc}") from exc
+    except OSError as exc:
+        # Every other transport failure -- a reset mid-read, a DNS or routing
+        # error surfacing late, a closed socket -- is the same kind of answer:
+        # the request did not complete. The contract callers rely on is that a
+        # transport failure is a GCAPIError, so it is named by the failure mode
+        # and not by which exception class happened to be raised. URLError is
+        # itself an OSError, so this clause must stay last.
         raise GCAPIError(f"{method} {url} failed: {exc}") from exc
     if not raw:
         return {}

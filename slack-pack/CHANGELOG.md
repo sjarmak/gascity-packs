@@ -81,6 +81,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   `0o700` controller-managed parent directory at
   `/tmp/gcsvc-<uid>/<hash>/`.
 
+### Fixed
+
+- `_request` in `scripts/slack_intake_common.py` let a bare `TimeoutError`
+  escape. It caught `urllib.error.HTTPError` and `URLError`, but a timeout
+  during the response read comes from the socket layer as `TimeoutError`,
+  which is an `OSError` and not a `URLError`, so it passed through both
+  handlers and out of the process. Every script in the pack routes its
+  HTTP through this function, and all of them document that transport
+  failures arrive as `GCAPIError`. Now `TimeoutError` and, last, any other
+  `OSError` are both converted, so one slow or broken read degrades the
+  section that needed it instead of discarding the results of every
+  section already read. (`dr-3lhmr`)
+
+- `gc slack status` reported a section it could not read as
+  `(none registered)` and exited 0, which is exactly what it prints for a
+  section that is genuinely empty. A reader could not tell "I looked and
+  there is nothing" from "I could not look". Each of the four reads
+  (adapters, inbound events, outbound events, bindings) now records why it
+  failed; the report marks those `(UNREADABLE: <reason>)` and the JSON
+  output carries them under a top-level `unreadable` key. **The exit code
+  changes: 2 when any section was unreadable, 0 when every section was
+  read.** The sections that were read are still printed in both cases.
+  (`dr-3lhmr`)
+
 ## [0.1.0] - 2026-05-03
 
 Initial preview. Feature-by-feature port of the upstream `discord` pack
